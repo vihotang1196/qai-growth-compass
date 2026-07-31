@@ -12,7 +12,7 @@
 |---|---|---|
 | 0 | 方案确认 | **rev4 — 已定稿**(config 文件仍未收到,不阻塞 Stage 1–5) |
 | 1 | 脚手架 + Brutalist 设计系统 + 组件层 + Vercel 上线 + 字体探针 | **代码完成,部署与字体探针待你的资产** |
-| 2 | 数据表 + RLS + phone.ts + 单元测试 | 未开始 |
+| 2 | 数据表 + RLS + phone.ts + 单元测试 | **代码完成;Deno 侧待装 deno,migration 待批准执行** |
 | 3 | assessment-ghl-webhook | 未开始 |
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
@@ -1164,6 +1164,101 @@ src/pages/Showcase.tsx
 src/components/brutalist/{Button,Card,Input,Select,Radio,Progress,Dialog,Tabs,Table,Badge}.tsx
 src/components/brutalist/index.ts
 ```
+
+---
+
+# Stage 2 — 数据表 + phone.ts + 单元测试
+
+分支 `stage-2-schema-phone`。
+
+## 跨运行时共享的三层做法
+
+你指出真正的要害不是「文件放哪」而是 specifier 与版本,这个判断对。落地如下:
+
+**1. specifier —— 裸标识符 + import map**
+
+`src/lib/phone.ts` 只写 `from 'libphonenumber-js/max'`。Vite 走 node_modules;Deno 走 `supabase/functions/deno.json` 的 import map 映射到 `npm:libphonenumber-js@1.13.10/max`。同一份文件不可能两种写法都写,裸标识符 + import map 是唯一能让两边都解析的方案。
+
+`supabase/functions/_shared/phone.ts` 是**一行 re-export,不是拷贝**。用显式 `.ts` 扩展名 —— Deno 要求扩展名,Vite 侧由 `allowImportingTsExtensions` 允许同样写法,一行满足两个运行时。
+
+**2. 版本 —— 两处写死到 patch 位 + 构建门禁**
+
+`package.json` 与 import map 都是 `1.13.10`,无 `^` 无 `~`。`npm run check:dep-sync` 是第五道门。
+
+**这道门的第一版有盲区,反向验证时抓到了。** 第一版手写 `SHARED = ['libphonenumber-js']`,于是 import map 少掉 `libphonenumber-js/max` 这个子路径条目时守卫照样说 OK —— 而 `phone.ts` 恰恰 import 的是 `/max`,Deno 根本解析不了,那个文件在 Edge Function 里会直接加载失败。手写清单必然跟不上代码。改成**扫共享源码里的裸 specifier 反推**,逐个要求 import map 有条目且版本一致。
+
+反向验证 5 种违规,全部拦下,恢复后通过:
+
+| 用例 | 结果 |
+|---|---|
+| import map 版本落后(1.10.55) | 拦下 |
+| `package.json` 用 `^1.13.10` | 拦下 |
+| **import map 缺 `/max` 条目** ← 第一版的盲区 | 拦下(第一版误判为通过) |
+| 目标缺版本号 `npm:libphonenumber-js/max` | 拦下 |
+| `package.json` 缺依赖 | 拦下 |
+
+新增共享文件时要加进 `SHARED_SOURCES`,漏加会让该文件的依赖失去保护 —— 这是本守卫已知的边界,写在脚本注释里。
+
+**3. 行为 —— 同一组用例两个运行时各跑一遍**
+
+`src/lib/phone.cases.ts` 是**纯数据,不 import 任何测试框架**,两边各自的 runner 消费它:
+
+| 运行时 | 文件 | 跑法 |
+|---|---|---|
+| Node | `src/lib/phone.test.ts`(Vitest) | `npm test` |
+| Deno | `supabase/functions/_shared/phone_test.ts` | `npm run test:deno` |
+
+「同一份源码」只保证源码一致,不保证行为一致。只有两边跑同一组用例并断言输出逐字相同,才算真的验过。
+
+## 用例与实测结果
+
+`npm test` → **38 passed**。除需求点名的 9 条,补了区域覆盖(SG / ID / TW / CN)、脏输入、`phoneTail`、`tailFromInput`、`normalizeEmail`,以及两条跨函数不变量:
+
+- `tailFromInput(归一化结果) === phoneTail(归一化结果)` —— 入库算的 tail 与查询算的 tail 必须一致,这是三级回退的前提
+- `normalizePhone` 幂等 —— 归一化结果再归一化仍是自己
+
+**两条原本拿不准的,实测有了答案:**
+
+| 用例 | 我原来的标注 | 实测 |
+|---|---|---|
+| `'+60999999999'` | 「拿不准 libphonenumber 怎么判」 | → `null` ✓ 期望成立,`isValid` 确实拒绝未分配号段 |
+| `'012-436-1382 ext 5'` | 期望 `+60124361382` | → `null` ✗ **我的期望是错的,已改期望值** |
+
+`ext 5` 那条值得记一笔:config 的 `phone_normalization` 规定的顺序是**先去掉所有非数字非加号字符、再 parse**,所以 `ext` 的那个 `5` 会被并进号码本体,变成 11 位的 `01243613825` —— 对 MY 手机号无效,返回 `null`。
+
+这不是缺陷,是设计要的降级:拿不准就返回 `null`,记录仍然入库、`phone_raw` 保留原值、Admin 名单页标红「号码格式异常」,由人来修。若改成先用 libphonenumber 原生解析(它认得 ext),就违背了 config 定的顺序,而 config 是真相源。**所以改期望值,不改函数。**
+
+## 迁移文件 —— 已写,未执行
+
+| 文件 | 内容 |
+|---|---|
+| `supabase/migrations/20260731000000_assessment_init.sql` | 9 张表 + 索引 + trigger + RLS 全开零 policy |
+| `supabase/migrations/20260731000100_reports_storage_bucket.sql` | `reports` 私有 bucket |
+
+与 PROGRESS.md 0.7 的 SQL 逐行一致。**一行都没执行** —— 等你批准,而且 Supabase 的 project ref 与 keys 也还没给。
+
+## 未完成
+
+| 项 | 卡在 |
+|---|---|
+| **Deno 侧跑用例** | 这台机器**没装 deno**(Supabase CLI 2.90.0 有,但它不提供通用 `deno` 命令)。需要 `brew install deno` —— 装工具链会改你的机器,等你点头 |
+| **migration 执行** | 等你批准 SQL + 给 Supabase keys |
+| 字体探针 | 等 CDN URL |
+
+## 构建链(五道门)
+
+```
+npm run build
+  ✓ lint:cjk        无硬编码中文
+  ✓ check:dim       维度色仅用于填充
+  ✓ check:dep-sync  1 个共享 specifier 两侧版本一致
+  ✓ tsc -b          类型检查通过
+  ✓ vite build      1674 modules
+  ✓ check:bundle    无 secret 泄漏
+npm test            38 passed
+```
+
+三道自建守卫全部反向验证过(`lint:cjk` 2 种、`check:dim` 5 种、`check:dep-sync` 5 种)。
 
 ---
 
