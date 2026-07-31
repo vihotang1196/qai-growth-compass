@@ -1049,7 +1049,7 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 | 1 | `compass.qiai.tech` 打开 Brutalist 组件展示页,10 个组件全在;`npm run build` 零错;bundle 泄密检查通过;**`/api/font-probe` 渲出的常用字与生僻字都不是方块 —— 这条不过不进 Stage 2** |
 | 2 | migration 已 apply;`npm test` 全绿(含全部 phone 用例);Deno 能 import 同一份 phone.ts |
 | 3 | curl 打 webhook:错密钥 401 且不写库;同一 contact_id 打 3 次只有 1 行;烂号码降级写入且 raw 保留 |
-| 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异 |
+| 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异;**跳转目标由 session 状态推导且类型层受限(四态各验一遍,`survey` 态不得被推回 `/quiz`)**;**英文入口(`?lang=en`)登录后仍是英文** |
 | 5 | 名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红;**可筛 `phone_e164 is null` 并显示占比**(阈值 2%,见 Stage 2 的 ext 用例记录) |
 | 6 | 答到第 12 题关浏览器,重开链接从第 12 题继续 |
 | 7 | 手算一份分数与系统输出一致;24 题不齐 submit 被拒 |
@@ -1312,9 +1312,49 @@ Serverless Functions inside the `api` directory.
 | `deserializeErrors()` 构造器注入(SSR Hydration) | **不适用** —— 本项目是纯 SPA,没有 SSR hydration |
 | `<Link>` / `useNavigate` 反斜杠开放重定向 | **当前不适用**,但 Stage 4 要当心:登录后的跳转目标必须是代码里的字面路径,**绝不能来自 query param**。已写进下面的约束 |
 
-修复需要 `react-router` 升到 7.x(major),现在不动 —— 刚验完的构建链不值得为两个当前不可达的 moderate 去冒 major 升级的风险。Stage 4 做登录跳转时复查一次。
+**6.x 分支有没有补丁 —— 已查清,没有:**
 
-**Stage 4 硬约束(源自上述开放重定向)**:`assessment-auth` 成功后的跳转目标只能是 `/quiz` / `/report` / `/expired` 这三个字面值之一,由 session 状态决定;不接受任何形式的 `?next=` / `?redirect=` 参数。
+| 事实 | 值 |
+|---|---|
+| 当前安装 | `react-router` / `react-router-dom` **6.30.4** |
+| 6.x 最后一个版本 | 6.30.4 —— **我们已经在 6.x 最新版上了** |
+| 漏洞区间 | `6.0.0 - 7.17.0` → 6.30.4 落在区间内 |
+| 首个修复版本 | **7.18.0**,即 major |
+
+所以没有零成本选项。6.x 不会再有补丁(7.x 已是当前主线),**约束方案就是最终方案,不是权宜之计**。这条不用留到 Stage 4 复查了。
+
+### Stage 4 登录跳转规范(源自上述开放重定向)
+
+**约束 1 —— 白名单落到类型层,不是文档里的规矩**
+
+```ts
+type PostAuthTarget = '/quiz' | '/survey' | '/report' | '/expired';
+```
+
+跳转函数只接受这个类型。传字符串进不去,编译期就挡住。不接受任何形式的 `?next=` / `?redirect=` 参数。
+
+**约束 2 —— 目标由 session 状态推导,不由调用方传入**
+
+白名单只是必要条件不是充分条件:已完成的 session 跳 `/quiz` 会让人重答一遍,未完成的跳 `/report` 会看到空报告。白名单防外部注入,状态推导防内部逻辑错,两个都要。
+
+| 条件 | 目标 |
+|---|---|
+| token 无效 / entitlement 不存在 | `/expired` |
+| `sessions.status = 'in_progress'` | `/quiz` |
+| `sessions.status = 'survey'` | `/survey` |
+| `sessions.status = 'completed'` | `/report` |
+
+> ⚠️ **你给的白名单是三个值(`/quiz` `/report` `/expired`),漏了 `/survey`。**
+> `assessment_sessions.status` 的 check 约束里有 `'survey'` 这个态 —— 24 题答完、7 题问卷未交的人就停在这儿。三值白名单会把他们推回 `/quiz`,于是 24 题全部重答。
+> 这正是你约束 2 要防的那类内部逻辑错,而它在写规范的当场就出现了。已按四值定稿,要是你有别的意图告我。
+
+**约束 3 —— `lang` 必须显式带上**
+
+语言存 URL query(`?lang=en`)+ localStorage。白名单约束的是**路径**,不是 query。跳转时如果整个 query 被丢掉,英文用户登录后会掉回中文。
+
+`lang` 不是重定向目标,不受白名单约束,跳转时显式拼上,别让白名单顺手清掉。
+
+**这个 bug 只有英文用户会遇到,我们自己测大概率测不到**,所以写进 Stage 4 验收标准,不靠记。
 
 ## 未完成
 
