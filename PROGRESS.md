@@ -732,27 +732,30 @@ WCAG 1.4.11 要求的是图形对象与**相邻颜色**可辨识。Brutalist 规
 | 维度 | config 原色 | token 值 | 白底 | 灰底 | 处理 |
 |---|---|---|---|---|---|
 | goal | `#1e5fa8` | `#1e5fa8` | 6.45 | 5.91 | = 原色 |
-| traffic | `#12897e` | `#12867b` | 4.45 | 4.08 | 降 5%,几乎不可辨 |
-| capture | `#4a9e3f` | `#499c3e` | 3.44 | 3.15 | 降 2% |
+| traffic | `#12897e` | `#12897e` | 4.28 | 3.93 | = 原色 |
+| capture | `#4a9e3f` | `#499c3e` | 3.44 | 3.15 | 降 2%,基本无感 |
 | convert | `#6b46a8` | `#6b46a8` | 6.85 | 6.28 | = 原色 |
 | value | `#e8a020` | `#ba801a` | 3.39 | 3.11 | 降 32% —— 原色白底 2.22 不合格 |
 | measure | `#c94f4f` | `#c94f4f` | 4.45 | 4.09 | = 原色 |
 
-> 一个小出入:你列的 `traffic` 是 `#12867b`(严格套的值)。宽松规则下**原色 `#12897e` 白 4.28 / 灰 3.93 本来就合格**,按品牌一致性的理由应该用原色。我按你写的填了 `#12867b`,两者差 5% 明度、肉眼分不出,要改回原色是一行的事。
+**六个色里只有 `value` 真正偏离原色**,`capture` 降 2%,其余四个原封不动。
 
-**色块上放文字的门槛(4.5:1)—— 有两个色过不去**
+**规则 2 —— 维度色填充上不放任何正文**
 
-| 维度 | 墨字 | 白字 | 结论 |
-|---|---|---|---|
-| goal / convert | 2.86 / 2.69 | **6.45 / 6.85** | 用白字 |
-| capture / value | **5.36 / 5.43** | 3.44 / 3.39 | 用墨字 |
-| traffic / measure | 4.14 / 4.14 | 4.45 / 4.45 | **两个都不到 4.5** |
+标签一律置于色块外部,白底墨字。唯一例外:现场模式 `/admin/live` 的维度色块,字号 ≥40px 远超大字门槛 3.0,且是投影距离观看。
 
-`traffic` 与 `measure` 的填充上不要放正文字号的文字。必须放就用大字号(≥24px,或 ≥18.66px 加粗),大字门槛 3.0,两种字色都能过。这条也写进了 `brutalist.css` 的注释。
+为什么直接禁而不是「用大字号」:维度色的职责只是分类标记(图表填充、图例色块、分布条),这些场景本来就不该往色块里塞正文。一旦开例外,就得记住「traffic 和 measure 这两个色墨字 4.14 / 白字 4.45,两个都不到 4.5」这种规则 —— 需要靠人记的规则迟早会破。直接禁掉,这个问题就不存在。
 
-**规则由构建强制**:`npm run check:dim` 扫 `src/**/*.{ts,tsx,css}`,以下命中即失败 ——
-`text-dim-*`、`border-dim-*`、`stroke-dim-*`、`ring/outline/decoration/divide/caret/accent/shadow/placeholder-dim-*`、CSS 的 `color: var(--dim-`、`border-color: var(--dim-`、`stroke: var(--dim-`、`outline-color: var(--dim-`,以及六个色值写成字面量。
-已反向验证:五种违规全部拦下,移除后恢复通过。`brutalist.css` 自身豁免(它是规则的定义处)。
+> 这条规则落地当天就判了 Showcase 自己违规 —— 那六个色块原本把维度名写在填充里、用 `text-paper`。已改成色块与标签并排,标签在外部。
+
+### 两条规则的强制方式
+
+| 规则 | 强制方式 |
+|---|---|
+| 1. 只做填充 | ✅ `npm run check:dim` 构建门禁。拦 `text-dim-*`、`border-dim-*`、`stroke-dim-*`、`ring/outline/decoration/divide/caret/accent/shadow/placeholder-dim-*`、CSS 的 `color:` / `border-color:` / `stroke:` / `outline-color: var(--dim-`,以及六个色值写成字面量。**已反向验证:五种违规全部拦下,移除后恢复通过。** `brutalist.css` 自身豁免 |
+| 2. 填充内不放正文 | ❌ **不做 lint**,只写注释 + review 把关 |
+
+规则 2 不做 lint 是刻意的:JSX 的 `className` 常常是模板字符串或 `cn()` 调用,静态检查只能覆盖一部分写法。**一个有盲区的守卫比没有守卫更糟 —— 它让人以为这条已经被守住了。** 守卫要么证明得了它会拦,要么不装。
 
 **C2 — badge ✅ 已定:纯 CSS 方块,完全不用字符**
 
@@ -1080,7 +1083,9 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 |---|---|
 | `GHL_RESEND_WEBHOOK_URL` | 当 secret 处理。只进 Supabase Edge Function secrets,**不进 Vercel、不进代码、不进前端 bundle**。**泄露时的处置:在 GHL 里重新生成该 workflow 的 Inbound Webhook trigger URL → `supabase secrets set GHL_RESEND_WEBHOOK_URL=<新值>` → 重新部署 `assessment-login-request`。旧 URL 立即失效,无需改代码、无需改数据库。** |
 | 重发端点的防护 | IP 限流(15 分钟 5 次,超限锁 1 小时)与同一 entitlement 60 秒间隔**始终保留**。不因为「Inbound Webhook 风险有限」而放松任何一层 |
-| 分支策略 | **Stage 0–1 直接提交 main**(新仓库、无协作者、未部署,开分支只是仪式)。**Stage 2 起一个 Stage 一条分支** —— 那时 Vercel 已接上,分支能出 preview 部署,这才是分支值钱的地方 |
+| 分支策略 | **Stage 0–1 直接提交 main**(新仓库、无协作者、未部署,开分支只是仪式)。**Stage 2 起一个 Stage 一条分支**,首条 `stage-2-schema-phone` —— 那时 Vercel 已接上,分支能出 preview 部署,这才是分支值钱的地方 |
+| Push | **每次 push 都要明说**。一次「push」授权只覆盖当次那批 commit,不是长期通行证 |
+| 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
 | PAT 轮换 | 每次 `git push` 后提醒轮换 GitHub PAT |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |

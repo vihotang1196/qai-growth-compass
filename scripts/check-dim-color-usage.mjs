@@ -11,6 +11,11 @@
  * 这个前提就没了,对比度直接不合格。
  *
  * 所以这不是风格偏好,是可访问性约束,必须由构建强制。
+ *
+ * 【本脚本【不】检查「维度色填充里有没有正文」】
+ * 那条规则同样是硬规则(见 brutalist.css),但 JSX 的 className 常常是模板
+ * 字符串或 cn() 调用,静态检查只能覆盖一部分写法。一个有盲区的守卫比没有
+ * 守卫更糟 —— 它让人以为这条已经被守住了。这条只写在注释里,靠 review 把关。
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
@@ -30,7 +35,7 @@ const FORBIDDEN = [
   [/(^|[^-\w])stroke\s*:\s*var\(--dim-/gm, 'CSS stroke 用了维度色变量'],
   [/outline(-color)?\s*:\s*var\(--dim-/gm, 'CSS outline 用了维度色变量'],
   // 字面色值:维度色必须走 token,不许直接写死
-  [/#(1e5fa8|12867b|499c3e|6b46a8|ba801a|c94f4f)\b/gi, '维度色写成了字面色值,必须用 --dim-* token'],
+  [/#(1e5fa8|12897e|499c3e|6b46a8|ba801a|c94f4f)\b/gi, '维度色写成了字面色值,必须用 --dim-* token'],
 ];
 
 /** 这些文件本身就是规则的定义处或说明处,豁免 */

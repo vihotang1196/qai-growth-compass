@@ -227,7 +227,9 @@ export default function Showcase() {
             <CardHeader>
               <CardTitle>{tk('showcase.dimColors')}</CardTitle>
             </CardHeader>
-            <CardBody className="flex flex-wrap gap-2">
+            {/* 标签在色块【外部】,白底墨字 —— 色块内不放任何正文。
+                见 brutalist.css 里 --dim-* 的规则 2 */}
+            <CardBody className="flex flex-wrap gap-4">
               {(
                 [
                   ['goal', 'bg-dim-goal'],
@@ -238,11 +240,12 @@ export default function Showcase() {
                   ['measure', 'bg-dim-measure'],
                 ] as const
               ).map(([key, bg]) => (
-                <span
-                  key={key}
-                  className={`inline-block border-brutal border-line px-3 py-2 font-head text-xs font-bold uppercase text-paper ${bg}`}
-                >
-                  {key}
+                <span key={key} className="inline-flex items-center gap-2">
+                  <span
+                    aria-hidden
+                    className={`inline-block h-6 w-6 border-brutal border-line ${bg}`}
+                  />
+                  <span className="font-head text-xs font-bold uppercase">{key}</span>
                 </span>
               ))}
             </CardBody>
