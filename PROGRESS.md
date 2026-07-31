@@ -116,7 +116,7 @@
 | D5 | UI chrome 文案单独字典 + ESLint 禁 tsx 内 CJK 字符 | ✅ |
 | — | `assessment_entitlements` 加 `updated_at` + trigger | ✅ |
 | D6 | `pdf_attempts` + `pdf_last_error` 两列 | ✅ 见下方细则 |
-| D7 | `pdf_url` 存 Storage 私有路径,下载时现签 1 小时 signed URL | ✅ |
+| D7 | `pdf_path` 存 Storage 私有路径,下载时现签 1 小时 signed URL(原名 `pdf_url`,已改) | ✅ |
 
 ### D6 细则(按你的三条补充定稿)
 
@@ -190,7 +190,7 @@ Admin「刷新字段映射」→ 强制回源 GHL → upsert 表 → 所有实�
   ├─ 等 window.__REPORT_READY__ === true(雷达图渲完才截,不用 sleep)
   ├─ page.pdf({ format: 'A4', printBackground: true })
   ├─ 上传 Storage(private bucket `reports`)
-  └─ 成功 → pdf_url = 路径, pdf_status = 'ready'
+  └─ 成功 → pdf_path = 路径, pdf_status = 'ready'
      失败 → pdf_attempts += 1, pdf_last_error = left(msg,200)
             pdf_attempts >= 3 ? 'failed_permanent' : 'failed'
 
@@ -338,183 +338,32 @@ qai-growth-compass/
 
 ---
 
-## 0.7 完整 SQL(rev3 定稿,待批准后执行)
+## 0.7 数据库 schema
 
-```sql
--- supabase/migrations/20260731000000_assessment_init.sql
--- AI 盈利增长罗盘 学员诊断系统 初始化
--- RLS 策略:9 张表全部 enable RLS 且【不建任何 policy】。
---   anon / authenticated 一律拒绝;所有读写走 Edge Function 的 service_role
---   (service_role 绕过 RLS)。比逐字段写 policy 更简单、更不容易漏。
+**SQL 的唯一真相源是 migration 文件本身,本节不再内联复制:**
 
-create extension if not exists "pgcrypto";
+| 文件 | 内容 |
+|---|---|
+| [`supabase/migrations/20260731000000_assessment_init.sql`](supabase/migrations/20260731000000_assessment_init.sql) | 9 张表 + 索引 + trigger + 列注释 + RLS 全开零 policy |
+| [`supabase/migrations/20260731000100_reports_storage_bucket.sql`](supabase/migrations/20260731000100_reports_storage_bucket.sql) | `reports` 私有 bucket |
 
--- ── 0. 全局配置 (D8) ──────────────────────────────────────────
-create table public.app_settings (
-  key        text primary key,
-  value      jsonb not null,
-  updated_at timestamptz not null default now()
-);
-comment on table public.app_settings is
-  '全局运行时配置。当前用途:key = ''ghl_field_map'',value = { "<field_key>": "<ghl_field_id>" }。'
-  'Edge Function 读取顺序:内存缓存(10 分钟 TTL)→ 本表 → 回源 GHL 并 upsert。'
-  'Admin 的「刷新字段映射」直接写本表,所有实例下次 TTL 过期即生效。';
+> **为什么删掉内联的那 164 行**:Stage 0 时还没有 migration 文件,SQL 只能写在这里;
+> 文件建好之后两份就要靠人同步 —— 而这次审查一比对,立刻发现已经漂了一处
+> (本节写 `dimensionId`,migration 写 `dimensionKey`,后者才对,config 用的是 `key`)。
+> 与其加一道「文档与 migration 一致」的守卫来维护复制品,不如取消复制。
+> 设计理由与决策依据已经全部写在 SQL 的注释里,那里才是它们该待的地方。
 
--- ── 1. 后台允许名单 ─────────────────────────────────────────────
-create table public.admin_users (
-  id         uuid primary key default gen_random_uuid(),
-  email      text not null unique,
-  name       text,
-  created_at timestamptz not null default now()
-);
-comment on table public.admin_users is '后台允许名单;初始管理员用 SQL 手动 insert,无注册页';
+### 关键设计点(细节见 SQL 注释)
 
--- ── 2. 批次 ────────────────────────────────────────────────────
-create table public.assessment_cohorts (
-  id         uuid primary key default gen_random_uuid(),
-  name       text not null,
-  event_date date,
-  source_tag text unique,                      -- GHL tag / payload 里的批次标识
-  is_active  boolean not null default true,
-  is_default boolean not null default false,   -- D3:payload 没带 cohort 时兜底
-  created_at timestamptz not null default now()
-);
-create unique index assessment_cohorts_single_default
-  on public.assessment_cohorts ((is_default)) where is_default;
-
--- ── 3. 准入记录 ────────────────────────────────────────────────
-create table public.assessment_entitlements (
-  id              uuid primary key default gen_random_uuid(),
-  ghl_contact_id  text not null unique,        -- 幂等冲突键(邮箱会变,不能用)
-  cohort_id       uuid references public.assessment_cohorts(id) on delete set null,
-  phone_e164      text,                        -- 主匹配键;解析失败为 null
-  phone_tail      text,                        -- E.164 去 + 后最后 8 位,容错匹配键
-  phone_raw       text,                        -- 原始输入,解析失败时 Admin 标红用
-  email_lower     text,                        -- 一律 trim().toLowerCase()
-  name            text,
-  access_token    text not null unique,        -- 32 字节随机;重发不轮换;不过期
-  status          text not null default 'pending'
-                  check (status in ('pending','link_sent','started','completed')),
-  link_sent_at    timestamptz,                 -- D4:每次发送都更新,兼作 60s 节流依据
-  first_login_at  timestamptz,
-  completed_at    timestamptz,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now()
-);
-create index assessment_entitlements_phone_e164_idx    on public.assessment_entitlements (phone_e164);
-create index assessment_entitlements_phone_tail_idx    on public.assessment_entitlements (phone_tail);
-create index assessment_entitlements_email_lower_idx   on public.assessment_entitlements (email_lower);
-create index assessment_entitlements_cohort_status_idx on public.assessment_entitlements (cohort_id, status);
-
-create or replace function public.touch_updated_at() returns trigger
-language plpgsql as $$
-begin new.updated_at = now(); return new; end $$;
-
-create trigger assessment_entitlements_touch
-  before update on public.assessment_entitlements
-  for each row execute function public.touch_updated_at();
-
--- ── 4. 登录尝试(限流) ────────────────────────────────────────
-create table public.assessment_login_attempts (
-  id              uuid primary key default gen_random_uuid(),
-  ip              text,
-  identifier_hash text,                        -- sha256(LOGIN_HASH_PEPPER || 归一化标识)
-  succeeded       boolean not null default false,
-  created_at      timestamptz not null default now()
-);
-create index assessment_login_attempts_ip_idx         on public.assessment_login_attempts (ip, created_at desc);
-create index assessment_login_attempts_identifier_idx on public.assessment_login_attempts (identifier_hash, created_at desc);
-
--- ── 5. 答题 session ───────────────────────────────────────────
-create table public.assessment_sessions (
-  id             uuid primary key default gen_random_uuid(),
-  entitlement_id uuid not null unique references public.assessment_entitlements(id) on delete cascade,
-  locale         text not null default 'zh' check (locale in ('zh','en')),
-  profile        jsonb,                        -- 3 道背景题答案
-  status         text not null default 'in_progress'
-                 check (status in ('in_progress','survey','completed')),
-  created_at     timestamptz not null default now(),
-  completed_at   timestamptz
-);
-
--- ── 6. 逐题答案(断点续答) ──────────────────────────────────
-create table public.assessment_answers (
-  id           uuid primary key default gen_random_uuid(),
-  session_id   uuid not null references public.assessment_sessions(id) on delete cascade,
-  question_id  text not null,
-  option_index int  not null,
-  score        int  not null,
-  answered_at  timestamptz not null default now(),
-  unique (session_id, question_id)             -- 支撑改答案的 upsert
-);
-create index assessment_answers_session_idx on public.assessment_answers (session_id);
-
--- ── 7. 问卷 ────────────────────────────────────────────────────
-create table public.assessment_survey (
-  session_id   uuid primary key references public.assessment_sessions(id) on delete cascade,
-  responses    jsonb not null,
-  submitted_at timestamptz not null default now()
-);
-
--- ── 8. 结果 ────────────────────────────────────────────────────
-create table public.assessment_results (
-  session_id        uuid primary key references public.assessment_sessions(id) on delete cascade,
-  dim_scores        jsonb not null,            -- { dimensionId: 0..100 }
-  total             int  not null,
-  tier              text not null,
-  weakest           text[] not null,           -- 最低 2 维
-  strongest         text[] not null,
-  -- GHL 写回 (D2)
-  ghl_synced        boolean not null default false,
-  ghl_sync_attempts int not null default 0,
-  ghl_last_error    text,
-  ghl_next_retry_at timestamptz,
-  -- PDF 异步渲染 (D6 / D7)
-  pdf_url           text,                      -- ⚠️ Storage 对象路径,不是公开 URL
-  pdf_status        text not null default 'pending'
-                    check (pdf_status in ('pending','rendering','ready','failed','failed_permanent')),
-  pdf_attempts      int not null default 0,
-  pdf_last_error    text,
-  computed_at       timestamptz not null default now()
-);
-comment on column public.assessment_results.pdf_url is
-  'Supabase Storage 私有 bucket 内的对象路径(如 reports/{cohort}/{session}-zh.pdf)。'
-  '不是可直接访问的 URL;下载时由 Edge Function 现签 1 小时 signed URL。';
-comment on column public.assessment_results.pdf_status is
-  'pending→rendering→ready;失败 rendering→failed;attempts>=3 时 failed→failed_permanent。'
-  'Cron 只捡 failed,不捡 failed_permanent;Admin 可把两者重置回 pending。';
-comment on column public.assessment_results.pdf_last_error is
-  '错误首行,入库时 left(msg,200) 截断,不存 stack。';
-
-create index assessment_results_tier_idx on public.assessment_results (tier);
-create index assessment_results_ghl_retry_idx on public.assessment_results (ghl_next_retry_at)
-  where ghl_synced = false;
-create index assessment_results_pdf_status_idx on public.assessment_results (pdf_status)
-  where pdf_status <> 'ready';
-
--- ── RLS:全开,零 policy ───────────────────────────────────────
-alter table public.app_settings              enable row level security;
-alter table public.admin_users               enable row level security;
-alter table public.assessment_cohorts        enable row level security;
-alter table public.assessment_entitlements   enable row level security;
-alter table public.assessment_login_attempts enable row level security;
-alter table public.assessment_sessions       enable row level security;
-alter table public.assessment_answers        enable row level security;
-alter table public.assessment_survey         enable row level security;
-alter table public.assessment_results        enable row level security;
-```
-
-```sql
--- supabase/migrations/20260731000100_reports_storage_bucket.sql
--- PDF 报告私有 bucket。public = false,只有 service_role 能读写;
--- 客户与 Admin 一律通过 Edge Function 现签 signed URL 下载。
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('reports', 'reports', false, 20971520, array['application/pdf'])
-on conflict (id) do nothing;
-
--- 不为 anon / authenticated 建任何 storage policy —— 与 9 张表同一个思路。
--- (rev3 里为 D8 预留的 `internal` bucket 已删除:字段映射改存 app_settings 表)
-```
+| 点 | 决定 |
+|---|---|
+| RLS | 9 张表全 `enable row level security`,**零 `create policy`**;客户与 Admin 一律走 Edge Function 的 service_role |
+| `reports` bucket | `public = false`,20MB 上限,mime 白名单只有 `application/pdf`,不建任何 storage policy |
+| `tier` | 有 CHECK,取值域与 config 的 `custom_fields[].domain` 一致 —— 域外值会让 GHL workflow 静默不匹配,数据库这层就挡 |
+| `email_lower` / `phone_tail` | **故意不加 unique**。加了会让 webhook 在重复时直接失败、丢掉整条准入记录。代价是查询侧必须处理多命中(见 S4-A) |
+| `access_revoked_at` | 不自动过期,但有撤销路径(见 S4-C) |
+| `pdf_path` | 存 Storage 对象路径,不是公开 URL。原名 `pdf_url` 需要靠注释纠正字段名,说明名字本身是错的 |
+| `touch_updated_at` trigger | 保留。纯赋值 per-row,开销可忽略;真要批量导入时临时 `disable trigger` 即可 |
 
 **分开手工执行的第二段(值等你给,不进 migration):**
 
@@ -1088,7 +937,7 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 | 1 | `compass.qiai.tech` 打开 Brutalist 组件展示页,10 个组件全在;`npm run build` 零错;bundle 泄密检查通过;**`/api/font-probe` 渲出的常用字与生僻字都不是方块 —— 这条不过不进 Stage 2** |
 | 2 | migration 已 apply;`npm test` 全绿(含全部 phone 用例);Deno 能 import 同一份 phone.ts |
 | 3 | curl 打 webhook:错密钥 401 且不写库;同一 contact_id 打 3 次只有 1 行;烂号码降级写入且 raw 保留 |
-| 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异;**跳转目标由 session 状态推导且类型层受限(四态各验一遍,`survey` 态不得被推回 `/quiz`)**;**英文入口(`?lang=en`)登录后仍是英文** |
+| 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异;**跳转目标由 session 状态推导且类型层受限(四态各验一遍,`survey` 态不得被推回 `/quiz`)**;**英文入口(`?lang=en`)登录后仍是英文**;**同一邮箱两条 entitlement 时不发链接且记 warn(S4-A)**;**`login_attempts` 30 天清理生效(S4-B)**;**作废后旧链接被拒、新链接可用(S4-C)** |
 | 5 | 名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红;**可筛 `phone_e164 is null` 并显示占比**(阈值 2%,见 Stage 2 的 ext 用例记录) |
 | 6 | 答到第 12 题关浏览器,重开链接从第 12 题继续 |
 | 7 | 手算一份分数与系统输出一致;24 题不齐 submit 被拒 |
@@ -1394,6 +1243,47 @@ type PostAuthTarget = '/quiz' | '/survey' | '/report' | '/expired';
 `lang` 不是重定向目标,不受白名单约束,跳转时显式拼上,别让白名单顺手清掉。
 
 **这个 bug 只有英文用户会遇到,我们自己测大概率测不到**,所以写进 Stage 4 验收标准,不靠记。
+
+### Stage 4 其余三项(SQL 审查带出的)
+
+**S4-A —— email 多命中必须视为未命中**
+
+`phone_tail` 的歧义规则早就写清了(命中 >1 条视为未命中),但 `email_lower` **没有 unique 约束也没有对应规则**。GHL 里同一个邮箱挂在两个 contact 上是完全可能的:同一人重复报名、公司共用邮箱。那时备用路径输入邮箱会命中两条 entitlement,各有各的 `access_token` —— 发哪一个?
+
+按 `phone_tail` 同一条原则:
+
+| | |
+|---|---|
+| 命中 = 1 条 | 正常重发 |
+| 命中 > 1 条 | **视为未命中**,不发链接,页面文案不变(与命中/未命中完全一致) |
+| 同时 | 记一条 warn 日志带 `email_lower`,Admin 要能看到「疑似重复 contact」 |
+
+宁可让他联系我们,也不能把 A 的报告链接发给 B。
+
+**SQL 侧不加 unique** —— 加了会让 webhook 在重复邮箱时直接失败、丢掉整条准入记录,那更糟。改为在 `email_lower` 上写死注释:不唯一,查询侧必须处理多命中。`phone_tail` 也补了同样的注释。
+
+**S4-B —— `assessment_login_attempts` 的保留策略**
+
+限流只查最近 15 分钟,但这张表没有任何清理机制。跑一年之后它是纯负担:索引变大、vacuum 变慢,而 99.99% 的行永远不会再被读。
+
+Vercel Cron 每天删 `created_at < now() - interval '30 days'` 的行。30 天是排查窗口,限流本身只要 15 分钟。跟限流一起做,不单独排期。
+
+**S4-C —— `access_token` 的撤销路径**
+
+「重发不轮换」不变(客户可能同时收到新旧两条消息)。但「不过期」和「无法撤销」是两件事。
+
+这个 token 是永久的完整访问权,报告里有对方的营收、询盘量、经营弱点。链接经 WhatsApp 与邮箱流转,转发、截图、共用设备、换手机号都可能让它落到别人手里,而目前**没有任何补救手段**。
+
+新增 `access_revoked_at timestamptz`。Admin 名单页给一个「作废并重发新链接」:
+
+```
+access_revoked_at = now()  →  生成新 access_token  →  触发重发
+校验 token 时:access_revoked_at is not null → 一律拒绝,跳 /expired
+```
+
+**不做自动过期** —— 学员可能几周后才回来看报告,自动过期会制造大量「链接失效」的客服工作。要的是出事时能补救,不是预防性地制造麻烦。
+
+列现在就加,比以后迁移便宜。
 
 ## 未完成
 

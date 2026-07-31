@@ -51,7 +51,8 @@ create table public.assessment_entitlements (
   phone_raw       text,                        -- 原始输入,解析失败时 Admin 标红用
   email_lower     text,                        -- 一律 trim().toLowerCase()
   name            text,
-  access_token    text not null unique,        -- 32 字节随机;重发不轮换;不过期
+  access_token      text not null unique,      -- 32 字节随机;重发不轮换;不自动过期
+  access_revoked_at timestamptz,                -- 作废时间;非 null 即拒绝该 token
   status          text not null default 'pending'
                   check (status in ('pending','link_sent','started','completed')),
   link_sent_at    timestamptz,                 -- D4:每次发送都更新,兼作 60s 节流依据
@@ -60,6 +61,26 @@ create table public.assessment_entitlements (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+
+comment on column public.assessment_entitlements.email_lower is
+  '【不唯一,故意不加 unique 约束】GHL 里同一个邮箱挂在两个 contact 上是可能的'
+  '(同一人重复报名、公司共用邮箱)。加 unique 会让 webhook 在重复邮箱时直接失败,'
+  '丢掉整条准入记录,那更糟。'
+  '代价是查询侧必须处理多命中:命中 >1 条一律【视为未命中】,不发链接,页面文案不变,'
+  '同时记 warn 日志带上 email_lower 供 Admin 排查「疑似重复 contact」。'
+  '与 phone_tail 同一条原则 —— 宁可让客户联系我们,也不能把 A 的报告链接发给 B。';
+
+comment on column public.assessment_entitlements.phone_tail is
+  'E.164 去 + 后最后 8 位,容错匹配键。同样不唯一,命中 >1 条视为未命中(防碰撞)。'
+  '少于 8 位数字的输入不进 tail 匹配。';
+
+comment on column public.assessment_entitlements.access_revoked_at is
+  '链接作废时间。access_token 不自动过期(学员可能几周后回来看报告,'
+  '自动过期只会制造大量「链接失效」客服),但必须有撤销路径 ——'
+  '报告含对方营收、询盘量、经营弱点,链接经 WhatsApp 与邮箱流转,'
+  '转发 / 截图 / 共用设备 / 换号都可能让它落到别人手里。'
+  'Admin 的「作废并重发新链接」置本列 = now() 并生成新 access_token;'
+  '校验 token 时 access_revoked_at is not null 一律拒绝。';
 create index assessment_entitlements_phone_e164_idx    on public.assessment_entitlements (phone_e164);
 create index assessment_entitlements_phone_tail_idx    on public.assessment_entitlements (phone_tail);
 create index assessment_entitlements_email_lower_idx   on public.assessment_entitlements (email_lower);
@@ -120,7 +141,10 @@ create table public.assessment_results (
   session_id        uuid primary key references public.assessment_sessions(id) on delete cascade,
   dim_scores        jsonb not null,            -- { dimensionKey: 0..100 }
   total             int  not null,
-  tier              text not null,
+  -- tier 会写回 GHL 供 workflow 精确匹配,域外值会让 workflow 静默不匹配。
+  -- 取值域与 config 的 ghl_writeback.custom_fields[].domain 一致,数据库这一层就挡住。
+  tier              text not null
+                    check (tier in ('manual','spot','semi_auto','systemic','flywheel')),
   weakest           text[] not null,           -- 最低 2 维
   strongest         text[] not null,
   -- GHL 写回 (D2)
@@ -129,16 +153,17 @@ create table public.assessment_results (
   ghl_last_error    text,
   ghl_next_retry_at timestamptz,
   -- PDF 异步渲染 (D6 / D7)
-  pdf_url           text,                      -- Storage 对象路径,不是公开 URL
+  pdf_path          text,                      -- Storage 对象路径。命名刻意不叫 pdf_url
   pdf_status        text not null default 'pending'
                     check (pdf_status in ('pending','rendering','ready','failed','failed_permanent')),
   pdf_attempts      int not null default 0,
   pdf_last_error    text,
   computed_at       timestamptz not null default now()
 );
-comment on column public.assessment_results.pdf_url is
+comment on column public.assessment_results.pdf_path is
   'Supabase Storage 私有 bucket 内的对象路径(如 reports/{cohort}/{session}-zh.pdf)。'
-  '不是可直接访问的 URL;下载时由 Edge Function 现签 1 小时 signed URL。';
+  '不是可直接访问的 URL;下载时由 Edge Function 现签 1 小时 signed URL。'
+  '字段名从 pdf_url 改成 pdf_path —— 原名需要靠注释纠正,说明名字本身是错的。';
 comment on column public.assessment_results.pdf_status is
   'pending→rendering→ready;失败 rendering→failed;attempts>=3 时 failed→failed_permanent。'
   'Cron 只捡 failed,不捡 failed_permanent;Admin 可把两者重置回 pending。';
