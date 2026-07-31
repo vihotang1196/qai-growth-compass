@@ -12,7 +12,7 @@
 |---|---|---|
 | 0 | 方案确认 | **rev4 — 已定稿**(config 文件仍未收到,不阻塞 Stage 1–5) |
 | 1 | 脚手架 + Brutalist 设计系统 + 组件层 + Vercel 上线 + 字体探针 | **代码完成,部署与字体探针待你的资产** |
-| 2 | 数据表 + RLS + phone.ts + 单元测试 | **代码完成;Deno 侧待装 deno,migration 待批准执行** |
+| 2 | 数据表 + RLS + phone.ts + 单元测试 | **代码与验证完成;migration 待批准执行** |
 | 3 | assessment-ghl-webhook | 未开始 |
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
@@ -1050,7 +1050,7 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 | 2 | migration 已 apply;`npm test` 全绿(含全部 phone 用例);Deno 能 import 同一份 phone.ts |
 | 3 | curl 打 webhook:错密钥 401 且不写库;同一 contact_id 打 3 次只有 1 行;烂号码降级写入且 raw 保留 |
 | 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异 |
-| 5 | 名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红 |
+| 5 | 名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红;**可筛 `phone_e164 is null` 并显示占比**(阈值 2%,见 Stage 2 的 ext 用例记录) |
 | 6 | 答到第 12 题关浏览器,重开链接从第 12 题继续 |
 | 7 | 手算一份分数与系统输出一致;24 题不齐 submit 被拒 |
 | 8 | 9 板块齐;基准线两种来源都能触发并正确标注;代价换算旁 disclaimer 与假设可见;`window.__REPORT_READY__` 已埋;print.css 保底可用 |
@@ -1183,32 +1183,62 @@ src/components/brutalist/index.ts
 
 **2. 版本 —— 两处写死到 patch 位 + 构建门禁**
 
-`package.json` 与 import map 都是 `1.13.10`,无 `^` 无 `~`。`npm run check:dep-sync` 是第五道门。
+`package.json` 与 import map 都是 `1.13.9`,无 `^` 无 `~`。`npm run check:dep-sync` 是第五道门(纯 Node,不依赖 deno,所以 Vercel 也跑得动)。
 
-**这道门的第一版有盲区,反向验证时抓到了。** 第一版手写 `SHARED = ['libphonenumber-js']`,于是 import map 少掉 `libphonenumber-js/max` 这个子路径条目时守卫照样说 OK —— 而 `phone.ts` 恰恰 import 的是 `/max`,Deno 根本解析不了,那个文件在 Edge Function 里会直接加载失败。手写清单必然跟不上代码。改成**扫共享源码里的裸 specifier 反推**,逐个要求 import map 有条目且版本一致。
+**版本从 1.13.10 降到 1.13.9,是 Deno 拦下来的。** Deno 2.9 有最小依赖年龄策略(默认 24 小时),`1.13.10` 发布仅 22.5 小时,直接拒绝安装。我原本 pin 的就是 `npm install` 当天抓到的最新版 —— 一个没有任何 soak time 的版本。**没有关掉这个策略,而是降到 14 天前的 `1.13.9`。** 策略拦对了,pin 一个刚发布几小时的包本身就是风险。
 
-反向验证 5 种违规,全部拦下,恢复后通过:
+**这道门迭代了三版,每一版都是在删手写清单:**
+
+| 版本 | 做法 | 盲区 |
+|---|---|---|
+| v1 | 手写包名清单 `SHARED = ['libphonenumber-js']` | import map 少掉 `/max` 子路径条目照样判通过,而那正是 `phone.ts` 实际 import 的 specifier |
+| v2 | 扫源码反推 specifier,但文件清单 `SHARED_SOURCES` 手写 | 同一类问题上移一层 —— 新增共享文件忘了加进清单,那个文件就没保护 |
+| **v3(当前)** | **文件清单也不手写**:`_shared/` 下所有 `.ts` 无条件纳入,再沿 import 图递归捞进被引用的项目内文件;清单为空则判失败 | 见下 |
+
+结论:凡是「需要人记得去更新」的清单,迟早会漏。能从代码推出来的就别写。
+
+反向验证 7 种违规,**全部拦下**,恢复后通过:
 
 | 用例 | 结果 |
 |---|---|
+| **新增 `_shared` 文件带未映射的裸 import** ← v2 的盲区 | 拦下(v2 会误判通过) |
 | import map 版本落后(1.10.55) | 拦下 |
-| `package.json` 用 `^1.13.10` | 拦下 |
-| **import map 缺 `/max` 条目** ← 第一版的盲区 | 拦下(第一版误判为通过) |
-| 目标缺版本号 `npm:libphonenumber-js/max` | 拦下 |
-| `package.json` 缺依赖 | 拦下 |
+| `package.json` 用 `^1.13.9` | 拦下 |
+| **import map 缺 `/max` 条目** ← v1 的盲区 | 拦下 |
+| jsr 目标含范围符 `jsr:@std/assert@^1.0.10` | 拦下 |
+| npm 目标但 `package.json` 缺该依赖 | 拦下 |
+| `_shared` 目录消失(空清单不得判通过) | 拦下 |
 
-新增共享文件时要加进 `SHARED_SOURCES`,漏加会让该文件的依赖失去保护 —— 这是本守卫已知的边界,写在脚本注释里。
+自动发现结果:4 个共享源码文件、2 个外部 specifier(`libphonenumber-js/max` → npm、`@std/assert` → jsr)。jsr 的包不在 `package.json` 里,校验到「精确版本」为止。
 
 **3. 行为 —— 同一组用例两个运行时各跑一遍**
 
 `src/lib/phone.cases.ts` 是**纯数据,不 import 任何测试框架**,两边各自的 runner 消费它:
 
-| 运行时 | 文件 | 跑法 |
-|---|---|---|
-| Node | `src/lib/phone.test.ts`(Vitest) | `npm test` |
-| Deno | `supabase/functions/_shared/phone_test.ts` | `npm run test:deno` |
+| 运行时 | 文件 | 跑法 | 结果 |
+|---|---|---|---|
+| Node | `src/lib/phone.test.ts`(Vitest) | `npm test` | 38 passed |
+| Deno | `supabase/functions/_shared/phone_test.ts` | `npm run test:deno` | 5 passed |
 
-「同一份源码」只保证源码一致,不保证行为一致。只有两边跑同一组用例并断言输出逐字相同,才算真的验过。
+「同一份源码」只保证源码一致,不保证行为一致。
+
+**但「两个套件都绿」也只是推出来的一致,不是量出来的。** 两边都等于 `cases` 里的 `expected`,逻辑上能推出两边相等 —— 可一旦哪天不等,只会得到一句 assertion failed,看不出差在哪。所以再加一层:
+
+```
+npm run check:cross
+  → node scripts/dump-phone.ts
+  → deno run --allow-read --config supabase/functions/deno.json scripts/dump-phone.ts
+  → 逐行 diff
+[check-cross] OK —— Node 与 Deno 的 36 行输出逐字相同。
+```
+
+**同一个 `dump-phone.ts` 在两个运行时各跑一次**(Node 靠原生类型剥离直接跑 `.ts`),把真实输出摆出来对比。这也是唯一能抓住「除了两边同时错成一样以外的所有情况」的检查 —— 号码元数据、Intl 行为、正则引擎差异都会在这里现形。
+
+反向验证 3 种,全部拦下:输出分叉(22/36 行不一致)、某一侧无输出、行数不等。
+
+> `check:cross` **不进 `npm run build`** —— 它需要 deno,而 Vercel 的构建环境没有。它属于本地与 CI(装了 deno 的那种)的检查。`check:dep-sync` 是纯 Node,所以留在构建链里。
+
+> 第一次写这个反向验证时,三个用例全部「通过」—— 其实是我的注入锚点没匹配上,文件根本没被改动,harness 静默 no-op 了。一个不会失败的反向验证比没有更糟。现在 harness 会先断言文件真的变了,匹配不到锚点就报「跳过」而不是「通过」。
 
 ## 用例与实测结果
 
@@ -1226,7 +1256,15 @@ src/components/brutalist/index.ts
 
 `ext 5` 那条值得记一笔:config 的 `phone_normalization` 规定的顺序是**先去掉所有非数字非加号字符、再 parse**,所以 `ext` 的那个 `5` 会被并进号码本体,变成 11 位的 `01243613825` —— 对 MY 手机号无效,返回 `null`。
 
-这不是缺陷,是设计要的降级:拿不准就返回 `null`,记录仍然入库、`phone_raw` 保留原值、Admin 名单页标红「号码格式异常」,由人来修。若改成先用 libphonenumber 原生解析(它认得 ext),就违背了 config 定的顺序,而 config 是真相源。**所以改期望值,不改函数。**
+这不是缺陷,是设计要的降级:拿不准就返回 `null`,记录仍然入库、`phone_raw` 保留原值、Admin 名单页标红「号码格式异常」,由人来修。失败方向是对的 —— 拿不准就交给人,不猜一个可能错的号码存进去。若改成先用 libphonenumber 原生解析(它认得 ext),就违背了 config 定的顺序,而 config 是真相源。**所以改期望值,不改函数。反过来改函数去迁就一个手写的期望值,等于让测试倒过来定义行为。**
+
+**配套的监控要求(Stage 5 名单页必做):**
+
+- 名单页要能筛出 `phone_e164 is null` 的记录,并显示**占全部准入记录的百分比**
+- **阈值 2%**:上线后这个比例超过 2%,说明 GHL 里的号码质量比预期差,那时再回来讨论要不要加 ext 预处理
+- **现在不加 ext 预处理** —— 没有数据支撑的优化就是猜
+
+这条写进 Stage 5 的验收标准,不是「记得做」。
 
 ## 迁移文件 —— 已写,未执行
 
@@ -1241,24 +1279,36 @@ src/components/brutalist/index.ts
 
 | 项 | 卡在 |
 |---|---|
-| **Deno 侧跑用例** | 这台机器**没装 deno**(Supabase CLI 2.90.0 有,但它不提供通用 `deno` 命令)。需要 `brew install deno` —— 装工具链会改你的机器,等你点头 |
-| **migration 执行** | 等你批准 SQL + 给 Supabase keys |
+| **migration 执行** | 等批准 SQL + Supabase project ref 与 keys。**一行都没执行** |
 | 字体探针 | 等 CDN URL |
+| Vercel 部署 / preview | 等接仓库 + CNAME + 环境变量 |
 
-## 构建链(五道门)
+## 验证总览
 
 ```
-npm run build
-  ✓ lint:cjk        无硬编码中文
-  ✓ check:dim       维度色仅用于填充
-  ✓ check:dep-sync  1 个共享 specifier 两侧版本一致
-  ✓ tsc -b          类型检查通过
-  ✓ vite build      1674 modules
-  ✓ check:bundle    无 secret 泄漏
-npm test            38 passed
+npm run build          (五道门,纯 Node,Vercel 也跑得动)
+  ✓ lint:cjk           无硬编码中文
+  ✓ check:dim          维度色仅用于填充
+  ✓ check:dep-sync     4 个共享文件、2 个 specifier 两侧一致
+  ✓ tsc -b             类型检查通过
+  ✓ vite build         1674 modules
+  ✓ check:bundle       无 secret 泄漏
+
+npm test               38 passed   (Node / Vitest)
+npm run test:deno      5 passed    (Deno)
+npm run check:cross    36 行逐字相同  (需要 deno,不进构建链)
 ```
 
-三道自建守卫全部反向验证过(`lint:cjk` 2 种、`check:dim` 5 种、`check:dep-sync` 5 种)。
+四道自建守卫全部反向验证过 —— 证明它会拦,不是证明它不报错:
+
+| 守卫 | 反向用例数 | 抓到过的真问题 |
+|---|---|---|
+| `lint:cjk` | 2 | — |
+| `check:dim` | 5 | — |
+| `check:dep-sync` | 7 | 自身 v1 / v2 两代盲区 |
+| `check:cross` | 3 | 自身 harness 静默 no-op |
+
+后两行值得记:**两个守卫的反向验证抓到的第一个问题都是守卫自己的**。这正是为什么反向验证不能省。
 
 ---
 

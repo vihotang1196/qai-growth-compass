@@ -1,0 +1,30 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@std/assert@1.0.10": "1.0.10",
+    "jsr:@std/internal@^1.0.5": "1.0.14",
+    "npm:libphonenumber-js@1.13.9": "1.13.9"
+  },
+  "jsr": {
+    "@std/assert@1.0.10": {
+      "integrity": "59b5cbac5bd55459a19045d95cc7c2ff787b4f8527c0dd195078ff6f9481fbb3",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    }
+  },
+  "npm": {
+    "libphonenumber-js@1.13.9": {
+      "integrity": "sha512-VNS5vWMM7r0P66BYv+TQJATxExEgLxN+34hfHDVhDkUsGAE4cRg0shCNSLTXNKm7nIUscC7AfB51TjxEeF7msQ=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@std/assert@1.0.10",
+      "npm:libphonenumber-js@1.13.9"
+    ]
+  }
+}
