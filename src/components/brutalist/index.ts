@@ -22,3 +22,10 @@ export {
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './Tabs';
 export { TableWrap, Table, Thead, Tbody, Th, Tr, Td, type TrProps } from './Table';
 export { Badge, type BadgeProps } from './Badge';
+export {
+  SubmoduleMark,
+  SubmoduleMarkLegend,
+  markStateFromScore,
+  type MarkState,
+  type SubmoduleMarkProps,
+} from './SubmoduleMark';

@@ -20,6 +20,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SubmoduleMark,
+  SubmoduleMarkLegend,
+  markStateFromScore,
   Table,
   TableWrap,
   Tabs,
@@ -190,6 +193,58 @@ export default function Showcase() {
                   <DialogDescription>{tk('showcase.fontNote')}</DialogDescription>
                 </DialogContent>
               </Dialog>
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* 子模块标记 + 六维分类色 */}
+        <div className="grid gap-6 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>{tk('showcase.marks')}</CardTitle>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <SubmoduleMarkLegend
+                labels={{
+                  full: tk('showcase.markFull'),
+                  half: tk('showcase.markHalf'),
+                  empty: tk('showcase.markEmpty'),
+                }}
+              />
+              <div className="flex items-center gap-2">
+                {[3, 2, 1, 0, 3, 2].map((s, i) => (
+                  <SubmoduleMark
+                    key={i}
+                    state={markStateFromScore(s)}
+                    label={String(s)}
+                  />
+                ))}
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{tk('showcase.dimColors')}</CardTitle>
+            </CardHeader>
+            <CardBody className="flex flex-wrap gap-2">
+              {(
+                [
+                  ['goal', 'bg-dim-goal'],
+                  ['traffic', 'bg-dim-traffic'],
+                  ['capture', 'bg-dim-capture'],
+                  ['convert', 'bg-dim-convert'],
+                  ['value', 'bg-dim-value'],
+                  ['measure', 'bg-dim-measure'],
+                ] as const
+              ).map(([key, bg]) => (
+                <span
+                  key={key}
+                  className={`inline-block border-brutal border-line px-3 py-2 font-head text-xs font-bold uppercase text-paper ${bg}`}
+                >
+                  {key}
+                </span>
+              ))}
             </CardBody>
           </Card>
         </div>

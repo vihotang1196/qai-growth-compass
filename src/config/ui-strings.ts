@@ -69,6 +69,11 @@ export const UI_STRINGS = {
   'showcase.fontCheck': { zh: '字体渲染自检', en: 'Font rendering check' },
   'showcase.fontCommon': { zh: '常用字:盈利增长罗盘诊断报告', en: 'Common glyphs' },
   'showcase.fontRare': { zh: '生僻字:䶮 龘 靐 齉 麤', en: 'Rare glyphs' },
+  'showcase.marks': { zh: '子模块标记(纯 CSS,不用字符)', en: 'Submodule marks (pure CSS, no glyphs)' },
+  'showcase.markFull': { zh: '已具备', en: 'In place' },
+  'showcase.markHalf': { zh: '部分具备', en: 'Partial' },
+  'showcase.markEmpty': { zh: '缺失', en: 'Missing' },
+  'showcase.dimColors': { zh: '六维分类色(仅作带墨边框的填充)', en: 'Dimension colours (bordered fills only)' },
   'showcase.fontNote': {
     zh: '生僻字若显示为方块,说明兜底字体未生效。PDF 渲染会出同样的问题。',
     en: 'Tofu boxes here mean the fallback font is not active. PDF rendering will fail the same way.',

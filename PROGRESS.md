@@ -723,32 +723,55 @@ value_map       与选项数全部对齐 ✓
 | ❌ 页面 chrome 一律不碰 | 按钮、边框、背景、状态色全走 Brutalist 原 token |
 | ✅ 必须进 `brutalist.css` 成 `--dim-*` 变量 | 组件里不许出现字面色值 —— 这条规矩不因为色值来自 config 而破例 |
 
-**对比度检查结果(WCAG 1.4.11 非文本门槛 3.0,三种底色:白 / 黄 `#fed50a` / 灰 `#f5f5f5`):**
+**为什么只需过白底与灰底,不必对黄底扛 3:1**
 
-| 维度 | config 原色 | 原最差 | token 值 | 新最差 | 处理 |
+WCAG 1.4.11 要求的是图形对象与**相邻颜色**可辨识。Brutalist 规格里每个元素都有 2px 墨色实边框,色块与背景之间永远隔着这条边框 —— 边框本身就是分界。所以黄底不构成约束,取宽松那套即可,色值与 config 原色保持在同一色系,和罗盘轮盘图 / 销售简报 / 工作手册对得上。
+
+**最终 token(白 / 灰门槛 3.0):**
+
+| 维度 | config 原色 | token 值 | 白底 | 灰底 | 处理 |
 |---|---|---|---|---|---|
-| goal | `#1e5fa8` | 4.52 | `#1e5fa8` | 4.52 | 不变 |
-| traffic | `#12897e` | **3.00** | `#12867b` | 3.12 | 降明度 5% —— 原值卡在门槛上,四舍五入即失败 |
-| capture | `#4a9e3f` | **2.36** | `#3f8636` | 3.15 | 降明度 30% |
-| convert | `#6b46a8` | 4.81 | `#6b46a8` | 4.81 | 不变 |
-| value | `#e8a020` | **1.55** | `#a06e16` | 3.11 | 降明度 56% —— 三种底色**全部**不合格,你预判对了 |
-| measure | `#c94f4f` | 3.13 | `#c94f4f` | 3.13 | 不变 |
+| goal | `#1e5fa8` | `#1e5fa8` | 6.45 | 5.91 | = 原色 |
+| traffic | `#12897e` | `#12867b` | 4.45 | 4.08 | 降 5%,几乎不可辨 |
+| capture | `#4a9e3f` | `#499c3e` | 3.44 | 3.15 | 降 2% |
+| convert | `#6b46a8` | `#6b46a8` | 6.85 | 6.28 | = 原色 |
+| value | `#e8a020` | `#ba801a` | 3.39 | 3.11 | 降 32% —— 原色白底 2.22 不合格 |
+| measure | `#c94f4f` | `#c94f4f` | 4.45 | 4.09 | = 原色 |
 
-只降明度、不动色相。**以 token 为准,config 不改。**
+> 一个小出入:你列的 `traffic` 是 `#12867b`(严格套的值)。宽松规则下**原色 `#12897e` 白 4.28 / 灰 3.93 本来就合格**,按品牌一致性的理由应该用原色。我按你写的填了 `#12867b`,两者差 5% 明度、肉眼分不出,要改回原色是一行的事。
 
-> `value` 变动最大(亮橙 → 暗琥珀)。若嫌变化太大,备选是规定六色永不与黄底相邻,则只需过白/灰底,`value` 可放宽到 `#ba801a`(白 3.39 / 灰 3.11)、`capture` 可保持近似原色 `#499c3e`。但现场模式是深色 + 黄色块,我不敢假设不相邻,所以默认取严格那套。要放宽说一声。
+**色块上放文字的门槛(4.5:1)—— 有两个色过不去**
 
-**C2 — badge ✅ 已定:统一实心几何,网页与 PDF 同一套**
+| 维度 | 墨字 | 白字 | 结论 |
+|---|---|---|---|
+| goal / convert | 2.86 / 2.69 | **6.45 / 6.85** | 用白字 |
+| capture / value | **5.36 / 5.43** | 3.44 / 3.39 | 用墨字 |
+| traffic / measure | 4.14 / 4.14 | 4.45 / 4.45 | **两个都不到 4.5** |
 
-不做「网页 emoji / PDF 几何符」的分叉。config 已改:
+`traffic` 与 `measure` 的填充上不要放正文字号的文字。必须放就用大字号(≥24px,或 ≥18.66px 加粗),大字门槛 3.0,两种字色都能过。这条也写进了 `brutalist.css` 的注释。
+
+**规则由构建强制**:`npm run check:dim` 扫 `src/**/*.{ts,tsx,css}`,以下命中即失败 ——
+`text-dim-*`、`border-dim-*`、`stroke-dim-*`、`ring/outline/decoration/divide/caret/accent/shadow/placeholder-dim-*`、CSS 的 `color: var(--dim-`、`border-color: var(--dim-`、`stroke: var(--dim-`、`outline-color: var(--dim-`,以及六个色值写成字面量。
+已反向验证:五种违规全部拦下,移除后恢复通过。`brutalist.css` 自身豁免(它是规则的定义处)。
+
+**C2 — badge ✅ 已定:纯 CSS 方块,完全不用字符**
+
+`✅⚠️❌` → `■◧□` → **CSS 方块**,两轮都推翻了。最终方案不依赖任何字体收录。
+
+理由:只要用字符,就永远在赌字体收录。`◧` U+25E7 这次探针即使过了,以后换字体、换字重、重新生成 subset,随时可能再掉。这是一整类风险,不该靠单点验证解决。
 
 ```
-■ 已具备    ◧ 部分具备    □ 缺失        (0 分与 1 分同为 □)
+12×12,2px 墨边框
+  已具备    实心墨色填充          .qai-mark--full
+  部分具备  左半墨色(linear-gradient 90deg 到 50%)  .qai-mark--half
+  缺失      透明填充              .qai-mark--empty
 ```
 
-墨色单色,不依赖颜色区分(顺带解决色盲),表头必须给图例(`submodule_badge_legend` 已带 zh/en)。
+组件 `src/components/brutalist/SubmoduleMark.tsx`,含 `markStateFromScore()`(3→full / 2→half / 1、0→empty)与 `SubmoduleMarkLegend`。用 gradient 而非伪元素,打印时更稳。不依赖颜色区分,色盲可读;硬边方块本来就是 Brutalist 的基本形,比字符更贴。
 
-> ⚠️ **一个未验证的风险**:`■` U+25A0 与 `□` U+25A1 在 CJK 字体里收录率极高,但 `◧` U+25E7(SQUARE WITH LEFT HALF BLACK)属于 Geometric Shapes 冷门区,**Noto Sans SC 未必收录**。收不到就是方块 —— 和 emoji 同一个坑,只是概率低些。已把 `■ ◧ □ ▣ ▤ ▥ ●` 全部加进 `/api/font-probe` 第 3 块实测。若 `◧` 不过,备选 `▣` U+25A3(CJK 字体收录率高得多)。**这条等探针出结果,不靠猜。**
+config 里 `submodule_badge` 的字符**保留但降级为纯数据用途**(CSV 导出、GHL 字段、纯文本邮件),`submodule_badge_note` 已写明渲染层不使用。
+
+`/api/font-probe` 里的几何符那一块已撤掉,探针只验中文常用字、中文生僻字、拉丁数字三块。
 
 **C3 / C4 — `action_library` ✅ 契约已定,内容你写**
 
@@ -782,9 +805,21 @@ value_map       与选项数全部对齐 ✓
 「现状」按原计划从所选选项文本推导,不进 library。
 `root_cause` 的区间边界(low ≤40 / mid 41–70 / high ≥71)与 `tiers` 不完全重合,这是刻意的三段划分,不是笔误。
 
-**C5 — 字段取值域 ✅ 已定:全部写机器可读 key,不写中文**
+**C5 — 字段取值域 ✅ 已定:写机器可读 key,且取值域进 config**
 
-理由(你的):GHL workflow 条件判断是精确字符串匹配,中文名一改文案 workflow 就断。可读性靠报告解决,不靠 contact 字段。详见 0.12。
+理由(你的):GHL workflow 条件判断是精确字符串匹配,中文名一改文案 workflow 就断;可读性靠报告解决,不靠 contact 字段。取值域是机器要读的东西(写回要校验、workflow 要匹配),放 PROGRESS.md 里迟早跟代码走散,所以**批准结构变更**:`custom_fields` 由字符串数组改为对象数组。
+
+```jsonc
+{ "key": "qai_assessment_tier", "type": "text",
+  "domain": ["manual","spot","semi_auto","systemic","flywheel"],
+  "source": "result.tier" }
+```
+
+- `domain` 是枚举时给数组;自由文本给 `null` 并用 `max_length`;数字给 `"0-100"` 这类字符串
+- `source` 写明取值来源,不靠猜
+- **写回前按 domain 校验**。不在域内的报 `CONFIG` 类错误并中止该字段写入,**绝不静默写进去** —— GHL 收到域外值时 workflow 会静默不匹配,那种 bug 最难查
+
+完整九项见 0.12。
 
 **C6 — L / V 来源 ✅ 确认**:`L` = P2 `leads_per_month.value_map[选项索引]`,`V` = P3 `deal_value.value_map[选项索引]`。
 
@@ -873,22 +908,25 @@ Admin「刷新字段映射」按钮 → 强制回源 GHL → upsert app_settings
 
 ## 0.12 GHL 自定义字段清单 — ⛔ 提案作废,不要照此建字段
 
-**GHL 里九个字段全部建成单行文本(Single Line Text)。取值一律写机器可读 key,不写中文** ——
-workflow 的条件判断是精确字符串匹配,中文名一改文案 workflow 就断;可读性由报告负责,不由 contact 字段负责。
+**真相源是 config 的 `ghl_writeback.custom_fields`(已改成带 `domain` / `source` 的对象数组)。下表是它的可读版,若两者不一致以 config 为准。**
 
-| # | Unique Key | 取值域 | 来源 |
+GHL 里九个字段全部建成单行文本(Single Line Text)。
+
+| # | Unique Key | `domain` | `source` |
 |---|---|---|---|
-| 1 | `qai_assessment_status` | `completed` | 系统;当前只有这一个值 |
-| 2 | `qai_assessment_total` | `0`–`100` 的数字字符串 | `results.total` |
-| 3 | `qai_assessment_tier` | `manual` \| `spot` \| `semi_auto` \| `systemic` \| `flywheel` | `tiers[].key` |
-| 4 | `qai_assessment_weakest_1` | `goal` \| `traffic` \| `capture` \| `convert` \| `value` \| `measure` | `results.weakest[0]` |
-| 5 | `qai_assessment_weakest_2` | 同上 | `results.weakest[1]` |
-| 6 | `qai_assessment_priority` | 同上 | S1 选项索引 → 维度 key(**刻意与 weakest 同取值域**,`assessment_mismatch` 规则要直接比对) |
-| 7 | `qai_assessment_goal_90d` | S5 原文,截断 200 字 | `survey.goal_90d` |
-| 8 | `qai_assessment_consult_interest` | `asap` \| `later` \| `self` \| `no` | S7 选项索引 0/1/2/3 映射 |
-| 9 | `qai_assessment_report_url` | 完整 `https://` URL | `APP_BASE_URL + '/?t=' + access_token` |
+| 1 | `qai_assessment_status` | `["completed"]` | `system` |
+| 2 | `qai_assessment_total` | `"0-100"` | `result.total` |
+| 3 | `qai_assessment_tier` | `manual` \| `spot` \| `semi_auto` \| `systemic` \| `flywheel` | `result.tier` |
+| 4 | `qai_assessment_weakest_1` | `goal` \| `traffic` \| `capture` \| `convert` \| `value` \| `measure` | `result.weakest[0]` |
+| 5 | `qai_assessment_weakest_2` | 同上 | `result.weakest[1]` |
+| 6 | `qai_assessment_priority` | 同上(**刻意与 weakest 同域**,`assessment_mismatch` 要直接比对) | `survey.priority_dimension` |
+| 7 | `qai_assessment_goal_90d` | `null`,`max_length: 200` | `survey.goal_90d` |
+| 8 | `qai_assessment_consult_interest` | `asap` \| `later` \| `self` \| `no` | `survey.consult_interest` |
+| 9 | `qai_assessment_report_url` | `null`,`max_length: 300` | `APP_BASE_URL + '/?t=' + access_token` |
 
-第 6 项要注意:S1 的选项顺序是「定目标 造流量 接客户 促成交 增价值 测数据」,与 `dimensions[]` 的 `order` 一致,所以索引 → key 是直接按序映射,不需要单独的映射表。
+第 6 项:S1 选项顺序「定目标 造流量 接客户 促成交 增价值 测数据」与 `dimensions[].order` 一致,索引 → key 直接按序映射,不需要单独映射表。
+
+**写回前必须按 `domain` 校验。** 域外值报 `CONFIG` 类错误、中止该字段写入、进 `/admin/sync` 显示,不静默写进 GHL。
 
 **Tags** —— 分无条件与有条件两组(config `tags_always` / `tags_conditional`):
 
@@ -1060,6 +1098,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | 脚手架 | Vite 5 + React 18 + TS 5.7 + Tailwind 3.4 + Radix primitives,`@/*` 路径别名 |
 | 设计 token | `src/styles/brutalist.css` —— 5 个色值 + 语义别名 + 边框/阴影/字体全部 CSS 变量;`tailwind.config.ts` 只做变量映射,不出现任何字面色值 |
 | 组件层 | 10 个:Button / Card / Input / Select / Radio / Progress / Dialog / Tabs / Table / Badge。一次做完,后续页面不再补 |
+| 子模块标记 | `SubmoduleMark` + `SubmoduleMarkLegend`(纯 CSS 方块,C2) |
+| 维度色门禁 | `scripts/check-dim-color-usage.mjs` 挂进 `npm run build`,维度色用在填充之外即失败 |
 | i18n 骨架 | `LocaleProvider` + `t()` + `tk()`;`?lang=` → localStorage → zh |
 | 壳文案字典 | `src/config/ui-strings.ts`,当前 30 条,en 待 Stage 12 补 |
 | CJK 门禁 | `eslint.cjk.config.js` 挂进 `npm run build`,组件里出现中日韩字符即构建失败 |
@@ -1075,12 +1115,20 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 ```
 npm run build
   ✓ lint:cjk        无硬编码中文
+  ✓ check:dim       维度色仅用于填充
   ✓ tsc -b          类型检查通过
-  ✓ vite build      1673 modules,CSS 14.93 kB / JS 308.74 kB(gzip 101.64 kB)
+  ✓ vite build      1674 modules,CSS 15.72 kB / JS 310.42 kB(gzip 102.22 kB)
   ✓ check:bundle    扫描 3 个文件,无 secret 泄漏
 ```
 
-CJK 门禁做过反向验证:临时放一个含中文字面量与中文 JSX 文本的文件,两处都被拦下(`no-restricted-syntax`),验完即删。
+**两道守卫都做过反向验证** —— 守卫类的东西必须证明它会拦,不是证明它不报错:
+
+| 守卫 | 反向用例 | 结果 |
+|---|---|---|
+| `lint:cjk` | 含中文字面量 + 中文 JSX 文本的临时文件 | 两处都拦下 |
+| `check:dim` | `text-dim-goal`、`border-dim-capture`、`stroke="#ba801a"`、CSS `color: var(--dim-value)`、CSS `border-color: var(--dim-goal)` | 五种全拦下,移除后恢复通过 |
+
+两次验完即删,不留在仓库里。
 
 ## 未完成 —— 全部卡在你侧资产
 

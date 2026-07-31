@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run lint:cjk && tsc -b && vite build && npm run check:bundle",
+    "build": "npm run lint:cjk && npm run check:dim && tsc -b && vite build && npm run check:bundle",
     "build:ci": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:cjk": "eslint --config eslint.cjk.config.js \"src/**/*.{ts,tsx}\"",
     "check:bundle": "node scripts/check-bundle-secrets.mjs",
+    "check:dim": "node scripts/check-dim-color-usage.mjs",
     "fonts:subset": "node scripts/subset-fonts.mjs"
   },
   "dependencies": {

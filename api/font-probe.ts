@@ -24,11 +24,8 @@ import puppeteer from 'puppeteer-core';
 const COMMON = '盈利增长罗盘诊断报告';
 // 这些字几乎不可能出现在常用 3500 字 subset 里 —— 专门用来触发系统字体回落
 const RARE = '䶮 龘 靐 齉 麤 нет';
-// 子模块表的 badge 字符。■ U+25A0 与 □ U+25A1 在 CJK 字体里基本都有,
-// 但 ◧ U+25E7(SQUARE WITH LEFT HALF BLACK)属于 Geometric Shapes 冷门区,
-// Noto Sans SC 未必收录 —— 这里必须实测,不能假设。
-// 若 ◧ 渲成方块,备选是 ▣ U+25A3(CJK 字体收录率高得多)。
-const BADGES = '■ ◧ □   ▣ ▤ ▥ ●';
+// 子模块标记不再验字符 —— 已改成纯 CSS 方块,不依赖字体收录。
+// 见 src/styles/brutalist.css 的 .qai-mark。
 
 function cdnBase(): string {
   const raw = process.env.CDN_FONT_BASE ?? 'https://cdn.qiai.tech/fonts/';
@@ -58,9 +55,7 @@ function html(): string {
   <div class="row"><div class="tag">2. rare glyphs / fontconfig fallback</div>
     <div class="big">${RARE}</div>
     <div class="big bold">${RARE}</div></div>
-  <div class="row"><div class="tag">3. submodule badges / geometric shapes</div>
-    <div class="big">${BADGES}</div></div>
-  <div class="row"><div class="tag">4. latin + numerals</div>
+  <div class="row"><div class="tag">3. latin + numerals</div>
     <div class="big">AI Growth Compass — 72 / 100</div></div>
 </body></html>`;
 }

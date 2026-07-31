@@ -374,16 +374,17 @@
 
   "ghl_writeback": {
     "note": "答完后通过 GHL API 写回 contact，让他现有的 workflow 可以直接分支。",
+    "custom_fields_note": "GHL 里九个字段全部建成单行文本。取值一律写机器可读 key，不写中文——workflow 的条件判断是精确字符串匹配，中文名一改文案 workflow 就断。写回前必须按 domain 校验，不在域内的报 CONFIG 类错误并中止该字段的写入，绝不静默写进去：GHL 收到域外值时 workflow 会静默不匹配，那种 bug 最难查。",
     "custom_fields": [
-      "qai_assessment_status",
-      "qai_assessment_total",
-      "qai_assessment_tier",
-      "qai_assessment_weakest_1",
-      "qai_assessment_weakest_2",
-      "qai_assessment_priority",
-      "qai_assessment_goal_90d",
-      "qai_assessment_consult_interest",
-      "qai_assessment_report_url"
+      { "key": "qai_assessment_status", "type": "text", "domain": ["completed"], "source": "system" },
+      { "key": "qai_assessment_total", "type": "number", "domain": "0-100", "source": "result.total" },
+      { "key": "qai_assessment_tier", "type": "text", "domain": ["manual", "spot", "semi_auto", "systemic", "flywheel"], "source": "result.tier" },
+      { "key": "qai_assessment_weakest_1", "type": "text", "domain": ["goal", "traffic", "capture", "convert", "value", "measure"], "source": "result.weakest[0]" },
+      { "key": "qai_assessment_weakest_2", "type": "text", "domain": ["goal", "traffic", "capture", "convert", "value", "measure"], "source": "result.weakest[1]" },
+      { "key": "qai_assessment_priority", "type": "text", "domain": ["goal", "traffic", "capture", "convert", "value", "measure"], "source": "survey.priority_dimension", "note": "S1 选项索引按 dimensions[].order 直接映射成维度 key。刻意与 weakest 同取值域——assessment_mismatch 规则要直接比对两者。" },
+      { "key": "qai_assessment_goal_90d", "type": "text", "domain": null, "max_length": 200, "source": "survey.goal_90d" },
+      { "key": "qai_assessment_consult_interest", "type": "text", "domain": ["asap", "later", "self", "no"], "source": "survey.consult_interest", "note": "S7 选项索引 0/1/2/3 依次映射" },
+      { "key": "qai_assessment_report_url", "type": "text", "domain": null, "max_length": 300, "source": "APP_BASE_URL + '/?t=' + entitlement.access_token" }
     ],
     "tags_always": [
       "assessment_completed",
@@ -420,7 +421,7 @@
       "zh": { "■": "已具备", "◧": "部分具备", "□": "缺失" },
       "en": { "■": "In place", "◧": "Partial", "□": "Missing" }
     },
-    "submodule_badge_note": "墨色单色实心几何，网页与 PDF 共用同一套字符。不依赖颜色区分，色盲可读。表头必须给图例。"
+    "submodule_badge_note": "⚠️ 这些字符仅用于【纯文本场景】：CSV 导出、GHL 字段、纯文本邮件。渲染层（网页与 PDF）一律不使用字符，改用 CSS 画的 12×12 方块 + 2px 墨边框（实心 / 左半实心 / 透明）。理由：只要用字符就永远在赌字体收录，换字体或重新生成 subset 都可能让某个符号掉成方块；CSS 方块不依赖字体，两条渲染路径逐像素一致。"
   },
 
   "tiers": [
