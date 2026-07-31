@@ -344,8 +344,9 @@ qai-growth-compass/
 
 | 文件 | 内容 |
 |---|---|
-| [`supabase/migrations/20260731000000_assessment_init.sql`](supabase/migrations/20260731000000_assessment_init.sql) | 9 张表 + 索引 + trigger + 列注释 + RLS 全开零 policy |
-| [`supabase/migrations/20260731000100_reports_storage_bucket.sql`](supabase/migrations/20260731000100_reports_storage_bucket.sql) | `reports` 私有 bucket |
+| [`20260731000000_assessment_init.sql`](supabase/migrations/20260731000000_assessment_init.sql) | 9 张表 + 索引 + trigger + 列注释 + RLS 全开零 policy |
+| [`20260731000100_reports_storage_bucket.sql`](supabase/migrations/20260731000100_reports_storage_bucket.sql) | `reports` 私有 bucket |
+| [`20260731000200_seed_default_cohort.sql`](supabase/migrations/20260731000200_seed_default_cohort.sql) | 默认批次 seed + 自断言 |
 
 > **为什么删掉内联的那 164 行**:Stage 0 时还没有 migration 文件,SQL 只能写在这里;
 > 文件建好之后两份就要靠人同步 —— 而这次审查一比对,立刻发现已经漂了一处
@@ -365,13 +366,22 @@ qai-growth-compass/
 | `pdf_path` | 存 Storage 对象路径,不是公开 URL。原名 `pdf_url` 需要靠注释纠正字段名,说明名字本身是错的 |
 | `touch_updated_at` trigger | 保留。纯赋值 per-row,开销可忽略;真要批量导入时临时 `disable trigger` 即可 |
 
-**分开手工执行的第二段(值等你给,不进 migration):**
+### 功能依赖进 migration,环境配置手动
+
+判断标准:**换一个环境重建,代码还能不能正常跑。**
+
+| | 归类 | 处理 |
+|---|---|---|
+| 默认批次(`is_default = true`) | **功能依赖** —— 没有它 webhook 的 cohort 兜底无处可落,`cohort_id` 静默落 null,基准线 / `cohort_rank` / 批次聚合看板整块失效,而且要等 Stage 8 才会发现 | 进 migration `20260731000200`,可复现,重建环境不会漏 |
+| `admin_users` 首行 | **环境配置** —— 为空只是没人能登录后台,代码本身照常运行;而且内容含个人邮箱 | 手动 SQL Editor insert |
+
+**手动执行的部分(不进 migration):**
 
 ```sql
 insert into public.admin_users (email, name) values ('<你的邮箱>', '<名字>');
-insert into public.assessment_cohorts (name, event_date, source_tag, is_default)
-values ('默认批次', null, 'default', true);
 ```
+
+> seed migration 里那句 `on conflict do nothing` 会吞掉**任何**唯一冲突,不只是「默认批次已存在」这一种。所以插完跟了一个 `do $$ ... raise exception ... $$` 断言目标状态真的达成 —— 这个 seed 若静默失败,后果(`cohort_id` 落 null)恰恰属于不报错的那一类。
 
 ---
 
@@ -938,7 +948,7 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 | 2 | migration 已 apply;`npm test` 全绿(含全部 phone 用例);Deno 能 import 同一份 phone.ts |
 | 3 | curl 打 webhook:错密钥 401 且不写库;同一 contact_id 打 3 次只有 1 行;烂号码降级写入且 raw 保留 |
 | 4 | 魔法链接可登录;Inbound Webhook 触发后 WhatsApp + Email 双通道到达;第 6 次登录尝试被锁;命中与未命中文案与耗时无差异;**跳转目标由 session 状态推导且类型层受限(四态各验一遍,`survey` 态不得被推回 `/quiz`)**;**英文入口(`?lang=en`)登录后仍是英文**;**同一邮箱两条 entitlement 时不发链接且记 warn(S4-A)**;**`login_attempts` 30 天清理生效(S4-B)**;**作废后旧链接被拒、新链接可用(S4-C)** |
-| 5 | 名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红;**可筛 `phone_e164 is null` 并显示占比**(阈值 2%,见 Stage 2 的 ext 用例记录) |
+| 5 | **前置检查:`admin_users` 至少一行,否则后台不可达**(环境配置,手动 insert,见 0.7);名单页可筛可导出;非名单邮箱登录后台得 403;异常号码行标红;**可筛 `phone_e164 is null` 并显示占比**(阈值 2%,见 Stage 2 的 ext 用例记录) |
 | 6 | 答到第 12 题关浏览器,重开链接从第 12 题继续 |
 | 7 | 手算一份分数与系统输出一致;24 题不齐 submit 被拒 |
 | 8 | 9 板块齐;基准线两种来源都能触发并正确标注;代价换算旁 disclaimer 与假设可见;`window.__REPORT_READY__` 已埋;print.css 保底可用 |
@@ -976,6 +986,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
 | **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
 | 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
+| seed 数据的归属 | **功能依赖进 migration,环境配置手动。** 判断标准是「换一个环境重建,代码还能不能正常跑」。没有默认 cohort 代码就跑不对 → migration;没有 admin 只是没人能登录 → 手动 |
+| **不要同一份东西存两处** | 靠人同步的复制品本身就是 bug 源,加「一致性守卫」只是给它上保险。发现复制品先想能不能取消复制:SQL 的真相源是 migration 文件,题库的真相源是 `assessment-config.json`,设计理由写在它们各自的注释里 |
 | ~~PAT 轮换~~ | ❌ **已作废**。本机已从 PAT 切到 SSH key,remote 改为 `git@github.com`。**不要再提醒轮换 PAT** |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
