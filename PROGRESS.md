@@ -1014,13 +1014,17 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 
 所以:**Bold 源文件请给我一份本地路径就行**(放 `~/Downloads` 或仓库外任意位置),我用它生成 subset 后,只把 subset woff2 交给你上 CDN。原始 Bold ttf 不需要上 CDN,不占那 10MB。
 
-### 第一批 —— 你现在传 CDN(3 个)
+### 第一批 —— ✅ 已上 CDN(3 个,均验证 200,CORS `*`)
 
-| # | 文件 | 用途 | 预估体积 |
+| # | 文件 | 用途 | 实际体积 |
 |---|---|---|---|
-| 1 | `NotoSansSC-Regular.ttf`(或 `.otf`,静态单字重) | fontconfig 兜底层 | ~10 MB |
-| 2 | `Sora[wght].woff2`(可变) | 标题的拉丁字母与数字 | ~50 KB |
-| 3 | `PlusJakartaSans[wght].woff2`(可变) | 正文的拉丁字母与数字 | ~50 KB |
+| 1 | `NotoSansSC-Regular.otf` | fontconfig 兜底层 | 8,331,336 B |
+| 2 | `Sora-VF.woff2`(可变,wght 轴) | 标题的拉丁字母与数字 | 49,436 B |
+| 3 | `PlusJakartaSans-VF.woff2`(可变,wght 轴) | 正文的拉丁字母与数字 | 60,548 B |
+
+**格式是 otf 不是 ttf** —— 来源 `googlefonts/noto-cjk` 的 `Sans/SubsetOTF/SC/`,SC 子集静态版、非可变字体。fontconfig 认 otf,符合「静态单字重、不要可变版」的要求。family name 精确等于 `Noto Sans SC`,与 webfont 的 `Noto Sans SC Subset` 错开,坑 1 的设计成立。
+
+代码里的文件名已按实际资产改正:`Sora[wght].woff2` → `Sora-VF.woff2`,`PlusJakartaSans[wght].woff2` → `PlusJakartaSans-VF.woff2`,`chromium.font()` 的 `.ttf` → `.otf`。
 
 ### 另需 —— 本地源文件(不上 CDN)✅ 位置已定
 
@@ -1031,14 +1035,49 @@ subset Bold woff2 得从 Bold 源文件生成。你只传 Regular 上 CDN 的话
 | 4 | `NotoSansSC-Bold.ttf`(或 `.otf`) | 生成 subset Bold 的唯一来源,见坑 3 |
 | (1) | `NotoSansSC-Regular.ttf`(或 `.otf`) | 同时也放这里,用来生成 subset Regular;另需一份上 CDN 作兜底层 |
 
-### 第二批 —— Stage 1 我生成后给你传(2 个)
+### 第二批 —— ✅ 已生成,待上 CDN(2 个)
 
-| # | 文件 | 说明 |
+| # | 文件 | 实际体积 |
 |---|---|---|
-| 5 | `NotoSansSC-Regular.subset.woff2` | 常用 3500 字 + 拉丁 + 标点,预估 1.2–1.8 MB |
-| 6 | `NotoSansSC-Bold.subset.woff2` | 同上,来源是 #4 |
+| 5 | `NotoSansSC-Regular.subset.woff2` | 1,165,800 B(1.11 MB) |
+| 6 | `NotoSansSC-Bold.subset.woff2` | 1,191,732 B(1.14 MB) |
 
-**CDN 要求**:`https://cdn.qiai.tech/fonts/` 下平铺,文件名与上表一致,`CDN_FONT_BASE` 指到这一层。CORS 需允许 `compass.qiai.tech`(`@font-face` 跨域受 CORS 约束;BunnyCDN 默认放开,确认即可)。
+产物在 `build/fonts/`(已 gitignore)。**不写进 `public/`** —— Vite 会把 `public/` 整个复制进 `dist/`,而字体是从 CDN 取的,放那里会让 2.3MB 跟着每次部署走一遍。
+
+生成用项目内的 Python venv,不动系统 Python:`python3 -m venv .venv && ./.venv/bin/pip install "fonttools[woff]" brotli`(`.venv` 已 gitignore)。
+
+### subset 的码位选择
+
+第一版直接收整个 CJK 基本区(20,992 码位),出来 **3.25 / 3.37 MB** —— 是我原先估算的两倍。手机首屏拉这个太重,而其中绝大多数字这辈子不会出现在报告里。
+
+改成两部分的并集:
+
+| 来源 | 数量 | 理由 |
+|---|---|---|
+| GB2312 可编码的汉字 | 6,763 | 有明确标准依据,不靠某份来路不明的「常用 3500 字」频率表。用 Python `codecs` 枚举,离线可复现 |
+| config + ui-strings 里实际出现的汉字 | 680,全部落在 GB2312 内 | 报告正文词汇是固定的,必须 100% 覆盖 |
+
+结果 6,763 个汉字 + 9 段非汉字区间 → **1.11 / 1.14 MB**,回到原估算。
+
+### ⚠️ 生成时发现:测试字符串污染了它要测的东西
+
+`ui-strings.ts` 里有一条 `showcase.fontRare: '生僻字:䶮 龘 靐 齉 麤'`,而 `ui-strings.ts` 正是 subset 的扫描源。于是 **龘 靐 齉 麤 四个字被收进了 subset**(䶮 属 CJK 扩展 A 区,不在扫描范围内所以逃过)。
+
+后果:字体探针第 2 块与 Showcase 自检块**会被 subset 满足** —— 显示正常,但根本没验到 fontconfig 兜底层。探针会给出一个假的通过。
+
+修法:`FALLBACK_PROBE_CHARS = '䶮龘靐齉麤'` 显式排除,并在生成后**双向断言**:
+
+- config 里每个汉字必须在 subset 内(一个都不能漏)→ 漏了构建失败
+- 探针字必须**不在** subset 内 → 漏进去构建失败
+
+```
+[subset] NotoSansSC-Regular 校验通过:7650 个码位,config 无漏字,探针字未被收进。
+[subset] NotoSansSC-Bold    校验通过:7650 个码位,config 无漏字,探针字未被收进。
+```
+
+这两条断言是 `npm run fonts:subset` 的一部分,以后改 config 或改探针字符都会被挡住。
+
+**CDN 要求**:`https://cdn.qiai.tech/fonts/` 下平铺,文件名与上表一致,`CDN_FONT_BASE` 指到这一层。CORS 已开(`access-control-allow-origin: *`)。
 
 ---
 
@@ -1088,7 +1127,7 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
 | **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
 | 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
-| PAT 轮换 | 每次 `git push` 后提醒轮换 GitHub PAT |
+| ~~PAT 轮换~~ | ❌ **已作废**。本机已从 PAT 切到 SSH key,remote 改为 `git@github.com`。**不要再提醒轮换 PAT** |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
 

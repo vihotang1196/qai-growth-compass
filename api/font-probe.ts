@@ -69,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let browser;
   try {
     // 系统级中文兜底:fontconfig 只认 ttf/otf,不认 woff2
-    await chromium.font(`${cdnBase()}NotoSansSC-Regular.ttf`);
+    await chromium.font(`${cdnBase()}NotoSansSC-Regular.otf`);
 
     browser = await puppeteer.launch({
       args: chromium.args,

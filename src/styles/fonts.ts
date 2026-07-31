@@ -27,14 +27,14 @@ function faces(): string {
   font-style: normal;
   font-weight: 200 800;
   font-display: swap;
-  src: url('${b}Sora[wght].woff2') format('woff2-variations');
+  src: url('${b}Sora-VF.woff2') format('woff2-variations');
 }
 @font-face {
   font-family: 'Plus Jakarta Sans';
   font-style: normal;
   font-weight: 200 800;
   font-display: swap;
-  src: url('${b}PlusJakartaSans[wght].woff2') format('woff2-variations');
+  src: url('${b}PlusJakartaSans-VF.woff2') format('woff2-variations');
 }
 @font-face {
   font-family: 'Noto Sans SC Subset';

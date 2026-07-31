@@ -14,9 +14,6 @@ dist-ssr
 # 见 PROGRESS.md 0.14
 assets/fonts/
 
-# 生成产物
-public/fonts/*.subset.woff2
-
 .DS_Store
 *.log
 .idea
@@ -25,3 +22,9 @@ public/fonts/*.subset.woff2
 
 # 本地 npm 缓存(~/.npm 权限受限时使用)
 .npm-cache
+
+# subset 生成用的 Python venv(只装 fontTools,不污染系统 Python)
+.venv
+
+# subset 码位清单等生成物
+build
