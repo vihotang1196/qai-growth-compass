@@ -210,6 +210,24 @@ if (needed.size === 0 && errors.length === 0) {
   errors.push('共享源码里没扫到任何外部 specifier —— 正则大概坏了,不当作通过');
 }
 
+// ── 3. 反向:import map 里不许有没人用的条目 ────────────────────
+// 【配置跟着实现走,不要提前于实现】
+// 未使用的映射条目没有任何东西校验它 —— 它可以漂到另一个版本而不被发现,
+// 等哪天有人 import 那个 specifier,就拿到一个与在用条目不同的版本。
+// 这跟 vercel.json 给尚未存在的函数配 maxDuration 是同一类问题:
+// 配置提前于实现,要么直接炸(Vercel 那样),要么静默腐烂(这里)。
+if (roots.length > 0) {
+  const unused = Object.keys(imports).filter((spec) => !needed.has(spec));
+  if (unused.length) {
+    errors.push(
+      `${IMPORT_MAP} 里有 ${unused.length} 个没人用的 imports 条目:` +
+        `${unused.join(', ')}。` +
+        `配置跟着实现走 —— 等真的有文件 import 它时再加。` +
+        `没人用的映射不受本守卫校验,会静默腐烂。`,
+    );
+  }
+}
+
 if (errors.length) {
   console.error('[check-dep-sync] FAILED —— 跨运行时依赖不一致:');
   for (const e of errors) console.error(`  ${e}`);

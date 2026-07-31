@@ -1086,6 +1086,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | 分支策略 | **Stage 0–1 直接提交 main**(新仓库、无协作者、未部署,开分支只是仪式)。**Stage 2 起一个 Stage 一条分支**,首条 `stage-2-schema-phone` —— 那时 Vercel 已接上,分支能出 preview 部署,这才是分支值钱的地方 |
 | Push | **每次 push 都要明说**。一次「push」授权只覆盖当次那批 commit,不是长期通行证 |
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
+| **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
+| 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
 | PAT 轮换 | 每次 `git push` 后提醒轮换 GitHub PAT |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
@@ -1275,13 +1277,52 @@ npm run check:cross
 
 与 PROGRESS.md 0.7 的 SQL 逐行一致。**一行都没执行** —— 等你批准,而且 Supabase 的 project ref 与 keys 也还没给。
 
+## Vercel preview 首次部署失败 —— 提前的配置
+
+```
+Error: The pattern "api/render-pdf.ts" defined in `functions` doesn't match any
+Serverless Functions inside the `api` directory.
+```
+
+`vercel.json` 给 `api/render-pdf.ts` 配了 `maxDuration` / `memory`,但函数本体是 Stage 9 才写,文件不存在 → Vercel 硬失败。与代码无关,本地 `rm -rf node_modules && npm ci && npm run build` 全绿。
+
+**修法:整段删掉那条规则,Stage 9 写函数本体时再一起加回来。** 不建空占位文件 —— 占位函数一部署就是真实可访问的端点,而且 Stage 9 会接手一个来路不明的文件。
+
+**顺带排查出同一类的第二处**:`deno.json` 的 import map 里映射了裸 `libphonenumber-js`,但**没有任何文件 import 它**。而 `check:dep-sync` 只校验被实际用到的 specifier,所以这条未使用的映射不受任何校验 —— 它可以漂到另一个版本而不被发现,等哪天有人 import 裸形式,就拿到一个与 `/max` 不同的版本。同样是配置提前于实现,只是它不会炸,会静默腐烂。
+
+已删掉,并**加了守卫**:import map 里出现没人用的条目即构建失败。反向验证 2 种(加回裸条目、加一个无关的 `zod` 条目),都拦下。
+
+全仓其余配置引用的文件已逐一确认存在:`package.json` 的 scripts、`deno.json` 的 tasks、`.claude/launch.json`、`vercel.json` 剩下的 `api/font-probe.ts`(这个文件是存在的)。
+
+**Stage 9 要加回的配置**:`vercel.json` → `functions["api/render-pdf.ts"] = { maxDuration: 60, memory: 1769 }`。
+
+## 依赖审计(Stage 2 收尾)
+
+```
+全部依赖    moderate=4  high=16  critical=1  total=21
+仅生产依赖  moderate=2  high=0   critical=0  total=2
+```
+
+**那个 critical 和全部 16 个 high 都在 devDependencies 里** —— 不进产物,不管。
+
+生产依赖的 2 个 moderate 都在 `react-router`(`react-router-dom` 依赖它):
+
+| 漏洞 | 对本项目的实际暴露 |
+|---|---|
+| `deserializeErrors()` 构造器注入(SSR Hydration) | **不适用** —— 本项目是纯 SPA,没有 SSR hydration |
+| `<Link>` / `useNavigate` 反斜杠开放重定向 | **当前不适用**,但 Stage 4 要当心:登录后的跳转目标必须是代码里的字面路径,**绝不能来自 query param**。已写进下面的约束 |
+
+修复需要 `react-router` 升到 7.x(major),现在不动 —— 刚验完的构建链不值得为两个当前不可达的 moderate 去冒 major 升级的风险。Stage 4 做登录跳转时复查一次。
+
+**Stage 4 硬约束(源自上述开放重定向)**:`assessment-auth` 成功后的跳转目标只能是 `/quiz` / `/report` / `/expired` 这三个字面值之一,由 session 状态决定;不接受任何形式的 `?next=` / `?redirect=` 参数。
+
 ## 未完成
 
 | 项 | 卡在 |
 |---|---|
 | **migration 执行** | 等批准 SQL + Supabase project ref 与 keys。**一行都没执行** |
 | 字体探针 | 等 CDN URL |
-| Vercel 部署 / preview | 等接仓库 + CNAME + 环境变量 |
+| Vercel preview | 本次修完再看能否起来 |
 
 ## 验证总览
 
