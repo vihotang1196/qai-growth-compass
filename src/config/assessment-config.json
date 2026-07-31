@@ -1,0 +1,459 @@
+{
+  "meta": {
+    "id": "ai-growth-compass-v1",
+    "name_zh": "AI 盈利增长罗盘™ 企业诊断",
+    "name_en": "AI Profit Growth Compass™ Business Diagnostic",
+    "version": "1.0.0",
+    "default_locale": "zh",
+    "locales": ["zh", "en"],
+    "question_count": 24,
+    "dimension_count": 6,
+    "max_raw_per_dimension": 12,
+    "estimated_minutes": 6
+  },
+
+  "access": {
+    "model": "ghl_entitlement",
+    "note": "支付在 GHL 完成，本系统不接支付。GHL webhook 推入 phone + email 建立准入记录，客户凭链接 + 手机或邮箱任一匹配即可登录。",
+    "primary_auth": "magic_token",
+    "fallback_auth": "resend_link_only",
+    "fallback_note": "输入手机或邮箱任一匹配后不直接登录，只把 magic link 重发到该记录已登记的手机与邮箱两个渠道。不做 OTP。成功与失败返回完全相同的文案与相近耗时。",
+    "session_days": 30,
+    "rate_limit": { "attempts": 5, "window_minutes": 15, "key": "ip", "lockout_minutes": 60, "resend_cooldown_seconds": 60 },
+    "phone_normalization": "用 libphonenumber-js，默认国家 MY。全角转半角 → 去非数字非加号 → parsePhoneNumberFromString。入库存 phone_e164 与 phone_tail（E.164 去 + 后最后 8 位）。登录三级回退：精确匹配 → tail 匹配 → tail 命中多于 1 条视为未命中。少于 8 位数字判无效。webhook 入库与登录查询必须走同一个函数。"
+  },
+
+  "profile_questions": [
+    {
+      "id": "P1",
+      "field": "industry",
+      "scored": false,
+      "zh": { "q": "你的主要行业是？", "options": ["教育培训", "美容医美", "房产/金融", "电商零售", "专业服务", "其他"] },
+      "en": { "q": "What is your main industry?", "options": ["Education", "Beauty / Aesthetics", "Property / Finance", "E-commerce / Retail", "Professional services", "Other"] }
+    },
+    {
+      "id": "P2",
+      "field": "leads_per_month",
+      "scored": false,
+      "value_map": [10, 35, 75, 150, 300],
+      "zh": { "q": "你每月大约收到多少条询盘？", "options": ["少于 20 条", "20–50 条", "50–100 条", "100–200 条", "200 条以上"] },
+      "en": { "q": "Roughly how many enquiries do you get per month?", "options": ["Under 20", "20–50", "50–100", "100–200", "Over 200"] }
+    },
+    {
+      "id": "P3",
+      "field": "deal_value",
+      "scored": false,
+      "value_map": [300, 1500, 4000, 10000, 30000],
+      "zh": { "q": "你的平均客单价大约是？", "options": ["RM500 以下", "RM500–3,000", "RM3,000–5,000", "RM5,000–20,000", "RM20,000 以上"] },
+      "en": { "q": "What is your average deal value?", "options": ["Under RM500", "RM500–3,000", "RM3,000–5,000", "RM5,000–20,000", "Over RM20,000"] }
+    }
+  ],
+
+  "dimensions": [
+    { "key": "goal",    "order": 1, "zh": "定目标", "en": "Set the Target",   "color": "#1e5fa8", "submodules_zh": ["选市场", "定定位", "倒业绩"], "submodules_en": ["Pick the market", "Set positioning", "Reverse-engineer targets"] },
+    { "key": "traffic", "order": 2, "zh": "造流量", "en": "Create Traffic",   "color": "#12897e", "submodules_zh": ["策内容", "造视频", "放流量"], "submodules_en": ["Content strategy", "Video production", "Distribution"] },
+    { "key": "capture", "order": 3, "zh": "接客户", "en": "Capture Leads",    "color": "#4a9e3f", "submodules_zh": ["建入口", "AI 对话", "存客户"], "submodules_en": ["Build the entry point", "AI conversation", "Store the customer"] },
+    { "key": "convert", "order": 4, "zh": "促成交", "en": "Drive Conversion", "color": "#6b46a8", "submodules_zh": ["教育问题", "建立标准", "引导行动"], "submodules_en": ["Educate the problem", "Set the standard", "Guide the action"] },
+    { "key": "value",   "order": 5, "zh": "增价值", "en": "Increase Value",   "color": "#e8a020", "submodules_zh": ["升产品", "促复购", "做裂变"], "submodules_en": ["Upgrade the offer", "Drive repeat", "Build referral"] },
+    { "key": "measure", "order": 6, "zh": "测数据", "en": "Measure & Iterate","color": "#c94f4f", "submodules_zh": ["数据看板", "归因分析", "迭代复盘"], "submodules_en": ["Dashboard", "Attribution", "Review loop"] }
+  ],
+
+  "questions": [
+    {
+      "id": "G1", "dimension": "goal", "submodule_index": 0,
+      "zh": {
+        "q": "你能说清楚「我最赚钱的客户是哪一类人」吗？",
+        "options": ["说不清，谁来都接", "有模糊印象，没有数据支持", "能说出画像，但没算过每类客户的利润", "能按利润排序客户类型，并主动只接前两类"]
+      },
+      "en": {
+        "q": "Can you clearly say which type of customer is your most profitable?",
+        "options": ["No idea — we take whoever comes", "A rough sense, no data behind it", "I can describe them, but never calculated profit per type", "Ranked by profit, and we deliberately only take the top two"]
+      }
+    },
+    {
+      "id": "G2", "dimension": "goal", "submodule_index": 1,
+      "zh": {
+        "q": "如果客户问「你跟同行有什么不一样」，你的回答是？",
+        "options": ["只能说「我们服务好 / 价格实惠」", "有一套说法，但每个销售讲的不一样", "有统一的差异点，写在官网和话术里", "差异点是同行做不到的，客户听完会主动复述给别人"]
+      },
+      "en": {
+        "q": "When a customer asks \"how are you different from competitors?\", what do you say?",
+        "options": ["Just \"better service / better price\"", "We have a line, but every salesperson says it differently", "One consistent differentiator, written into the site and scripts", "A differentiator competitors can't copy — customers repeat it to others"]
+      }
+    },
+    {
+      "id": "G3", "dimension": "goal", "submodule_index": 2,
+      "zh": {
+        "q": "你今年的营收目标，拆到「每月需要多少条询盘」了吗？",
+        "options": ["只有营收目标，没拆过", "拆到月营收，没拆到询盘量", "拆到询盘量，但没算获客成本上限", "询盘量、成交率、客单价、获客预算都有明确数字"]
+      },
+      "en": {
+        "q": "Have you broken your annual revenue target down to \"enquiries needed per month\"?",
+        "options": ["Only a revenue target, never broken down", "Broken down to monthly revenue, not to enquiries", "Down to enquiry volume, but no max acquisition cost", "Enquiries, close rate, deal value and ad budget all have hard numbers"]
+      }
+    },
+    {
+      "id": "G4", "dimension": "goal", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "团队里除了你，还有谁知道这些目标数字？",
+        "options": ["只有我自己知道", "管理层知道大概", "相关同事都知道，但不常看", "目标数字公开可见，每周对一次"]
+      },
+      "en": {
+        "q": "Besides you, who on the team knows these target numbers?",
+        "options": ["Only me", "Management knows roughly", "The relevant staff know, but rarely look", "Targets are visible to all and reviewed weekly"]
+      }
+    },
+
+    {
+      "id": "T1", "dimension": "traffic", "submodule_index": 0,
+      "zh": {
+        "q": "你的内容选题是怎么来的？",
+        "options": ["想到什么发什么，或者根本没在发", "看同行发什么就跟着发", "有固定栏目 / 主题，按周排期", "有内容矩阵：按客户认知阶段 × 平台分配选题，并有 Hook 库"]
+      },
+      "en": {
+        "q": "Where do your content topics come from?",
+        "options": ["Whatever comes to mind, or we don't post", "We copy whatever competitors post", "Fixed themes on a weekly schedule", "A content matrix by awareness stage × platform, with a hook library"]
+      }
+    },
+    {
+      "id": "T2", "dimension": "traffic", "submodule_index": 1,
+      "zh": {
+        "q": "你现在做一条营销视频，大概要多久？",
+        "options": ["基本不做视频", "一条要花好几天，靠外包或自己硬做", "有模板和流程，一天能出几条", "用 AI Prompt + Workflow，一天能出十条以上且质量稳定"]
+      },
+      "en": {
+        "q": "How long does it take you to produce one marketing video?",
+        "options": ["We don't really make videos", "Several days each — outsourced or grinding it out", "We have templates; a few per day", "AI prompts + workflow: 10+ per day at consistent quality"]
+      }
+    },
+    {
+      "id": "T3", "dimension": "traffic", "submodule_index": 2,
+      "zh": {
+        "q": "你的客户主要从哪里来？",
+        "options": ["靠老客介绍和运气，说不上来", "集中在单一渠道（只有 FB 广告 / 只有转介绍）", "有 2 个以上渠道，但没有私域沉淀", "自然流量 + 付费流量 + 私域（WhatsApp / 群 / 名单）三条腿都在跑"]
+      },
+      "en": {
+        "q": "Where do your customers mainly come from?",
+        "options": ["Word of mouth and luck — hard to say", "One channel only (just FB ads, or just referrals)", "Two or more channels, but no owned audience", "Organic + paid + owned (WhatsApp / groups / list) all running"]
+      }
+    },
+    {
+      "id": "T4", "dimension": "traffic", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "上个月你一共发布了多少条内容（贴文 / 视频 / 直播）？",
+        "options": ["0–3 条", "4–12 条", "13–30 条", "30 条以上，且有排期表"]
+      },
+      "en": {
+        "q": "How many pieces of content did you publish last month (posts / videos / lives)?",
+        "options": ["0–3", "4–12", "13–30", "30+, on a published schedule"]
+      }
+    },
+
+    {
+      "id": "C1", "dimension": "capture", "submodule_index": 0,
+      "zh": {
+        "q": "潜在客户对你有兴趣时，第一步会做什么？",
+        "options": ["只能私信问，或者打电话", "有官网 / 主页，但没有明确的行动按钮", "有落地页和表单，能留资料", "有 Lead Magnet（测评 / 清单 / 报告）+ 落地页 + 表单，并能自动交付"]
+      },
+      "en": {
+        "q": "When a prospect gets interested, what's their first step?",
+        "options": ["DM us or call — that's it", "We have a site, but no clear call to action", "A landing page and form to capture details", "Lead magnet (quiz / checklist / report) + landing page + form, auto-delivered"]
+      }
+    },
+    {
+      "id": "C2", "dimension": "capture", "submodule_index": 1,
+      "zh": {
+        "q": "客户在 WhatsApp / FB / IG 上发来咨询，通常多久有人回？",
+        "options": ["靠人手回，经常几小时甚至隔天", "有自动回复模板，但不能真正对话", "有 AI 自动对话，能回答常见问题", "AI 能对话 + 判断意向 + 自动打标签进 CRM，24 小时不断线"]
+      },
+      "en": {
+        "q": "When someone messages you on WhatsApp / FB / IG, how fast do they get a reply?",
+        "options": ["Manual replies — often hours or next day", "Auto-reply template, but it can't hold a conversation", "AI handles conversation and answers common questions", "AI converses + scores intent + auto-tags into CRM, 24/7"]
+      }
+    },
+    {
+      "id": "C3", "dimension": "capture", "submodule_index": 2,
+      "zh": {
+        "q": "一个咨询过但没成交的客户，三个月后你还找得到他吗？",
+        "options": ["找不到，聊天记录翻不动", "存在手机 / Excel 里，要人工翻", "有 CRM，客户都在里面", "有 CRM + 标签 + 来源追踪，能一键筛出「三个月前问过 A 产品的人」"]
+      },
+      "en": {
+        "q": "Someone enquired but didn't buy. Can you still find them three months later?",
+        "options": ["No — buried in chat history", "Saved on a phone or in Excel, manual to dig out", "We have a CRM, everyone's in it", "CRM + tags + source tracking — one click to pull \"asked about product A 3 months ago\""]
+      }
+    },
+    {
+      "id": "C4", "dimension": "capture", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "你知道上个月一共收到多少条询盘吗？",
+        "options": ["不知道", "大概知道，靠感觉", "知道总数", "知道总数、来源分布，以及有多少条真的被跟进了"]
+      },
+      "en": {
+        "q": "Do you know how many enquiries you received last month?",
+        "options": ["No", "Roughly, by feel", "I know the total", "Total, source breakdown, and how many were actually followed up"]
+      }
+    },
+
+    {
+      "id": "V1", "dimension": "convert", "submodule_index": 0,
+      "zh": {
+        "q": "客户说「我再考虑一下」，通常是因为什么？",
+        "options": ["不知道，只能等他回来", "觉得是价格问题，只能给折扣", "知道常见的几个顾虑，销售会临场应对", "有内容和话术在成交前就讲清「不解决的代价」，客户自己算出损失"]
+      },
+      "en": {
+        "q": "When a customer says \"let me think about it\", why is it usually?",
+        "options": ["No idea — we just wait", "We assume it's price, so we discount", "We know the common objections; sales handles them ad hoc", "Content and scripts establish the cost of inaction before the ask — they do the math themselves"]
+      }
+    },
+    {
+      "id": "V2", "dimension": "convert", "submodule_index": 1,
+      "zh": {
+        "q": "客户凭什么判断你的方案是对的？",
+        "options": ["只能靠信任我这个人", "靠案例和客户见证", "有一套「选择标准」内容，教客户怎么挑", "这套标准是按我们的优势设计的，客户拿去比价反而更信我们"]
+      },
+      "en": {
+        "q": "How does a customer judge that your solution is the right one?",
+        "options": ["They just have to trust me personally", "Case studies and testimonials", "We publish buying criteria that teach them how to choose", "Those criteria are built around our strengths — comparison shopping increases their trust in us"]
+      }
+    },
+    {
+      "id": "V3", "dimension": "convert", "submodule_index": 2,
+      "zh": {
+        "q": "你的成交路径是什么样的？",
+        "options": ["每单都不一样，看情况谈", "有大致流程，但靠销售个人发挥", "有标准流程：咨询 → 报价 → 跟进", "明确路径 + 价值叠加 + 异议处理话术库，新人照着做也能成交"]
+      },
+      "en": {
+        "q": "What does your path to close look like?",
+        "options": ["Different every deal — we play it by ear", "A rough process, but it depends on the individual rep", "Standard flow: enquiry → quote → follow-up", "Defined path + value stacking + objection library — a new hire can close with it"]
+      }
+    },
+    {
+      "id": "V4", "dimension": "convert", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "你的成交率（询盘 → 付款）大概是多少？",
+        "options": ["不知道", "知道大概，没有记录", "有记录，但不分渠道", "分渠道、分产品都有成交率数据"]
+      },
+      "en": {
+        "q": "What is your close rate (enquiry → payment)?",
+        "options": ["Don't know", "Roughly, but nothing recorded", "Recorded, but not split by channel", "Tracked by channel and by product"]
+      }
+    },
+
+    {
+      "id": "M1", "dimension": "value", "submodule_index": 0,
+      "zh": {
+        "q": "你有几个价格档次的产品？",
+        "options": ["只有一个产品 / 一个价格", "有两个，但没设计过升级路径", "有低中高三档", "完整 Value Ladder：低门槛前端 → 主产品 → 高价后端，并有 Upsell / Cross-sell 设计"]
+      },
+      "en": {
+        "q": "How many price tiers do your offers have?",
+        "options": ["One product, one price", "Two, but no designed upgrade path", "Low / mid / high tiers", "Full value ladder: front-end → core → premium back-end, with upsell / cross-sell built in"]
+      }
+    },
+    {
+      "id": "M2", "dimension": "value", "submodule_index": 1,
+      "zh": {
+        "q": "成交后的客户，你会主动再联系吗？",
+        "options": ["交付完就结束了", "想起来才联系", "有节点提醒（续费 / 生日），人工发", "有自动培育序列：交付后、使用中、到期前都有自动触达"]
+      },
+      "en": {
+        "q": "Do you proactively re-engage customers after the sale?",
+        "options": ["Delivery ends the relationship", "Only when we happen to remember", "Manual outreach at key moments (renewal / birthday)", "Automated nurture: post-delivery, in-use, and pre-renewal touchpoints"]
+      }
+    },
+    {
+      "id": "M3", "dimension": "value", "submodule_index": 2,
+      "zh": {
+        "q": "你有在系统性地收集好评和转介绍吗？",
+        "options": ["没有在做", "偶尔口头要一下", "会主动要评价，但没有转介绍机制", "有评价收集流程 + 转介绍奖励 + 合作伙伴渠道"]
+      },
+      "en": {
+        "q": "Do you systematically collect reviews and referrals?",
+        "options": ["Not at all", "We ask verbally now and then", "We ask for reviews, but no referral mechanism", "Review pipeline + referral incentive + partner channel"]
+      }
+    },
+    {
+      "id": "M4", "dimension": "value", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "你的营收里，老客户（复购 + 转介绍）贡献占多少？",
+        "options": ["几乎全是新客", "少于 20%", "20%–40%", "40% 以上"]
+      },
+      "en": {
+        "q": "What share of revenue comes from existing customers (repeat + referral)?",
+        "options": ["Almost all new customers", "Under 20%", "20%–40%", "Over 40%"]
+      }
+    },
+
+    {
+      "id": "D1", "dimension": "measure", "submodule_index": 0,
+      "zh": {
+        "q": "想看「这个月生意怎么样」，你要花多久？",
+        "options": ["要问人、翻单据，几个小时起", "自己拉 Excel，半小时到一小时", "有报表，但要手动整理", "有看板，打开就看到，数据实时"]
+      },
+      "en": {
+        "q": "How long does it take you to see \"how business is doing this month\"?",
+        "options": ["Ask people, dig through records — hours", "Pull it into Excel myself — 30–60 min", "Reports exist, but need manual assembly", "A live dashboard — open it and it's there"]
+      }
+    },
+    {
+      "id": "D2", "dimension": "measure", "submodule_index": 1,
+      "zh": {
+        "q": "你能说出上个月每个成交客户是从哪个渠道来的吗？",
+        "options": ["说不出来", "大概知道，靠印象", "有记录，但要手动翻", "有 UTM + 看板，随时能拉出每个渠道的成交数和 ROI"]
+      },
+      "en": {
+        "q": "Can you say which channel every customer who bought last month came from?",
+        "options": ["No", "Roughly, from memory", "Recorded, but I'd have to dig", "UTM + dashboard — I can pull deals and ROI per channel any time"]
+      }
+    },
+    {
+      "id": "D3", "dimension": "measure", "submodule_index": 2,
+      "zh": {
+        "q": "你多久检讨一次营销效果并做调整？",
+        "options": ["基本不检讨", "出问题了才看", "每月看一次", "每周固定复盘，且每次有明确的「改什么 / 谁负责」结论"]
+      },
+      "en": {
+        "q": "How often do you review marketing performance and adjust?",
+        "options": ["Basically never", "Only when something breaks", "Monthly", "Weekly, with a clear \"what changes / who owns it\" outcome each time"]
+      }
+    },
+    {
+      "id": "D4", "dimension": "measure", "submodule_index": null, "type": "maturity",
+      "zh": {
+        "q": "你知道你的获客成本（CAC）是多少吗？",
+        "options": ["不知道", "大概估过", "算过总体 CAC", "分渠道 CAC + 客户终身价值（LTV），并据此调整预算"]
+      },
+      "en": {
+        "q": "Do you know your customer acquisition cost (CAC)?",
+        "options": ["No", "Rough guess", "Overall CAC calculated", "CAC by channel + LTV, and we allocate budget from it"]
+      }
+    }
+  ],
+
+  "survey_questions": [
+    {
+      "id": "S1", "field": "priority_dimension", "type": "single_select", "required": true,
+      "zh": { "q": "看完分数，你最想优先动手的是哪一环？", "options": ["定目标", "造流量", "接客户", "促成交", "增价值", "测数据"] },
+      "en": { "q": "After seeing your score, which link do you most want to fix first?", "options": ["Set the Target", "Create Traffic", "Capture Leads", "Drive Conversion", "Increase Value", "Measure & Iterate"] },
+      "note": "对比系统算出的 weakest[]。两者不一致本身就是最有价值的销售信号——他想修的和该修的不是同一件事。"
+    },
+    {
+      "id": "S2", "field": "monthly_marketing_budget", "type": "single_select", "required": true,
+      "value_map": [0, 1500, 4000, 12000, 30000],
+      "zh": { "q": "你目前每月的营销预算大约是？", "options": ["几乎没有", "RM1,000 以下", "RM1,000–3,000", "RM3,000–8,000", "RM8,000 以上"] },
+      "en": { "q": "Roughly what is your monthly marketing budget?", "options": ["Almost none", "Under RM1,000", "RM1,000–3,000", "RM3,000–8,000", "Over RM8,000"] }
+    },
+    {
+      "id": "S3", "field": "marketing_headcount", "type": "single_select", "required": true,
+      "zh": { "q": "团队里有多少人在负责营销 / 跟进客户？", "options": ["只有我自己", "2–3 人", "4–10 人", "10 人以上"] },
+      "en": { "q": "How many people handle marketing / follow-up?", "options": ["Just me", "2–3", "4–10", "More than 10"] }
+    },
+    {
+      "id": "S4", "field": "current_tools", "type": "multi_select", "required": false,
+      "zh": { "q": "你现在在用哪些工具？（可多选）", "options": ["GoHighLevel", "其他 CRM", "WhatsApp Business", "Meta 广告后台", "Excel / Google Sheet", "ChatGPT / AI 工具", "什么都没用"] },
+      "en": { "q": "Which tools do you currently use? (multi-select)", "options": ["GoHighLevel", "Other CRM", "WhatsApp Business", "Meta Ads Manager", "Excel / Google Sheets", "ChatGPT / AI tools", "None"] }
+    },
+    {
+      "id": "S5", "field": "goal_90d", "type": "open_text", "required": true, "max_length": 200,
+      "zh": { "q": "接下来 90 天，你最想达成的一个具体结果是什么？", "placeholder": "例：每月稳定 80 条询盘，成交率提到 20%" },
+      "en": { "q": "What is the one specific result you want in the next 90 days?", "placeholder": "e.g. 80 enquiries/month consistently, close rate up to 20%" },
+      "note": "这一栏是后端销售最好用的一句话。原文照抄进 GHL 备注。"
+    },
+    {
+      "id": "S6", "field": "biggest_blocker", "type": "open_text", "required": false, "max_length": 200,
+      "zh": { "q": "现在最卡住你的是什么？（一句话就好）", "placeholder": "" },
+      "en": { "q": "What's blocking you most right now? (one line)", "placeholder": "" }
+    },
+    {
+      "id": "S7", "field": "consult_interest", "type": "single_select", "required": true,
+      "zh": { "q": "如果我们安排一次 30 分钟的 1 对 1 增长诊断，帮你把这份报告拆成具体动作，你有兴趣吗？", "options": ["有，越快越好", "有，但先给我一点时间消化", "暂时不用，我先自己试", "不需要"] },
+      "en": { "q": "If we ran a 30-minute 1-on-1 growth session to turn this report into concrete actions, would you be interested?", "options": ["Yes, as soon as possible", "Yes, but give me time to digest first", "Not now, I'll try on my own", "No thanks"] },
+      "note": "选前两项的直接触发 GHL 高意向标签与销售通知。这是整个测评的成交触发点。"
+    }
+  ],
+
+  "ghl_writeback": {
+    "note": "答完后通过 GHL API 写回 contact，让他现有的 workflow 可以直接分支。",
+    "custom_fields": [
+      "qai_assessment_status",
+      "qai_assessment_total",
+      "qai_assessment_tier",
+      "qai_assessment_weakest_1",
+      "qai_assessment_weakest_2",
+      "qai_assessment_priority",
+      "qai_assessment_goal_90d",
+      "qai_assessment_consult_interest",
+      "qai_assessment_report_url"
+    ],
+    "tags": [
+      "assessment_completed",
+      "assessment_tier_{tier_key}",
+      "assessment_weak_{weakest_1}",
+      "assessment_hot_lead"
+    ],
+    "trigger_rules": [
+      "S7 选第 1 或第 2 项 → 打 assessment_hot_lead 标签 + 通知销售",
+      "总分 < 55 且预算 ≥ RM3,000 → 高优先跟进（痛点大、有预算）",
+      "S1 与系统 weakest[0] 不一致 → 打 mismatch 标签，销售话术从「你想修的 vs 该先修的」切入"
+    ]
+  },
+
+  "scoring": {
+    "option_values": [0, 1, 2, 3],
+    "dimension_score_formula": "round((raw_sum / 12) * 100)",
+    "total_formula": "round(0.7 * mean(dimension_scores) + 0.3 * min(dimension_scores))",
+    "rationale": "木桶效应加权：最弱一维直接压总分，让报告的结论天然指向补短板。",
+    "weakest_selection": "取分数最低的 2 维；平分时按 dimension.order 靠前者优先（前端环节先修）",
+    "submodule_badge": { "3": "✅", "2": "⚠️", "1": "❌", "0": "❌" }
+  },
+
+  "tiers": [
+    { "min": 0,  "max": 40,  "key": "manual",    "zh": "手工作坊型", "en": "Manual Workshop",   "zh_desc": "增长完全靠人力堆，老板本人是最大瓶颈。任何一个人请假，生意就停一半。", "en_desc": "Growth runs on manpower and the founder is the bottleneck. One person on leave halves the business." },
+    { "min": 41, "max": 55,  "key": "spot",      "zh": "单点突破型", "en": "Single Strength",    "zh_desc": "某一环特别强（通常是流量或成交），但前后断链，强的那一环把弱的那一环撑得更累。", "en_desc": "One link is strong — usually traffic or closing — but the chain breaks around it, and the strong link only overloads the weak one." },
+    { "min": 56, "max": 70,  "key": "semi_auto", "zh": "半自动型",   "en": "Semi-Automated",     "zh_desc": "有工具，没系统。流量进得来，但接不住、跟不牢，钱漏在环节之间。", "en_desc": "Tools without a system. Traffic arrives but isn't caught or followed through — money leaks between the steps." },
+    { "min": 71, "max": 85,  "key": "systemic",  "zh": "系统化型",   "en": "Systemised",         "zh_desc": "闭环已经成立，问题从「能不能跑」变成「敢不敢放大」。差的是数据信心和杠杆。", "en_desc": "The loop closes. The question shifts from \"does it work\" to \"dare we scale it\" — what's missing is data confidence and leverage." },
+    { "min": 86, "max": 100, "key": "flywheel",  "zh": "AI 飞轮型",  "en": "AI Flywheel",        "zh_desc": "可复制、可加速、可授权。你的增长不再依赖任何单一个人，包括你自己。", "en_desc": "Repeatable, accelerable, delegable. Growth no longer depends on any one person — including you." }
+  ],
+
+  "cost_model": {
+    "disclaimer_zh": "以下金额为基于你填写的询盘量与客单价的保守估算区间，用于建立优先级参考，非精算结果。",
+    "disclaimer_en": "The figures below are conservative estimates derived from the enquiry volume and deal value you entered. They are for prioritisation, not accounting.",
+    "baseline_close_rate": 0.15,
+    "rules": [
+      { "dimension": "capture", "formula": "L * 0.30 * baseline_close_rate * V", "zh_label": "每月因为接不住而流失的成交额", "en_label": "Monthly revenue lost to un-caught enquiries", "zh_note": "假设 30% 询盘因响应慢或无记录而流失（保守值，行业实测常在 30–50%）" },
+      { "dimension": "convert", "formula": "L * 0.08 * V", "zh_label": "每月因成交流程不稳定而少签的金额", "en_label": "Monthly revenue lost to an unstable close process", "zh_note": "假设标准化成交路径可带来 8 个百分点的成交率提升" },
+      { "dimension": "traffic", "formula": "L * 0.50 * baseline_close_rate * V", "zh_label": "每月未被开发的流量机会", "en_label": "Untapped monthly traffic opportunity", "zh_note": "假设内容与渠道补齐后询盘量提升 50%" },
+      { "dimension": "value",   "formula": "L * baseline_close_rate * V * 0.25", "zh_label": "每月未被回收的老客价值", "en_label": "Monthly existing-customer value left on the table", "zh_note": "假设复购与转介绍机制可贡献额外 25% 营收" },
+      { "dimension": "measure", "formula": "L * baseline_close_rate * V * 0.20", "zh_label": "每月因看不清数据而错配的预算与人力", "en_label": "Monthly budget and effort misallocated without data", "zh_note": "假设无归因情况下约 20% 投入落在无效渠道" },
+      { "dimension": "goal",    "formula": "L * 0.20 * baseline_close_rate * V", "zh_label": "每月耗在错误客户身上的产能", "en_label": "Monthly capacity spent on the wrong customers", "zh_note": "假设 20% 询盘属于不该接的客户类型" }
+    ]
+  },
+
+  "offer_routing": {
+    "goal":    { "product": "CRO Workflow MasterClass", "zh_cta": "你的问题在「方向」，不在执行 → 先补目标与成交逻辑" },
+    "convert": { "product": "CRO Workflow MasterClass", "zh_cta": "流量不缺，缺的是把流量变成钱的路径 → CRO 实战课" },
+    "traffic": { "product": "QAI Marketing",            "zh_cta": "内容产能是你的瓶颈 → AI 内容与视频生成系统" },
+    "capture": { "product": "Q.AI Conversational AI",   "zh_cta": "你每天都在漏询盘 → 先开 AI 自动接客，免费试用" },
+    "value":   { "product": "NurtureOS 自动化",         "zh_cta": "新客成本最贵，老客最便宜 → 自动培育与复购系统" },
+    "measure": { "product": "1 对 1 增长诊断",           "zh_cta": "你需要先看得见 → 预约一次数据梳理诊断" }
+  },
+
+  "report_sections": [
+    { "key": "score_radar",     "zh": "总分 + 六维雷达图（叠加同期学员基准线）" },
+    { "key": "tier",            "zh": "分档解读：你处在哪个阶段，这个阶段的典型死法" },
+    { "key": "cohort_rank",     "zh": "你在本期学员中的位置（第 X 名 / 共 Y 人，各维度对比）" },
+    { "key": "strengths",       "zh": "强项 Top 2（先给肯定，降低防御）" },
+    { "key": "weaknesses",      "zh": "短板 Top 2 主诊断：现状 / 代价（换算成钱）/ 根因" },
+    { "key": "submodule_table", "zh": "18 项子模块明细表（✅ / ⚠️ / ❌）" },
+    { "key": "action_plan",     "zh": "30 天行动清单：3 条动作，按 ROI 排序，标注难度与预计影响" },
+    { "key": "next_step",       "zh": "你的下一步（按最弱维度动态切换 Offer）" },
+    { "key": "pdf_share",       "zh": "PDF 下载 + 带分数的社交分享卡片" }
+  ],
+
+  "cohorts": {
+    "note": "按批次分组。每期学员形成一条基准线，报告里叠加显示；现场也能投影全期聚合数据。",
+    "fields": ["id", "name", "event_date", "source_tag", "is_active", "is_default"],
+    "min_n_for_baseline": 10,
+    "fallback_baseline": "样本不足 10 人时，改用全库历史均值，并在图上标注「历史基准」"
+  }
+}
