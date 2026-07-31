@@ -1,0 +1,134 @@
+/* ============================================================================
+ * Brutalist 设计系统 — 唯一的 token 来源
+ *
+ * 铁律:组件里不写死任何色值、阴影值、边框宽度。全部走这里的 CSS 变量,
+ * 或走 tailwind.config.ts 里映射到这些变量的语义类名。
+ * 违反这条会让 Stage 12 的英文版和后续改版变成人工地毯式排查。
+ * ========================================================================== */
+
+:root {
+  /* ── 色板 ───────────────────────────────────────────────────── */
+  --qai-yellow: #fed50a;
+  --qai-ink: #141414;
+  --qai-white: #ffffff;
+  --qai-gray-50: #f5f5f5;
+  --qai-gray-200: #e0e0e0;
+
+  /* 语义别名:组件优先用这一组,换皮时只改上面 5 行 */
+  --qai-bg: var(--qai-white);
+  --qai-bg-muted: var(--qai-gray-50);
+  --qai-fg: var(--qai-ink);
+  --qai-accent: var(--qai-yellow);
+  --qai-accent-fg: var(--qai-ink); /* 黄底上永远用墨色字,不用白字 */
+  --qai-line: var(--qai-ink);
+  --qai-line-soft: var(--qai-gray-200);
+
+  /* 状态色:Brutalist 不引入新色相,用黄/墨/灰三色 + 边框粗细表达状态 */
+  --qai-danger-bg: var(--qai-ink);
+  --qai-danger-fg: var(--qai-white);
+
+  /* ── 边框:一律 2px 实线墨色,不用圆角 ────────────────────── */
+  --qai-border-width: 2px;
+  --qai-border: var(--qai-border-width) solid var(--qai-line);
+  --qai-border-soft: var(--qai-border-width) solid var(--qai-line-soft);
+  --qai-radius: 0;
+
+  /* ── 硬偏移阴影:不用柔和阴影,不用 blur ──────────────────── */
+  --qai-shadow: 4px 4px 0 var(--qai-ink);
+  --qai-shadow-hover: 2px 2px 0 var(--qai-ink);
+  --qai-shadow-lg: 8px 8px 0 var(--qai-ink);
+  --qai-shadow-none: 0 0 0 var(--qai-ink);
+  --qai-press-offset: 2px; /* hover 时位移量,与 shadow-hover 相抵 */
+
+  /* ── 字体 ───────────────────────────────────────────────────
+   * 家族名顺序是有意义的,不要重排:
+   *   1. 拉丁字体(Sora / Plus Jakarta Sans)先吃拉丁字母与数字
+   *   2. 'Noto Sans SC Subset' = CDN 上的 subset woff2,吃常用中文
+   *   3. 'Noto Sans SC'        = PDF 渲染时 chromium.font() 装进 fontconfig 的
+   *                              完整字体,吃 subset 之外的生僻字
+   *
+   * ⚠️ 第 2 与第 3 的家族名必须不同。若 @font-face 也叫 'Noto Sans SC',
+   *    它会完全遮蔽同名系统字体,缺字时浏览器不会回落到系统那一份,
+   *    而是直接跳到下一个家族 —— 整个兜底层失效,生僻字照样是方块。
+   *    详见 PROGRESS.md 0.14「坑 1」。
+   */
+  --qai-font-head: 'Sora', 'Noto Sans SC Subset', 'Noto Sans SC', system-ui, sans-serif;
+  --qai-font-body: 'Plus Jakarta Sans', 'Noto Sans SC Subset', 'Noto Sans SC', system-ui, sans-serif;
+
+  /* ── 节奏 ───────────────────────────────────────────────────── */
+  --qai-transition: 100ms ease-out; /* 快、硬、无缓动曲线花活 */
+}
+
+/* ============================================================================
+ * 基础重置
+ * ========================================================================== */
+
+* {
+  border-radius: var(--qai-radius) !important; /* 全局禁圆角,含第三方组件 */
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--qai-bg);
+  color: var(--qai-fg);
+  font-family: var(--qai-font-body);
+  font-synthesis-weight: auto; /* 允许生僻字回落时合成假粗,见 0.14 */
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--qai-font-head);
+  font-weight: 700;
+  margin: 0;
+}
+
+:focus-visible {
+  outline: var(--qai-border-width) solid var(--qai-ink);
+  outline-offset: 2px;
+}
+
+/* ============================================================================
+ * 可复用行为类
+ * ========================================================================== */
+
+/* 硬偏移阴影 + hover 位移。这是整套视觉的签名动作 */
+.qai-lift {
+  box-shadow: var(--qai-shadow);
+  transition: box-shadow var(--qai-transition), transform var(--qai-transition);
+}
+.qai-lift:hover:not(:disabled):not([data-disabled]) {
+  box-shadow: var(--qai-shadow-hover);
+  transform: translate(var(--qai-press-offset), var(--qai-press-offset));
+}
+.qai-lift:active:not(:disabled):not([data-disabled]) {
+  box-shadow: var(--qai-shadow-none);
+  transform: translate(4px, 4px);
+}
+
+/* 静态卡面:有阴影但不响应 hover */
+.qai-slab {
+  box-shadow: var(--qai-shadow);
+}
+
+.qai-disabled,
+.qai-lift:disabled,
+.qai-lift[data-disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: var(--qai-shadow-none);
+  transform: none;
+}
+
+/* 减少动效偏好:去掉位移,保留阴影变化 */
+@media (prefers-reduced-motion: reduce) {
+  .qai-lift,
+  .qai-lift:hover,
+  .qai-lift:active {
+    transform: none !important;
+    transition: none;
+  }
+}
