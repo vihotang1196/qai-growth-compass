@@ -385,16 +385,27 @@
       "qai_assessment_consult_interest",
       "qai_assessment_report_url"
     ],
-    "tags": [
+    "tags_always": [
       "assessment_completed",
       "assessment_tier_{tier_key}",
-      "assessment_weak_{weakest_1}",
-      "assessment_hot_lead"
+      "assessment_weak_{weakest_1}"
     ],
-    "trigger_rules": [
-      "S7 选第 1 或第 2 项 → 打 assessment_hot_lead 标签 + 通知销售",
-      "总分 < 55 且预算 ≥ RM3,000 → 高优先跟进（痛点大、有预算）",
-      "S1 与系统 weakest[0] 不一致 → 打 mismatch 标签，销售话术从「你想修的 vs 该先修的」切入"
+    "tags_conditional": [
+      {
+        "tag": "assessment_hot_lead",
+        "when": "consult_interest in ['asap','later']",
+        "note": "S7 选第 1 或第 2 项 → 打标签 + 通知销售"
+      },
+      {
+        "tag": "assessment_priority_high",
+        "when": "total < 55 and monthly_marketing_budget >= 3000",
+        "note": "痛点大、有预算。预算取 S2 的 value_map 值"
+      },
+      {
+        "tag": "assessment_mismatch",
+        "when": "priority_dimension != weakest_1",
+        "note": "S1 映射出的维度 key 与系统算出的 weakest[0] 不一致。销售话术从「你想修的 vs 该先修的」切入"
+      }
     ]
   },
 
@@ -404,7 +415,12 @@
     "total_formula": "round(0.7 * mean(dimension_scores) + 0.3 * min(dimension_scores))",
     "rationale": "木桶效应加权：最弱一维直接压总分，让报告的结论天然指向补短板。",
     "weakest_selection": "取分数最低的 2 维；平分时按 dimension.order 靠前者优先（前端环节先修）",
-    "submodule_badge": { "3": "✅", "2": "⚠️", "1": "❌", "0": "❌" }
+    "submodule_badge": { "3": "■", "2": "◧", "1": "□", "0": "□" },
+    "submodule_badge_legend": {
+      "zh": { "■": "已具备", "◧": "部分具备", "□": "缺失" },
+      "en": { "■": "In place", "◧": "Partial", "□": "Missing" }
+    },
+    "submodule_badge_note": "墨色单色实心几何，网页与 PDF 共用同一套字符。不依赖颜色区分，色盲可读。表头必须给图例。"
   },
 
   "tiers": [

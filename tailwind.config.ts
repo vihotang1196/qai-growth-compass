@@ -16,6 +16,15 @@ export default {
         muted: 'var(--qai-bg-muted)',
         line: 'var(--qai-line)',
         'line-soft': 'var(--qai-line-soft)',
+        // 六维分类色 —— 只用于数据标记,不用于页面 chrome。见 brutalist.css 注释
+        dim: {
+          goal: 'var(--dim-goal)',
+          traffic: 'var(--dim-traffic)',
+          capture: 'var(--dim-capture)',
+          convert: 'var(--dim-convert)',
+          value: 'var(--dim-value)',
+          measure: 'var(--dim-measure)',
+        },
       },
       fontFamily: {
         head: 'var(--qai-font-head)',

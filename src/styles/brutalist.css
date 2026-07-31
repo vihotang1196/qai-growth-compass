@@ -27,6 +27,36 @@
   --qai-danger-bg: var(--qai-ink);
   --qai-danger-fg: var(--qai-white);
 
+  /* ── 六维分类色 ──────────────────────────────────────────────
+   * 来源:assessment-config.json 的 dimensions[].color(罗盘轮盘图原色)。
+   *
+   * 【用途严格限定】只用于分类数据标记:
+   *   ✅ 子模块表的维度分组、档位分布柱状图、最弱维度分布图、现场模式维度色块
+   *   ❌ 雷达图不用 —— 雷达图只有两条线(本人 vs 基准),用黄与墨,
+   *      六色画在轴上只会糊
+   *   ❌ 页面 chrome 一律不碰:按钮、边框、背景、状态色全走上面的 Brutalist token
+   *
+   * 【为什么部分值与 config 不同】config 的原色在白底 / 黄底 / 灰底上做过
+   * WCAG 1.4.11 非文本对比度检查(门槛 3.0),三个不合格:
+   *   traffic #12897e  黄底 3.00  卡在门槛上,四舍五入即失败
+   *   capture #4a9e3f  黄底 2.36  不合格
+   *   value   #e8a020  白底 2.22 / 黄底 1.55 / 灰底 2.03  三种底色全不合格
+   * 这里只降明度、不动色相,调到三种底色全部 ≥3.1。
+   * 【以本文件的 token 为准,config 不改】—— config 是题库真相源,
+   * 呈现层的可访问性修正属于设计系统的职责。
+   *
+   * 修正后逐背景对比度(白 / 黄 / 灰):
+   *   goal    6.45 / 4.52 / 5.91      convert 6.85 / 4.81 / 6.28
+   *   traffic 4.45 / 3.12 / 4.08      value   4.43 / 3.11 / 4.07
+   *   capture 4.49 / 3.15 / 4.12      measure 4.45 / 3.13 / 4.09
+   */
+  --dim-goal: #1e5fa8;    /* 与 config 一致 */
+  --dim-traffic: #12867b; /* config #12897e,降明度 5% */
+  --dim-capture: #3f8636; /* config #4a9e3f,降明度 30% */
+  --dim-convert: #6b46a8; /* 与 config 一致 */
+  --dim-value: #a06e16;   /* config #e8a020,降明度 56% —— 原色三种底色全不合格 */
+  --dim-measure: #c94f4f; /* 与 config 一致 */
+
   /* ── 边框:一律 2px 实线墨色,不用圆角 ────────────────────── */
   --qai-border-width: 2px;
   --qai-border: var(--qai-border-width) solid var(--qai-line);

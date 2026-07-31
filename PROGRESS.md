@@ -690,52 +690,127 @@ value_map       与选项数全部对齐 ✓
 
 | # | 项 | 说明 |
 |---|---|---|
-| B1 | `report_sections.cohort_rank` | 要算「第 X 名 / 共 Y 人 + 各维度对比」。我 Stage 8 只规划了基准线均值,**没规划个人排名**。要加 |
+| B1 | `report_sections.cohort_rank` | ✅ **改成分位区间,不给精确名次**(见下方 B1 细则) |
 | B2 | `submodule_table` 18 项 | 映射是清楚的:每维 3 个 submodule 各对应 1 题(`submodule_index` 0/1/2),第 4 题 `type:"maturity"`、`submodule_index:null`,不进表。badge 直接取该题原始分 |
 | B3 | `offer_routing` | 六维各一个 `product` + `zh_cta`,喂 `next_step` 板块 |
 | B4 | `profile_questions[].value_map` | P2 → `L`(询盘量)、P3 → `V`(客单价),驱动整个 cost_model。**文件没明写 L/V 来自 P2/P3**,是我按字段名推的,见 C6 |
 | B5 | `access` 块 | 限流参数、三级回退、`resend_link_only` 全部与我 Stage 4 设计一致 ✓,无冲突 |
 | B6 | `scoring.weakest_selection` | 与我的规则逐字一致 ✓;`total_formula`、`dimension_score_formula` 也一致 ✓ |
 
-### C. 需要你裁决的冲突与缺口
+**B1 细则 — `cohort_rank` 显示分位区间,不显示精确名次**
 
-**C1 — 配色冲突(优先级最高)**
-`dimensions[].color` 给了六个色值(`#1e5fa8` `#12897e` `#4a9e3f` `#6b46a8` `#e8a020` `#c94f4f`),但 Brutalist 规格是黄 / 墨 / 白 / 两灰,明令不引入其他色相。雷达图和子模块表要不要用这六色?
-- (a) 用 config 色,**破例仅限图表数据色**,页面其余部分不引入 ← 我倾向
-- (b) 忽略 config 色,雷达图用黄 + 墨,靠图案 / 描线区分六维
+不显示「第 18 名 / 共 20 人」。这份报告的目的是让人想动手,精确的倒数名次只会让人关掉页面。
 
-**C2 — emoji 在 PDF 里必然是方块**
-`scoring.submodule_badge` 用 `✅ ⚠️ ❌`。Lambda 里的 Chromium 没有 emoji 字体,这三个在 PDF 里一定渲成豆腐块 —— 和中文方块是同一类问题,但 Noto Sans SC 救不了它。
-- (a) 网页保留 emoji,**PDF 换成非 emoji 记号**(如 `●` / `▲` / `✕`,或实心方块) ← 我倾向
-- (b) 再上一个 Noto Color Emoji 到 CDN(体积大、冷启动更慢)
+| 层面 | 显示什么 |
+|---|---|
+| 总分 | 分位区间(前 25% / 25–50% / 50–75% / 后 25%)+ 同档人数,如「本期有 6 人和你在同一档」 |
+| 各维度 | 本人得分 vs 本期均值的**差值**,正负都显示,精确到分 |
 
-**C3 — `action_plan` 没有内容源**
-板块要「30 天 3 条动作,按 ROI 排序,标注难度与预计影响」,但 config 里没有动作库。这些动作文案从哪来?要么你补一个 `action_library` 节点(按维度 × 3 条,带 difficulty / impact),要么这一板块降级成只列最弱两维的通用建议。
+维度层面的精确对比指向具体动作,总分层面的排名只指向羞耻 —— 前者留,后者去掉。
 
-**C4 — `weaknesses` 的「根因」没有内容源**
-板块要「现状 / 代价 / 根因」三段。代价有 `cost_model` ✓,现状可由所选选项文本推导 ✓,**根因没有任何内容源**。同 C3,需要你补文案或降级。
+样本不足 `min_n_for_baseline`(10 人)时,整个 `cohort_rank` 板块隐藏,不用历史基准硬凑分位 —— 跨期分位没有意义。
 
-**C5 — 9 个字段的取值域没定义**
-`custom_fields` 只有 key,以下要你定:
-- `qai_assessment_status` 写什么?(`completed`?还是带进度的多态值?)
-- `qai_assessment_tier` 写 key(`semi_auto`)还是中文名(`半自动型`)?
-- `qai_assessment_priority` 写 S1 选项原文还是维度 key?
-- `qai_assessment_consult_interest` 写选项文本还是索引?
-- `qai_assessment_weakest_1/2` 写维度 key 还是中文名?
+### C. 冲突与缺口 —— 处理结果
 
-**C6 — L / V 的来源要确认**
-`cost_model` 的 `L` 和 `V` 我按 P2 `leads_per_month.value_map` 与 P3 `deal_value.value_map` 取。文件没明写这个绑定,确认一下。
+**C1 — 配色 ✅ 已定:保留六色,用途严格限定**
 
-**C7 — config 内部自相矛盾**
-- `trigger_rules` 第 3 条说「打 mismatch 标签」,但 `tags` 数组里**没有** mismatch
-- `trigger_rules` 第 2 条「总分 < 55 且预算 ≥ RM3,000 → 高优先跟进」**根本没给标签名**
-- `tags` 数组里四个标签没有触发条件,条件散在 `trigger_rules` 的自然语言里 —— 要机器执行就得把条件结构化。要你补
+六色是罗盘轮盘图原色,保留以与现有视觉资产对齐。三条硬约束:
 
-**C8 — 英文缺口(Stage 12 清单)**
-`report_sections` 无 `en`;`offer_routing` 无 `en_cta`;`cost_model.rules[]` 有 `en_label` 但**无 `en_note`**。其余(题目、档位、维度、问卷、子模块名)英文都齐 ✓
+| | |
+|---|---|
+| ✅ 只用于分类数据标记 | 子模块表维度分组、档位分布柱状图、最弱维度分布图、现场模式维度色块 |
+| ❌ **雷达图不用六色** | 雷达图只有两条线(本人 vs 基准),用黄与墨。六色画轴上只会糊 |
+| ❌ 页面 chrome 一律不碰 | 按钮、边框、背景、状态色全走 Brutalist 原 token |
+| ✅ 必须进 `brutalist.css` 成 `--dim-*` 变量 | 组件里不许出现字面色值 —— 这条规矩不因为色值来自 config 而破例 |
 
-**C9 — `strongest` 的平分规则未定义**
-config 只给了 `weakest_selection` 的平分规则。我对 strongest 沿用同一条(按 `dimension.order` 靠前优先),除非你另有指示。
+**对比度检查结果(WCAG 1.4.11 非文本门槛 3.0,三种底色:白 / 黄 `#fed50a` / 灰 `#f5f5f5`):**
+
+| 维度 | config 原色 | 原最差 | token 值 | 新最差 | 处理 |
+|---|---|---|---|---|---|
+| goal | `#1e5fa8` | 4.52 | `#1e5fa8` | 4.52 | 不变 |
+| traffic | `#12897e` | **3.00** | `#12867b` | 3.12 | 降明度 5% —— 原值卡在门槛上,四舍五入即失败 |
+| capture | `#4a9e3f` | **2.36** | `#3f8636` | 3.15 | 降明度 30% |
+| convert | `#6b46a8` | 4.81 | `#6b46a8` | 4.81 | 不变 |
+| value | `#e8a020` | **1.55** | `#a06e16` | 3.11 | 降明度 56% —— 三种底色**全部**不合格,你预判对了 |
+| measure | `#c94f4f` | 3.13 | `#c94f4f` | 3.13 | 不变 |
+
+只降明度、不动色相。**以 token 为准,config 不改。**
+
+> `value` 变动最大(亮橙 → 暗琥珀)。若嫌变化太大,备选是规定六色永不与黄底相邻,则只需过白/灰底,`value` 可放宽到 `#ba801a`(白 3.39 / 灰 3.11)、`capture` 可保持近似原色 `#499c3e`。但现场模式是深色 + 黄色块,我不敢假设不相邻,所以默认取严格那套。要放宽说一声。
+
+**C2 — badge ✅ 已定:统一实心几何,网页与 PDF 同一套**
+
+不做「网页 emoji / PDF 几何符」的分叉。config 已改:
+
+```
+■ 已具备    ◧ 部分具备    □ 缺失        (0 分与 1 分同为 □)
+```
+
+墨色单色,不依赖颜色区分(顺带解决色盲),表头必须给图例(`submodule_badge_legend` 已带 zh/en)。
+
+> ⚠️ **一个未验证的风险**:`■` U+25A0 与 `□` U+25A1 在 CJK 字体里收录率极高,但 `◧` U+25E7(SQUARE WITH LEFT HALF BLACK)属于 Geometric Shapes 冷门区,**Noto Sans SC 未必收录**。收不到就是方块 —— 和 emoji 同一个坑,只是概率低些。已把 `■ ◧ □ ▣ ▤ ▥ ●` 全部加进 `/api/font-probe` 第 3 块实测。若 `◧` 不过,备选 `▣` U+25A3(CJK 字体收录率高得多)。**这条等探针出结果,不靠猜。**
+
+**C3 / C4 — `action_library` ✅ 契约已定,内容你写**
+
+你在开 Stage 8 前把内容填满,我现在按此 schema 编码,不等:
+
+```jsonc
+{
+  "action_library": {
+    "<dimension_key>": {
+      "root_cause": {
+        "low":  "0-40 分区间的根因文案",
+        "mid":  "41-70 分区间的根因文案",
+        "high": "71+ 分区间的根因文案"
+      },
+      "actions": [
+        {
+          "id": "capture_01",
+          "zh": "动作描述", "en": "...",
+          "difficulty": "low | medium | high",
+          "impact": "low | medium | high",
+          "roi_rank": 1,
+          "applies_below": 60
+        }
+      ]
+    }
+  }
+}
+```
+
+**选取逻辑**:从最弱 2 维各取 `applies_below > 该维得分` 的动作 → 按 `roi_rank` 排 → 合并后取前 3 条 → 不满 3 条从次弱维补。
+「现状」按原计划从所选选项文本推导,不进 library。
+`root_cause` 的区间边界(low ≤40 / mid 41–70 / high ≥71)与 `tiers` 不完全重合,这是刻意的三段划分,不是笔误。
+
+**C5 — 字段取值域 ✅ 已定:全部写机器可读 key,不写中文**
+
+理由(你的):GHL workflow 条件判断是精确字符串匹配,中文名一改文案 workflow 就断。可读性靠报告解决,不靠 contact 字段。详见 0.12。
+
+**C6 — L / V 来源 ✅ 确认**:`L` = P2 `leads_per_month.value_map[选项索引]`,`V` = P3 `deal_value.value_map[选项索引]`。
+
+**C7 — config 自相矛盾 ✅ 已改**
+
+`trigger_rules` 拆成机器可执行的结构,`tags` 拆成无条件与有条件两组:
+
+```jsonc
+"tags_always": [
+  "assessment_completed",
+  "assessment_tier_{tier_key}",      // {tier_key} → tiers[].key
+  "assessment_weak_{weakest_1}"      // {weakest_1} → 维度 key
+],
+"tags_conditional": [
+  { "tag": "assessment_hot_lead",       "when": "consult_interest in ['asap','later']" },
+  { "tag": "assessment_priority_high",  "when": "total < 55 and monthly_marketing_budget >= 3000" },
+  { "tag": "assessment_mismatch",       "when": "priority_dimension != weakest_1" }
+]
+```
+
+`monthly_marketing_budget` 取 S2 的 `value_map` 值(0 / 1500 / 4000 / 12000 / 30000),所以「≥ 3000」实际命中的是第 3 档及以上。
+
+**C8 — 英文缺口(Stage 12 清单,未变)**
+`report_sections` 无 `en`;`offer_routing` 无 `en_cta`;`cost_model.rules[]` 有 `en_label` 但无 `en_note`;新增的 `action_library` 需要 `en`。其余英文都齐 ✓
+
+**C9 — `strongest` 平分规则**:沿用 `weakest` 同一条(按 `dimension.order` 靠前优先)。未收到反对意见,按此实现。
 
 ### D. 不是问题但要记一笔
 
@@ -798,33 +873,39 @@ Admin「刷新字段映射」按钮 → 强制回源 GHL → upsert app_settings
 
 ## 0.12 GHL 自定义字段清单 — ⛔ 提案作废,不要照此建字段
 
-Key 列取自 `assessment-config.json` 的 `ghl_writeback.custom_fields`,**照此在 GHL 建字段**。
-「类型 / 来源 / 取值域」三列是我的提案 —— config 只给了 key,没给这些,见 C5。
+**GHL 里九个字段全部建成单行文本(Single Line Text)。取值一律写机器可读 key,不写中文** ——
+workflow 的条件判断是精确字符串匹配,中文名一改文案 workflow 就断;可读性由报告负责,不由 contact 字段负责。
 
-| # | Unique Key(config 给定) | 类型(提案) | 来源(提案) | 取值域 ⚠️ 待你定 |
-|---|---|---|---|---|
-| 1 | `qai_assessment_status` | Single Line Text | 系统 | `completed`?还是要带 `started` 等中间态? |
-| 2 | `qai_assessment_total` | Number | `results.total` | 0–100 |
-| 3 | `qai_assessment_tier` | Single Line Text | `results.tier` | key(`semi_auto`)还是中文名(`半自动型`)? |
-| 4 | `qai_assessment_weakest_1` | Single Line Text | `results.weakest[0]` | 维度 key 还是中文名? |
-| 5 | `qai_assessment_weakest_2` | Single Line Text | `results.weakest[1]` | 同上 |
-| 6 | `qai_assessment_priority` | Single Line Text | S1 `priority_dimension` | 选项原文还是维度 key? |
-| 7 | `qai_assessment_goal_90d` | Multi Line Text | S5 `goal_90d` 原文 | 原文照抄(config note 明示) |
-| 8 | `qai_assessment_consult_interest` | Single Line Text | S7 `consult_interest` | 选项文本还是索引? |
-| 9 | `qai_assessment_report_url` | Single Line Text | `APP_BASE_URL + '/?t=' + access_token` | 完整 URL |
+| # | Unique Key | 取值域 | 来源 |
+|---|---|---|---|
+| 1 | `qai_assessment_status` | `completed` | 系统;当前只有这一个值 |
+| 2 | `qai_assessment_total` | `0`–`100` 的数字字符串 | `results.total` |
+| 3 | `qai_assessment_tier` | `manual` \| `spot` \| `semi_auto` \| `systemic` \| `flywheel` | `tiers[].key` |
+| 4 | `qai_assessment_weakest_1` | `goal` \| `traffic` \| `capture` \| `convert` \| `value` \| `measure` | `results.weakest[0]` |
+| 5 | `qai_assessment_weakest_2` | 同上 | `results.weakest[1]` |
+| 6 | `qai_assessment_priority` | 同上 | S1 选项索引 → 维度 key(**刻意与 weakest 同取值域**,`assessment_mismatch` 规则要直接比对) |
+| 7 | `qai_assessment_goal_90d` | S5 原文,截断 200 字 | `survey.goal_90d` |
+| 8 | `qai_assessment_consult_interest` | `asap` \| `later` \| `self` \| `no` | S7 选项索引 0/1/2/3 映射 |
+| 9 | `qai_assessment_report_url` | 完整 `https://` URL | `APP_BASE_URL + '/?t=' + access_token` |
 
-**Tags**(config `ghl_writeback.tags`,含模板变量):
+第 6 项要注意:S1 的选项顺序是「定目标 造流量 接客户 促成交 增价值 测数据」,与 `dimensions[]` 的 `order` 一致,所以索引 → key 是直接按序映射,不需要单独的映射表。
 
-| 标签 | 触发条件 |
+**Tags** —— 分无条件与有条件两组(config `tags_always` / `tags_conditional`):
+
+| 标签 | 何时打 |
 |---|---|
-| `assessment_completed` | 完成即打(推断,config 未明写条件) |
-| `assessment_tier_{tier_key}` | `{tier_key}` 替换为 tier 的 `key`,如 `assessment_tier_semi_auto` |
-| `assessment_weak_{weakest_1}` | `{weakest_1}` 替换为维度 key,如 `assessment_weak_capture` |
-| `assessment_hot_lead` | S7 选第 1 或第 2 项 |
-| ⚠️ `mismatch`(?) | `trigger_rules` 第 3 条提到,但**不在 `tags` 数组里**,标签名也没确定 |
-| ⚠️ 无名 | `trigger_rules` 第 2 条「总分 < 55 且预算 ≥ RM3,000 → 高优先跟进」**没给标签名** |
+| `assessment_completed` | 每次完成,无条件 |
+| `assessment_tier_{tier_key}` | 无条件;`{tier_key}` → `semi_auto` 等,如 `assessment_tier_semi_auto` |
+| `assessment_weak_{weakest_1}` | 无条件;`{weakest_1}` → 维度 key,如 `assessment_weak_capture` |
+| `assessment_hot_lead` | `consult_interest in ['asap','later']` |
+| `assessment_priority_high` | `total < 55 and monthly_marketing_budget >= 3000` |
+| `assessment_mismatch` | `priority_dimension != weakest_1` |
 
-最后两条是 config 内部的自相矛盾,见 C7,要你补齐才能实现。
+`monthly_marketing_budget` 取 S2 `value_map`(0 / 1500 / 4000 / 12000 / 30000),「≥ 3000」实际命中第 3 档及以上。
+
+**在 GHL 后台要建的 tag**:上表六个,其中三个带变量的要按实际取值展开 ——
+`assessment_tier_*` 五个、`assessment_weak_*` 六个,加上四个固定标签,共 **15 个**。
+或者允许 API 自动创建标签,就只建固定的那几个。
 
 ---
 
@@ -836,6 +917,7 @@ Key 列取自 `assessment-config.json` 的 `ghl_writeback.custom_fields`,**照�
   - 分块型 —— `item.zh = {q, options}` / `item.en = {...}` → `tBlock(item)` 返回 `item[locale] ?? item.zh`
   - 后缀型 —— `zh_desc`/`en_desc`、`zh_label`/`en_label`、`zh_note`、`zh_cta`、`name_zh`/`name_en` → `tSuffix(obj, 'desc')` 返回 `obj[locale+'_desc'] ?? obj['zh_desc']`
   - `ui-strings.ts` 仍是 `{zh,en}` 形状 → `tk('quiz.next')` 不变
+  - **两个取值器必须放在同一个模块(`src/lib/i18n.tsx`)**,文件头用注释写清哪种形状用哪个、config 里哪些节点属于哪一类。两种形状并存是 config 的既有事实(`q`+`options` 适合分块、短字符串适合后缀),不为统一去重写 config;但这个规矩必须写在代码里,不能只存在于某个人脑子里
 - en 缺失回落 zh 并在 dev 控制台警告,不显示空白
 - 组件内禁止 CJK 字符,ESLint 拦,违反即构建失败
 - 语言写进 `assessment_sessions.locale`;PDF 与 GHL 写回按 session 语言
@@ -960,6 +1042,7 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 |---|---|
 | `GHL_RESEND_WEBHOOK_URL` | 当 secret 处理。只进 Supabase Edge Function secrets,**不进 Vercel、不进代码、不进前端 bundle**。**泄露时的处置:在 GHL 里重新生成该 workflow 的 Inbound Webhook trigger URL → `supabase secrets set GHL_RESEND_WEBHOOK_URL=<新值>` → 重新部署 `assessment-login-request`。旧 URL 立即失效,无需改代码、无需改数据库。** |
 | 重发端点的防护 | IP 限流(15 分钟 5 次,超限锁 1 小时)与同一 entitlement 60 秒间隔**始终保留**。不因为「Inbound Webhook 风险有限」而放松任何一层 |
+| 分支策略 | **Stage 0–1 直接提交 main**(新仓库、无协作者、未部署,开分支只是仪式)。**Stage 2 起一个 Stage 一条分支** —— 那时 Vercel 已接上,分支能出 preview 部署,这才是分支值钱的地方 |
 | PAT 轮换 | 每次 `git push` 后提醒轮换 GitHub PAT |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
