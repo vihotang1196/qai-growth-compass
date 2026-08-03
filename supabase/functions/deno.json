@@ -6,6 +6,6 @@
   },
   "tasks": {
     "test": "deno test --allow-read _shared/",
-    "check": "deno check _shared/ assessment-ghl-webhook/"
+    "check": "deno check **/*.ts"
   }
 }

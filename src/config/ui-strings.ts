@@ -54,6 +54,18 @@ export const UI_STRINGS = {
     en: 'This link is no longer valid. Please request a new one.',
   },
 
+  // ── 魔法链接入口 / 失效页 ──────────────────────────────
+  'landing.verifying': { zh: '正在验证链接…', en: 'Verifying your link…' },
+  'expired.title': { zh: '链接已失效', en: 'Link no longer valid' },
+  'expired.hint': {
+    zh: '如果你还留着我们发的那条消息,请直接点里面的链接。找不到的话联系我们重发。',
+    en: 'If you still have the message we sent, open the link inside it. Otherwise contact us for a new one.',
+  },
+  'placeholder.notImplemented': {
+    zh: '这个页面还没做,会在标注的阶段实现。',
+    en: 'This page is not built yet — it lands in the stage shown above.',
+  },
+
   // ── PDF ─────────────────────────────────────────────────
   'pdf.generating': { zh: 'PDF 生成中', en: 'Generating PDF' },
   'pdf.ready': { zh: '下载 PDF 报告', en: 'Download PDF report' },

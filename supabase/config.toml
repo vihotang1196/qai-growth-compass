@@ -25,3 +25,9 @@
 [functions.assessment-ghl-webhook]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 客户端调用,鉴权靠 access_token 本身 + session cookie。
+# 走 Vercel 的 /api/* 代理进来,平台层的 JWT 校验只会拦掉正常客户。
+[functions.assessment-auth]
+verify_jwt = false
+import_map = "./functions/deno.json"

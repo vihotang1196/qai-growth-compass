@@ -122,26 +122,106 @@ GHL 会重复触发,这是设计内的。以 `ghl_contact_id` 为冲突键。
 
 ## 3. 重发链接 workflow → Inbound Webhook trigger
 
-(Stage 4 才会用到,先建好即可)
+Stage 4 的备用路径要用它。**先建好把 URL 给我**,否则重发链接那半边做不完。
 
-在发链接的 workflow 里加一个 **Inbound Webhook** trigger,GHL 会生成一个 URL —— 那个 URL 填进 Supabase 的 `GHL_RESEND_WEBHOOK_URL`。
+### 3.1 建 workflow
 
-本系统重发时会 POST:
+GHL 后台 → **Automation → Workflows → Create Workflow → Start from Scratch**。
+
+命名建议 `Compass — Resend Assessment Link`。
+
+### 3.2 Trigger 选 Inbound Webhook
+
+**Add New Trigger → Inbound Webhook**。
+
+选中之后 GHL 会生成一个 URL,长这样:
+
+```
+https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
+```
+
+**这个 URL 就是我要的 `GHL_RESEND_WEBHOOK_URL`。** 复制给我。
+
+> GHL 的 Inbound Webhook trigger 通常要求先收到一次样本请求才能在后续 action 里选到字段。如果它显示「等待第一个请求」,用下面的 curl 打一发样本,GHL 就会记住字段结构:
+>
+> ```bash
+> curl -X POST '<你的 Inbound Webhook URL>' \
+>   -H 'Content-Type: application/json' \
+>   -d '{
+>     "contact_id": "SAMPLE_CONTACT_ID",
+>     "magic_link": "https://compass.qiai.tech/?t=SAMPLE",
+>     "name": "Sample Learner",
+>     "phone": "+60124361382",
+>     "email": "sample@example.com",
+>     "lang": "zh"
+>   }'
+> ```
+>
+> 字段名要与上面**逐字一致** —— 后续 action 里的 `{{inboundWebhookRequest.<字段>}}` 是按这次样本的结构解析的。样本打完记得别让这个 workflow 真的发消息出去(先别 Publish,或者把 action 暂时禁用)。
+
+### 3.3 本系统实际会发的 payload
 
 ```json
 {
-  "contact_id": "...",
-  "magic_link": "https://compass.qiai.tech/?t=...",
-  "name": "...",
-  "phone": "...",
-  "email": "...",
+  "contact_id": "ghl 的 contact id",
+  "magic_link": "https://compass.qiai.tech/?t=<43 字符 token>",
+  "name": "学员姓名,可能为 null",
+  "phone": "+60124361382,可能为 null",
+  "email": "learner@example.com,可能为 null",
   "lang": "zh"
 }
 ```
 
-workflow 里用 `{{inboundWebhookRequest.magic_link}}` 取值,发 WhatsApp + Email 双通道。
+| 字段 | 一定有值? | 用途 |
+|---|---|---|
+| `contact_id` | ✅ 一定有 | 在 workflow 里定位 contact。**这是唯一可靠的收件人来源** |
+| `magic_link` | ✅ 一定有 | 消息正文里的链接 |
+| `name` | ❌ 可能 null | 称呼。**必须给它准备兜底**,见下 |
+| `phone` | ❌ 可能 null | 仅供参考,发送对象请用 contact 本身的号码 |
+| `email` | ❌ 可能 null | 同上 |
+| `lang` | ✅ 一定有 | `zh` 或 `en`,用来分支选模板 |
 
-> 那个 URL 本身没有密钥,拿到的人可以任意触发这个 workflow。风险有限(最坏是给已在名单里的人多发一条重复链接,`magic_link` 是我们生成后放进 payload 的,攻击者造不出有效链接),但**要当 secret 对待,只进环境变量**。泄露时在 GHL 重新生成该 trigger URL 并更新环境变量即可,不用改代码。
+### 3.4 Action:双通道发送
+
+按 Stage 0 定的,**同时发 WhatsApp 与 Email**,两条都发,不做二选一 —— 客户丢了链接时我们不知道他哪个渠道能收到。
+
+**Action 1 — Send WhatsApp / SMS**
+
+```
+Hi {{contact.first_name}},
+
+这是你的 AI 盈利增长罗盘诊断链接:
+{{inboundWebhookRequest.magic_link}}
+
+链接不会过期,随时可以回来继续。
+```
+
+**Action 2 — Send Email**,正文同样用 `{{inboundWebhookRequest.magic_link}}`。
+
+三个坑:
+
+1. **收件人用 contact 自己的号码/邮箱,不要用 payload 里的 `phone`/`email`。** trigger 已经带了 `contact_id`,GHL 会把 workflow 挂在那个 contact 上;payload 里那两个字段只是给你排查用的。用 payload 的值反而会绕过 GHL 自己的号码格式处理。
+2. **`name` 可能是 null**,别直接插 `{{inboundWebhookRequest.name}}`。用 `{{contact.first_name}}`,或给它配 fallback 值。
+3. **`lang` 分支**:如果要中英双模板,加一个 If/Else,条件是 `{{inboundWebhookRequest.lang}}` equals `en`。Stage 4–11 只会发 `zh`,英文要到 Stage 12,所以现在可以先只做中文分支。
+
+### 3.5 建完之后
+
+1. 把 Inbound Webhook 的 URL 给我
+2. 我配进 Supabase:
+   ```bash
+   supabase secrets set GHL_RESEND_WEBHOOK_URL="<那个 URL>"
+   ```
+3. Publish workflow
+
+### 3.6 安全说明
+
+那个 URL 本身**没有密钥**,拿到的人可以任意触发这个 workflow。
+
+风险是有限的:最坏情况是给**已经在名单里**的人多发一条重复链接。`magic_link` 是我们生成后放进 payload 的,攻击者造不出一个有效链接,也没法让 workflow 发给名单外的人(收件人由 `contact_id` 决定,而那个 id 得先存在)。
+
+但**要当 secret 对待,只进 Supabase 的 Edge Function secrets**,不进 Vercel、不进代码、不进前端 bundle。泄露时在 GHL 重新生成 trigger URL、更新环境变量即可,不用改代码。
+
+我们自己那一侧的防护(IP 限流 15 分钟 5 次 / 超限锁 1 小时 / 同一记录重发间隔 ≥ 60 秒)**始终保留**,不因为这个 URL 的风险有限而放松。
 
 ---
 
