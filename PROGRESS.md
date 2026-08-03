@@ -327,7 +327,7 @@ qai-growth-compass/
 
 | 端点 | 方法 | 鉴权 | 职责 |
 |---|---|---|---|
-| `/api/assessment-ghl-webhook` | POST | `X-QAI-Secret` | 建/更新准入记录 |
+| `<ref>.supabase.co/functions/v1/assessment-ghl-webhook` | POST | `X-QAI-Secret` | 建/更新准入记录。⚠️ **不走 `/api/*` 代理** —— 代理是为浏览器请求的第一方 cookie 存在的,GHL 是服务器到服务器,没有 cookie 参与 |
 | `/api/assessment-auth` | POST | access_token | 验 token,建 session,发 cookie |
 | `/api/assessment-login-request` | POST | IP 限流 | 匹配 → POST 到 `GHL_RESEND_WEBHOOK_URL` |
 | `/api/assessment-quiz` | GET/POST | cookie | GET 续答状态;POST upsert 单题 |
@@ -786,7 +786,7 @@ Admin「刷新字段映射」按钮 → 强制回源 GHL → upsert app_settings
 1. Settings → Custom Fields 建 0.12 那 9 个字段
 2. Settings → Tags 建对应 tag(或允许 API 自动创建)
 3. 发链接 workflow 加 **Inbound Webhook trigger**,URL 给我 → `GHL_RESEND_WEBHOOK_URL`
-4. 付款 workflow 加 Webhook action:`POST https://compass.qiai.tech/api/assessment-ghl-webhook`,custom header `X-QAI-Secret: <QAI_WEBHOOK_SECRET>`,body 至少含 `{ ghl_contact_id, phone, email, name, cohort_tag }`
+4. 付款 workflow 加 Webhook action:`POST https://<ref>.supabase.co/functions/v1/assessment-ghl-webhook`(**直连 Supabase,不走 `/api/*` 代理**),custom header `X-QAI-Secret: <QAI_WEBHOOK_SECRET>`,body 至少含 `{ ghl_contact_id, phone, email, name, cohort_tag }`,并把响应的 `magic_link` 映射进 `qai_assessment_magic_link`(见 rev5)
 
 ---
 
@@ -1007,7 +1007,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | Push | **每次 push 都要明说**。一次「push」授权只覆盖当次那批 commit,不是长期通行证 |
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
 | **守卫的覆盖边界会被代码越过** | 已经栽了三次:`api/` 目录建了但没进 `tsc -b`;`check:dep-sync` 只扫 `_shared/` 而函数本体在外面;Deno 侧代码一直没 `deno check`。**每加一个新运行时或新目录,就多一个没人检查的角落。** 加目录 / 加运行时时先问:现有守卫的边界是手写的吗?会不会把它落在外面 |
-| 验证分两层 | `npm run build` 是**纯 Node** 的五道门,Vercel 也跑得动。需要 deno 的三项(`check:deno` / `test:deno` / `check:cross`)进不了构建链。本地与 CI 用 `npm run verify` 一次跑全部 |
+| 验证分两层 | `npm run build` 是**纯 Node** 的五道门,Vercel 也跑得动。需要 deno 的三项(`check:deno` / `test:deno` / `check:cross`)进不了构建链。本地用 `npm run verify` 一次跑全部 |
+| ⚠️ **已知开着的洞:`verify` 靠人记得跑** | Vercel 只跑 `npm run build`,所以需要 deno 的三项**在 CI 上永远不会执行**。这跟我们拆掉的那些手写清单是同一类问题 —— 一个依赖人自觉的检查。当前单人开发、本地跑 verify 够用,**所以现在不做**。触发条件:①加人 ②开始出现漏跑。到那时上 GitHub Actions 跑 `npm run verify`(runner 装 deno 即可)。记在这里是为了知道它开着,而不是假装它不存在 |
 | **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
 | 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
 | seed 数据的归属 | **功能依赖进 migration,环境配置手动。** 判断标准是「换一个环境重建,代码还能不能正常跑」。没有默认 cohort 代码就跑不对 → migration;没有 admin 只是没人能登录 → 手动 |

@@ -13,8 +13,14 @@
 | 项 | 值 |
 |---|---|
 | Method | `POST` |
-| URL | `https://compass.qiai.tech/api/assessment-ghl-webhook` |
+| URL | `https://<project-ref>.supabase.co/functions/v1/assessment-ghl-webhook` |
 | Content-Type | `application/json` |
+
+> **URL 直接指向 Supabase,不走 `compass.qiai.tech/api/`。** 那个 `/api/*` 代理(Stage 4)的存在理由是**浏览器发起的请求**需要 session cookie 保持第一方 —— 跨站 cookie 会被 Safari / Chrome 拦掉。
+>
+> GHL → 我们是**服务器到服务器**,没有 cookie 参与,走代理只是多一跳、多一个故障点。所以这个 URL **永久指向 Supabase,以后也不需要改**。
+>
+> 不需要 `Authorization` 或 `apikey` header —— 这个函数以 `verify_jwt = false` 部署,鉴权完全由下面的 `X-QAI-Secret` 承担。
 
 ### Custom Header(必须)
 
@@ -166,3 +172,51 @@ supabase secrets list
 
 > `supabase secrets set` 需要先 `supabase link --project-ref <ref>`。
 > `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` 由平台自动注入,**不要手动设**。
+
+---
+
+## 6. 部署顺序(有依赖,别反过来)
+
+```bash
+cd ~/qai-growth-compass && git pull
+
+# 1) 先应用 migration —— 四个,含原子 upsert 函数
+supabase db push
+
+# 2) 再部署函数
+supabase functions deploy assessment-ghl-webhook
+```
+
+**顺序反了的话**:函数会调用一个还不存在的 RPC `upsert_assessment_entitlement`,每次请求都 500,而且 500 的响应体不带细节(故意的),排查得去看函数日志。
+
+### 关于 `--no-verify-jwt`
+
+**不需要加这个 flag** —— `supabase/config.toml` 里已经声明了:
+
+```toml
+[functions.assessment-ghl-webhook]
+verify_jwt = false
+```
+
+config.toml 是持久化的、进仓库的、换机器也一致的;flag 只作用于那一次 deploy。两者都写会重复但无害,想加 `--no-verify-jwt` 也可以。
+
+**Docker 相关**:`functions deploy` 默认用 Docker 打包。本机没跑 Docker 就加 `--use-api`(服务端打包):
+
+```bash
+supabase functions deploy assessment-ghl-webhook --use-api
+```
+
+### 为什么这个函数不校验 JWT 是安全的
+
+| | |
+|---|---|
+| **必须关** | GHL 没有 Supabase 身份,它签不出 JWT。开着 `verify_jwt` 的话每一个真实调用都会在我们的代码运行之前被平台以 401 拒掉 —— 功能直接不可用 |
+| **鉴权由谁承担** | `X-QAI-Secret` 与 `QAI_WEBHOOK_SECRET` 定长比较(先 sha256 压等长,再无分支异或),**在任何数据库操作之前**返回 401 |
+| **失败形态** | 401 + 零写入 + 响应体不透露任何与密钥相关的信息 |
+| **service role key 的暴露面** | 未变。它由平台注入进函数进程,不经过请求、不进响应、不进 bundle |
+
+**代价要说清楚,不粉饰**:`verify_jwt = false` 意味着这个 URL 对整个互联网可达 —— 任何人都能 POST 它并拿到 401。丢掉的是"平台层先挡掉匿名流量"这一层,剩下的是**函数调用次数会被垃圾流量消耗**。
+
+这跟 Stripe / GHL 之类所有 webhook 接收端是同一处境:接收端必须公开可达,鉴权只能靠共享密钥。当前量级下不需要处理;真被刷了再上 IP 限流或 Cloudflare 前置。
+
+> 顺带一句:`supabase link` 可能会把 `project_id = "<ref>"` 写进 `config.toml`,让工作区变脏。**建议直接 commit 它** —— project ref 不是密钥,它出现在每一个 API URL 里,Supabase 官方模板也是提交它的。别为了它把 `config.toml` 加进 `.gitignore`,那会连 `verify_jwt` 的声明一起丢掉。
