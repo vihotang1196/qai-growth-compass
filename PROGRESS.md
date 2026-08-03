@@ -1016,7 +1016,7 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | **不要同一份东西存两处** | 靠人同步的复制品本身就是 bug 源,加「一致性守卫」只是给它上保险。发现复制品先想能不能取消复制:SQL 的真相源是 migration 文件,题库的真相源是 `assessment-config.json`,设计理由写在它们各自的注释里 |
 | ~~PAT 轮换~~ | ❌ **已作废**。本机已从 PAT 切到 SSH key,remote 改为 `git@github.com`。**不要再提醒轮换 PAT** |
 | 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
-| **`SESSION_SECRET` 轮换 = 免费的批量吊销开关** | 无状态签名 cookie 的一个副产品:换一次 `SESSION_SECRET`,**所有已发出的 session 一次性全部失效**。这不是缺陷,是应急手段 —— 万一怀疑 session cookie 大面积泄露(共用设备、某个渠道被截),换 secret 就全清了,不需要遍历任何表。代价是所有客户要重新点魔法链接一次,而魔法链接不过期,所以代价可控。<br>⚠️ 但它**不能**替代 `access_revoked_at`:那是针对单个人的、且会连 `access_token` 一起作废;换 secret 只清 session,老链接照样能重新登录 |
+| **换 `SESSION_SECRET` 只清 session,它不是吊销开关** | 无状态签名 cookie 的副产品:换一次 `SESSION_SECRET`,所有已发出的 session 立刻失效,不需要遍历任何表。<br>⚠️ **但最容易想到的那个用途恰恰是它做不到的**:「怀疑链接大面积泄露 → 换 secret 全清」是错的 —— 泄露的是 `access_token`,而魔法链接不过期,对方点一次链接就又进来了。换 secret 在这种情况下一点用没有。<br>两者粒度不同,混用会有一方失效:<br>• `access_revoked_at` —— **单个人**,清 session **和** `access_token`<br>• 换 `SESSION_SECRET` —— **所有人**,只清 session,链接仍可重新登录<br>所以:怀疑某个人的链接落到别人手里 → 作废那一条。怀疑 session cookie 本身被截(共用设备、某个渠道被抓包)且链接没泄露 → 换 secret。**链接泄露只能靠作废 token,没有批量版本** —— 真要批量作废,得写一个按 cohort 批量置 `access_revoked_at` 并重发的 Admin 操作,那是新功能不是配置开关 |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
 
 ---
