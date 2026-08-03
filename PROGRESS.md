@@ -1015,7 +1015,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | seed 数据的归属 | **功能依赖进 migration,环境配置手动。** 判断标准是「换一个环境重建,代码还能不能正常跑」。没有默认 cohort 代码就跑不对 → migration;没有 admin 只是没人能登录 → 手动 |
 | **不要同一份东西存两处** | 靠人同步的复制品本身就是 bug 源,加「一致性守卫」只是给它上保险。发现复制品先想能不能取消复制:SQL 的真相源是 migration 文件,题库的真相源是 `assessment-config.json`,设计理由写在它们各自的注释里 |
 | ~~PAT 轮换~~ | ❌ **已作废**。本机已从 PAT 切到 SSH key,remote 改为 `git@github.com`。**不要再提醒轮换 PAT** |
-| 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`SESSION_SECRET`(改后所有客户 session 失效,需重新点魔法链接)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
+| 密钥轮换清单 | `QAI_WEBHOOK_SECRET`(改后要同步改 GHL webhook header)、`INTERNAL_FN_SECRET`(改后 Supabase 与 Vercel 两边必须同时改,否则渲染与写回全断) |
+| **`SESSION_SECRET` 轮换 = 免费的批量吊销开关** | 无状态签名 cookie 的一个副产品:换一次 `SESSION_SECRET`,**所有已发出的 session 一次性全部失效**。这不是缺陷,是应急手段 —— 万一怀疑 session cookie 大面积泄露(共用设备、某个渠道被截),换 secret 就全清了,不需要遍历任何表。代价是所有客户要重新点魔法链接一次,而魔法链接不过期,所以代价可控。<br>⚠️ 但它**不能**替代 `access_revoked_at`:那是针对单个人的、且会连 `access_token` 一起作废;换 secret 只清 session,老链接照样能重新登录 |
 | bundle 泄密检查 | CI 在 `dist/` 里 grep `SERVICE_ROLE` / `INTERNAL_FN_SECRET` / `leadconnector` / `hooks.` 字样,命中即构建失败 |
 
 ---
@@ -1270,9 +1271,12 @@ type PostAuthTarget = '/quiz' | '/survey' | '/report' | '/expired';
 | `sessions.status = 'survey'` | `/survey` |
 | `sessions.status = 'completed'` | `/report` |
 
-> ⚠️ **你给的白名单是三个值(`/quiz` `/report` `/expired`),漏了 `/survey`。**
-> `assessment_sessions.status` 的 check 约束里有 `'survey'` 这个态 —— 24 题答完、7 题问卷未交的人就停在这儿。三值白名单会把他们推回 `/quiz`,于是 24 题全部重答。
-> 这正是你约束 2 要防的那类内部逻辑错,而它在写规范的当场就出现了。已按四值定稿,要是你有别的意图告我。
+> ⚠️ **四值的由来:最初两次描述白名单时都写成三值(`/quiz` `/report` `/expired`),漏掉了 `/survey`。**
+> 这是一次单向的疏漏,不是「定了三值又改成四值」—— 记清楚是因为以后回看时,「改过主意」和「一开始就漏了」指向完全不同的复查方向。
+>
+> **四值是被 schema 逼出来的,不是设计偏好**:`assessment_sessions.status` 的 CHECK 约束就是三态(`in_progress` / `survey` / `completed`),加上 revoked 这一路,正好四个跳转目标。少任何一个都会有一类人无处可去 —— 三值时 `status = 'survey'` 的人要么被推回 `/quiz` 重答 24 题,要么落进 `/report` 看空报告,两个都是产品事故。
+>
+> 所以这条不靠记:**跳转目标的数量由 status 的 CHECK 约束决定**。以后给 status 加态,就必须同步加一个 `PostAuthTarget` —— `postAuthTarget()` 里的 `switch` 是穷尽匹配,漏了会在编译期报错。
 
 **约束 3 —— `lang` 必须显式带上**
 
