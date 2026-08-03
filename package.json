@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:deno": "cd supabase/functions && deno task test",
+    "check:deno": "cd supabase/functions && deno task check",
     "fonts:subset": "node scripts/subset-fonts.mjs"
   },
   "dependencies": {

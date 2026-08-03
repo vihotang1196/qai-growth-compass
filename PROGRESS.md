@@ -13,7 +13,7 @@
 | 0 | 方案确认 | **rev4 — 已定稿**(config 文件仍未收到,不阻塞 Stage 1–5) |
 | 1 | 脚手架 + Brutalist 设计系统 + 组件层 + Vercel 上线 + 字体探针 | **代码完成,部署与字体探针待你的资产** |
 | 2 | 数据表 + RLS + phone.ts + 单元测试 | **代码与验证完成;migration 待批准执行** |
-| 3 | assessment-ghl-webhook | 未开始 |
+| 3 | assessment-ghl-webhook | **代码完成,待部署实测** |
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
@@ -1322,11 +1322,11 @@ PlusJakartaSans-VF.woff2               60,548 B   正文拉丁 + 数字
 
 Vercel 已配 3 个变量:`VITE_CDN_FONT_BASE`、`CDN_FONT_BASE`(同值 `https://cdn.qiai.tech/fonts`)、`INTERNAL_FN_SECRET`。
 
-## 未完成
+## ✅ 字体探针通过(结论由你实测,我未见截图)
 
-| 项 | 卡在 |
-|---|---|
-| 字体探针实测 | 合 main → Production 部署后跑 |
+Production 上跑通,四块全过,`X-Cdn-Base-Check: match`。
+
+> **来源说明**:截图没到我这边(消息里没有附件)。这条结论是**你实测报告的**,不是我验证的 —— 记在这里以免以后回看时误以为我看过图。
 
 ## 字体探针的三处加固
 
@@ -1385,6 +1385,136 @@ npm run check:cross    36 行逐字相同  (需要 deno,不进构建链)
 | `check:cross` | 3 | 自身 harness 静默 no-op |
 
 后两行值得记:**两个守卫的反向验证抓到的第一个问题都是守卫自己的**。这正是为什么反向验证不能省。
+
+---
+
+# Stage 3 — assessment-ghl-webhook
+
+分支 `stage-3-webhook`。
+
+## ⚠️ Stage 0 漏了一件事:GHL 从哪拿到魔法链接
+
+原方案写「到指定时间由 GHL 批量发链接」,但**没说 GHL 手上的链接从哪来**。`access_token` 是随机的,GHL 猜不出来;而 `qai_assessment_report_url` 是答完题之后由 Stage 11 的写回填的,时间点完全不同 —— 拿它当发链接的来源是错的,那时候链接早该发出去了。
+
+解法:**webhook 的响应体返回 `magic_link`,GHL 的 Webhook action 把它映射进一个自定义字段**(`qai_assessment_magic_link`)。这样 Stage 3 不需要引入 GHL API 依赖,发链接那一步也有值可用。
+
+这条已写进 [`docs/ghl-setup.md`](docs/ghl-setup.md) 并标了「必须配,否则链接发不出去」。**GHL 那边只映射 request、不映射 response 的话,整条流程会静默断在发链接那一步** —— 数据库里记录齐全、看不出任何异常,但没人收到链接。
+
+## 实现要点
+
+| 约束 | 落地 |
+|---|---|
+| 密钥校验 | `X-QAI-Secret` 与 `QAI_WEBHOOK_SECRET` 定长比较(先 sha256 压等长再无分支异或),失败 401 **且在任何 DB 操作之前返回** |
+| 幂等 | 冲突键 `ghl_contact_id`。**不用邮箱** —— 邮箱会变,改一次就变成两条记录两个 token 两份报告 |
+| 批次映射 | 有 `cohort_tag` → 匹配 `source_tag` 且 `is_active`;没匹配上 → **回落默认批次 + warning**,不拒绝;没有 `cohort_tag` → 默认批次 |
+| 号码降级 | 解析失败仍写记录,`phone_e164`/`phone_tail` 置 null,`phone_raw` 保留原值,响应带 `phone_unparseable` |
+| 邮箱 | `trim().toLowerCase()` → `email_lower` |
+| token | 32 字节 CSPRNG → base64url 无填充(43 字符)。**只在首次创建时生成一次** |
+
+### 为什么没用单条 upsert
+
+`upsert` 会把提供的所有列一起覆盖,而这几列**不能**被覆盖:
+
+- `access_token` —— 重发不轮换,老链接必须继续有效
+- `status` —— 重复触发不能把一个已完成的人打回 `pending`
+- `first_login_at` / `completed_at` / `link_sent_at` —— 不能被抹掉
+- `access_revoked_at` —— 作废是 Admin 的决定,webhook 无权撤销
+
+所以走「查 → 有则只更新可变列,无则插入」,并用唯一键冲突码 `23505` 兜住并发重复触发(两个请求同时插同一个 contact,后到的退化成更新,不生成新 token)。
+
+> 更干净的做法是一条 `insert ... on conflict (ghl_contact_id) do update set <可变列>`,原子且无竞态。但那要么需要 raw SQL(supabase-js 给不了),要么需要一个 DB function —— 而 DB function 得走 migration,要你先批。**当前实现是正确的**(竞态有兜底),想换成原子版本说一声,我出 migration 给你看。
+
+### 为什么不接受 `contact_id` / `contactId` 别名
+
+宽容地接受别名会让「GHL 侧字段映射配错」变成静默行为 —— 我们收到一个能用的 id,但它可能根本不是 contact id。只认一个名字,400 时把**收到的 key 列表**(只有 key,没有值)回给对方,配错第一次测试就能定位。这是 setup 期该有的响亮失败,不是运行期的容错。
+
+### 为什么只有 `ghl_contact_id` 必填
+
+客户已经付过钱。因为一个烂号码、或者 GHL 侧漏映射一个字段,就丢掉整条准入记录,代价比存一条需要人工修的记录大得多。手机与邮箱**都**缺失时也不拒绝,只发 `no_contact_channel` warning —— 那种情况备用路径找不回链接,但魔法链接照样能用。
+
+## 又补了两个盲区
+
+**1. `check:dep-sync` 只扫 `_shared/`,Edge Function 本体不在其中**
+
+v3 的自动发现是从 `supabase/functions/_shared/` 起步的,而 `assessment-ghl-webhook/index.ts` 不在那里 —— **Stage 3 加的第一个非 `_shared` 函数就活了这个洞**,它 import 什么都不受检查。
+
+v4 改成扫整个 `supabase/functions/**`,并把两条规则分开(它们的适用范围本来就不同):
+
+| 规则 | 适用范围 |
+|---|---|
+| A. 必须在 import map 里有**精确版本**的条目 | **所有**被 Edge Function 引用的裸 specifier。这是 Deno 能不能解析的问题 |
+| B. 与 `package.json` 交叉校验版本 | **只对同时被 `src/` 引用的** specifier。Node 侧根本不 import 的包(`@supabase/supabase-js`、`@std/assert`)不该被强塞进 `package.json` —— 那会让依赖清单谎报 Node 侧的真实需要 |
+
+反向验证:函数目录下放一个未映射的 `import { z } from "zod"` → 拦下(v3 会漏);放一个已映射的 import → 正确通过,不误报。
+
+**2. Edge Function 也没有类型检查**
+
+`tsc -b` 只管 `src/` 与 `api/`,Deno 那边的代码一直没 `deno check`。新增 `npm run check:deno`(`deno task check _shared/ assessment-ghl-webhook/`)。这跟上一轮 `api/` 那个洞是同一类问题 —— **每加一个新运行时,就多一个没人检查的角落**。
+
+## 验证
+
+```
+npm run build        五道门全绿
+npm test             38 passed  (Node)
+npm run test:deno    16 passed  (Deno,新增 11 条 webhook payload 用例)
+npm run check:deno   Edge Function 类型检查通过
+npm run check:cross  36 行逐字相同
+npm audit --omit=dev 2 moderate(react-router,已评估,当前不可达)
+```
+
+11 条 webhook 用例覆盖:缺 `ghl_contact_id` 的 8 种形态(含两种别名)、非对象 body、400 只回 key 不回值、正常归一化、号码降级且保留原值、全角数字、无联系方式、双 warning、空串与非字符串变 null、多余字段被忽略、新加坡号不被当马来西亚。
+
+**没验的部分要说清楚**:幂等的实际行为(重复触发只有一行、token 不变、`status` 不被打回)**需要真库**,纯函数测不了。我这边没有 Supabase keys,也没部署过任何 Edge Function。验收命令见下。
+
+## 部署与验收命令
+
+```bash
+# 1. 配 secrets(先 supabase link --project-ref <ref>)
+supabase secrets set QAI_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+supabase secrets set APP_BASE_URL="https://compass.qiai.tech"
+supabase secrets list
+
+# 2. 部署
+supabase functions deploy assessment-ghl-webhook
+
+# 3. 验收 —— 五条
+URL="https://<ref>.supabase.co/functions/v1/assessment-ghl-webhook"
+S="<QAI_WEBHOOK_SECRET>"
+
+# (1) 错密钥 → 401,且事后查库确认没有新行
+curl -si -X POST "$URL" -H "X-QAI-Secret: wrong" -H "Content-Type: application/json" \
+  -d '{"ghl_contact_id":"t_401"}' | head -1
+
+# (2) 幂等 —— 同一个 contact 打三次
+for i in 1 2 3; do
+  curl -s -X POST "$URL" -H "X-QAI-Secret: $S" -H "Content-Type: application/json" \
+    -d '{"ghl_contact_id":"t_idem","phone":"012-436 1382","email":"A@B.com","name":"Tan"}' \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["created"], d["magic_link"])'
+done
+# 期望:第一次 True,后两次 False,三次的 magic_link 完全相同
+
+# (3) 烂号码降级
+curl -s -X POST "$URL" -H "X-QAI-Secret: $S" -H "Content-Type: application/json" \
+  -d '{"ghl_contact_id":"t_badphone","phone":"0l2-436 l382","email":"c@d.com"}'
+# 期望:phone_parsed=false,warnings 含 phone_unparseable,库里 phone_raw 保留原值
+
+# (4) 未知 cohort_tag → 回落默认批次 + warning
+curl -s -X POST "$URL" -H "X-QAI-Secret: $S" -H "Content-Type: application/json" \
+  -d '{"ghl_contact_id":"t_badtag","email":"e@f.com","cohort_tag":"nope"}'
+# 期望:cohort_source=default,warnings 含 fell back
+
+# (5) 字段名配错 → 400 且回显 key 列表
+curl -s -X POST "$URL" -H "X-QAI-Secret: $S" -H "Content-Type: application/json" \
+  -d '{"contact_id":"wrong_name","email":"g@h.com"}'
+# 期望:400,detail 提示要 ghl_contact_id,received_keys=["contact_id","email"]
+```
+
+验完记得清掉这五条测试记录(`t_401` 应该本来就不存在):
+
+```sql
+delete from public.assessment_entitlements
+where ghl_contact_id in ('t_401','t_idem','t_badphone','t_badtag');
+```
 
 ---
 

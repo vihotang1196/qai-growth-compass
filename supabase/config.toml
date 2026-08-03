@@ -1,0 +1,11 @@
+# Supabase 本地配置。
+#
+# project_id 由 `supabase link --project-ref <ref>` 写入,这里不硬编码 ——
+# ref 属于环境信息,不进仓库。
+#
+# 所有客户侧函数都 verify_jwt = false:鉴权由函数内部自己做,而且各不相同 ——
+# webhook 查共享密钥、客户端查 session cookie、admin 查 JWT + 允许名单。
+# 交给平台统一验 JWT 反而拦掉 GHL 这种没有 Supabase 身份的调用方。
+
+[functions.assessment-ghl-webhook]
+verify_jwt = false

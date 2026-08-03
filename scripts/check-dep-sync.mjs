@@ -16,18 +16,25 @@
  *    而那正是 phone.ts 实际 import 的 specifier。
  * v2:改成扫源码反推 specifier,但文件清单 SHARED_SOURCES 仍是手写的。
  *    盲区同一类,只是上移一层 —— 新增共享文件忘了加进清单,那个文件就没保护。
- * v3(本版):文件清单也不手写。
- *    supabase/functions/_shared/ 下所有 .ts 无条件纳入,再沿 import 图递归
- *    捞进被它们引用的项目内文件。清单为空则判失败,不当作通过。
+ * v3:文件清单也不手写。_shared/ 下所有 .ts 无条件纳入,再沿 import 图递归。
+ *    盲区 —— 只扫 _shared/,而 Edge Function 本体(assessment-ghl-webhook/ 之类)
+ *    不在其中。Stage 3 加第一个非 _shared 函数时这个洞就活了。
+ * v4(本版):扫整个 supabase/functions/**。
+ *    并把两条规则分开 —— 它们的适用范围本来就不同:
+ *      A. 【所有】被 Edge Function 引用的裸 specifier 必须在 import map 里有
+ *         精确版本的条目。这是 Deno 能不能解析的问题,对所有包都成立。
+ *      B. package.json 的版本交叉校验【只对同时被 src/ 引用的 specifier 成立】。
+ *         Node 侧根本不 import 的包(@supabase/supabase-js、@std/assert)不该被
+ *         强塞进 package.json —— 那会让依赖清单谎报 Node 侧的真实需要。
  *
  * 结论:凡是「需要人记得去更新」的清单,迟早会漏。能从代码推出来的就别写。
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 
 const PKG = 'package.json';
 const IMPORT_MAP = 'supabase/functions/deno.json';
-const SHARED_DIR = 'supabase/functions/_shared';
+const FUNCTIONS_DIR = 'supabase/functions';
 const SRC_ALIAS = { '@/': 'src/' };
 
 /** 这些前缀的 specifier 不需要 import map 条目 */
@@ -97,9 +104,9 @@ function walkTs(dir) {
 const errors = [];
 
 // ── 1. 自动发现共享源码:_shared/ 全部 + 沿 import 图递归 ──────────
-const roots = walkTs(SHARED_DIR);
+const roots = walkTs(FUNCTIONS_DIR);
 if (roots.length === 0) {
-  errors.push(`${SHARED_DIR} 下没找到任何 .ts —— 目录挪了?不当作通过。`);
+  errors.push(`${FUNCTIONS_DIR} 下没找到任何 .ts —— 目录挪了?不当作通过。`);
 }
 
 const visited = new Set(roots);
@@ -153,6 +160,7 @@ for (const [spec, users] of [...needed].sort(([a], [b]) => a.localeCompare(b))) 
   const where = users.join(', ');
   const target = imports[spec];
 
+  // ── 规则 A:所有 specifier 都要有精确版本的 import map 条目 ──────
   if (!target) {
     errors.push(
       `${spec}(${where} 在用): ${IMPORT_MAP} 的 imports 里没有这个条目。` +
@@ -180,15 +188,23 @@ for (const [spec, users] of [...needed].sort(([a], [b]) => a.localeCompare(b))) 
     continue;
   }
 
-  // jsr: 的包不在 package.json 里(Node 侧用不到),校验到「精确版本」为止
-  if (scheme === 'jsr') continue;
+  // ── 规则 B:只对同时被 src/ 引用的 specifier 交叉校验 package.json ──
+  // Node 侧不 import 的包不该被强塞进 package.json,那会让依赖清单谎报真实需要。
+  const usedFromSrc = users.some((f) => f.startsWith(`src${sep}`) || f.startsWith('src/'));
+  if (!usedFromSrc) continue;
+
+  if (scheme !== 'npm') {
+    errors.push(
+      `${spec}: 被 src/ 引用,但映射成了 ${scheme}: —— Node 侧解析不了非 npm 的 specifier`,
+    );
+    continue;
+  }
 
   const name = packageRoot(spec);
   const declared = pkg.dependencies?.[name] ?? pkg.devDependencies?.[name];
   if (!declared) {
     errors.push(
-      `${spec}(${where} 在用): ${name} 映射成了 npm 包但不在 ${PKG} 的依赖里。` +
-        `Deno 会装一个 Node 侧根本没有的版本。`,
+      `${spec}(${where} 在用): ${name} 被 src/ 引用但不在 ${PKG} 的依赖里。`,
     );
     continue;
   }
