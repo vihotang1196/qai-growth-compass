@@ -1009,6 +1009,7 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | **守卫的覆盖边界会被代码越过** | 已经栽了三次:`api/` 目录建了但没进 `tsc -b`;`check:dep-sync` 只扫 `_shared/` 而函数本体在外面;Deno 侧代码一直没 `deno check`。**每加一个新运行时或新目录,就多一个没人检查的角落。** 加目录 / 加运行时时先问:现有守卫的边界是手写的吗?会不会把它落在外面 |
 | 验证分两层 | `npm run build` 是**纯 Node** 的五道门,Vercel 也跑得动。需要 deno 的三项(`check:deno` / `test:deno` / `check:cross`)进不了构建链。本地用 `npm run verify` 一次跑全部 |
 | ⚠️ **已知开着的洞:`verify` 靠人记得跑** | Vercel 只跑 `npm run build`,所以需要 deno 的三项**在 CI 上永远不会执行**。这跟我们拆掉的那些手写清单是同一类问题 —— 一个依赖人自觉的检查。当前单人开发、本地跑 verify 够用,**所以现在不做**。触发条件:①加人 ②开始出现漏跑。到那时上 GitHub Actions 跑 `npm run verify`(runner 装 deno 即可)。记在这里是为了知道它开着,而不是假装它不存在 |
+| **三条执行路径,守卫覆盖各不相同** | ① Vercel 部署 → 只跑 `npm run build`(五道门)。② 本地开发 → `npm run verify`(五道门 + deno 三项)。③ **`supabase functions deploy` / `db push` → 本地 CLI 直连 Supabase,两边都不经过**。第三条是 Stage 3 才暴露的:deploy 失败而 `check:dep-sync` 是绿的。已把 deploy 收进 `npm run deploy:functions`(= `verify && supabase functions deploy`),让它**必须**经过守卫,而不是靠人记得先跑 |
 | **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
 | 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
 | seed 数据的归属 | **功能依赖进 migration,环境配置手动。** 判断标准是「换一个环境重建,代码还能不能正常跑」。没有默认 cohort 代码就跑不对 → migration;没有 admin 只是没人能登录 → 手动 |
@@ -1466,6 +1467,54 @@ supabase-js 的 `.upsert()` 会把提供的所有列一起覆盖,而这几列**�
 ### 为什么只有 `ghl_contact_id` 必填
 
 客户已经付过钱。因为一个烂号码、或者 GHL 侧漏映射一个字段,就丢掉整条准入记录,代价比存一条需要人工修的记录大得多。手机与邮箱**都**缺失时也不拒绝,只发 `no_contact_channel` warning —— 那种情况备用路径找不回链接,但魔法链接照样能用。
+
+## 首次 deploy 失败:守卫验了配置内容,没验配置会不会到达运行时
+
+```
+unexpected deploy status 400: Failed to bundle the function
+  Relative import path "@supabase/supabase-js" not prefixed with / or ./ or ../
+    at .../supabase/functions/_shared/supa.ts:1:51
+```
+
+上传的资产列表里只有 `.ts` 文件,**没有 `deno.json`**。
+
+### 诊断(先查清再改)
+
+| 问题 | 结论 |
+|---|---|
+| 是 CLI 没带,还是带了但服务端没用? | **CLI 没带**。资产列表里没有 `deno.json`,失败发生在服务端打包阶段 —— 服务端只能用上传上来的东西 |
+| 根因 | 我们的 map 在 `supabase/functions/deno.json`,即**函数目录的上一层**。CLI 为某个函数查找 import map 时不会往上找 |
+| `config.toml` 原来有 `import_map` 声明吗? | **没有**,只有 `verify_jwt = false` |
+| `--use-api` 与 Docker 打包有差异吗? | 有,而且这个差异是关键:Docker 路径在**本地**解析 import map 再上传打好的包;`--use-api` 上传源码由**服务端**打包,所以 import map 必须作为资产被上传。服务端打包对 map 的可达性更敏感 |
+| CLI 2.90 支持 `import_map` 这个 config key 吗? | **我没能在本地证明**。`--import-map` flag 在 `--help` 里明确存在;但 `supabase config push` 对未知 key 和合法 key 报同一个错(都先挂在「未 link」上),所以那条路径证明不了 config key 的支持情况。CLI 默认模板里也根本没有 `[functions]` 段 |
+
+### 修法(按 A,不动代码)
+
+`config.toml` 显式声明:
+
+```toml
+[functions.assessment-ghl-webhook]
+verify_jwt = false
+import_map = "./functions/deno.json"     # 路径相对 supabase/
+```
+
+**没有走 B(在 `supa.ts` 里写全 `npm:@supabase/supabase-js@2.110.8`)。** B 会把版本号散到源码里,而 `check:dep-sync` 的全部价值就是「版本只有一处」—— 走 B 就得同时改守卫去扫源码里的 `npm:` 版本号,否则守卫会退化成一道验着一份没人用的配置的空门。A 走不通再走 B,退路写在 docs 里。
+
+### 守卫跟着补:可达性
+
+原来那道门验的是「import map 里有对应条目」—— 条目确实有,所以它是**绿的**。它没验的是「这份 map 会不会被 deploy 带上去」。**检查的边界与实际执行的边界不重合**,这已经是同一模式的第四次。
+
+`check:dep-sync` 新增第 4 节,反向验证 5 种全部拦下:
+
+| 用例 | 结果 |
+|---|---|
+| `config.toml` 缺 `import_map`(**线上失败的确切形态**) | 拦下 |
+| `import_map` 指向另一份没人校验的 map | 拦下 |
+| 函数目录存在但 `config.toml` 里没有对应段 | 拦下 |
+| `verify_jwt` 未显式声明(默认 true 会拦掉 GHL) | 拦下 |
+| 新增函数目录但忘了配 config | 拦下 |
+
+最后一条尤其重要:Stage 4 会加 4 个函数,Stage 9 再加。**新增函数忘了配 config** 是这个洞最可能的复发形态。
 
 ## 又补了两个盲区
 

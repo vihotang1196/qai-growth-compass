@@ -35,6 +35,9 @@ import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 const PKG = 'package.json';
 const IMPORT_MAP = 'supabase/functions/deno.json';
 const FUNCTIONS_DIR = 'supabase/functions';
+const CONFIG_TOML = 'supabase/config.toml';
+/** config.toml 所在目录 —— import_map 的相对路径以它为基准 */
+const CONFIG_DIR = 'supabase';
 const SRC_ALIAS = { '@/': 'src/' };
 
 /** 这些前缀的 specifier 不需要 import map 条目 */
@@ -241,6 +244,113 @@ if (roots.length > 0) {
         `配置跟着实现走 —— 等真的有文件 import 它时再加。` +
         `没人用的映射不受本守卫校验,会静默腐烂。`,
     );
+  }
+}
+
+
+// ── 4. import map 必须能被 deploy 带上,不只是内容正确 ────────────
+// 【这一节的由来】Stage 3 首次 deploy 失败:
+//   Relative import path "@supabase/supabase-js" not prefixed with / or ./ or ../
+// 而本检查当时是【绿的】—— 它验的是「import map 里有对应条目」,条目确实有;
+// 但那份 map 在函数目录的上一层,CLI 查找时不会往上找,deploy 时压根没上传。
+//
+// 守卫验了配置内容正确,没验配置会不会到达运行时。这跟 api/ 没进 tsc -b、
+// check:dep-sync 只扫 _shared/ 是同一类:检查的边界与实际执行的边界不重合。
+//
+// 所以这里补上可达性:每个函数目录都必须在 config.toml 里有
+// [functions.<name>] 且 import_map 指向本检查所校验的那一份 map。
+{
+  /** 极简 TOML 读取:只需要 [functions.<name>] 段下的 key = "value" */
+  function parseFunctionSections(toml) {
+    const sections = new Map();
+    let current = null;
+    for (const rawLine of toml.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const sec = /^\[functions\.([A-Za-z0-9_-]+)\]$/.exec(line);
+      if (sec) {
+        current = sec[1];
+        sections.set(current, {});
+        continue;
+      }
+      if (/^\[/.test(line)) {
+        current = null;
+        continue;
+      }
+      if (!current) continue;
+      const kv = /^([A-Za-z0-9_]+)\s*=\s*(.+)$/.exec(line);
+      if (!kv) continue;
+      let value = kv[2].trim();
+      // 只在值不是引号开头时剥行尾注释,避免切坏含 # 的字符串
+      if (!value.startsWith('"') && !value.startsWith("'")) {
+        value = value.replace(/\s+#.*$/, '').trim();
+      }
+      sections.set(current, {
+        ...sections.get(current),
+        [kv[1]]: value.replace(/^["']|["']$/g, ''),
+      });
+    }
+    return sections;
+  }
+
+  let toml;
+  try {
+    toml = readFileSync(CONFIG_TOML, 'utf8');
+  } catch {
+    errors.push(`${CONFIG_TOML} 读不到 —— 每个 Edge Function 都要在这里声明 import_map`);
+    toml = '';
+  }
+
+  if (toml) {
+    const sections = parseFunctionSections(toml);
+    // 函数目录 = supabase/functions 下的一级子目录,_shared 除外
+    let funcDirs = [];
+    try {
+      funcDirs = readdirSync(FUNCTIONS_DIR).filter(
+        (e) => e !== '_shared' && statSync(join(FUNCTIONS_DIR, e)).isDirectory(),
+      );
+    } catch {
+      // 上面已经报过 FUNCTIONS_DIR 的问题
+    }
+
+    for (const name of funcDirs) {
+      const cfg = sections.get(name);
+      if (!cfg) {
+        errors.push(
+          `函数 ${name} 在 ${FUNCTIONS_DIR}/ 下存在,但 ${CONFIG_TOML} 里没有 ` +
+            `[functions.${name}] 段。deploy 时它拿不到 import map,` +
+            `裸 specifier 会解析失败;verify_jwt 也会静默用默认值 true。`,
+        );
+        continue;
+      }
+      if (!cfg.import_map) {
+        errors.push(
+          `[functions.${name}] 缺 import_map。我们的 map 在 ${IMPORT_MAP},` +
+            `即函数目录的上一层 —— CLI 不会往上找,不显式声明就不会被上传。`,
+        );
+        continue;
+      }
+      const resolved = normalize(join(CONFIG_DIR, cfg.import_map));
+      if (resolved !== normalize(IMPORT_MAP)) {
+        errors.push(
+          `[functions.${name}] 的 import_map 指向 ${resolved},` +
+            `但本检查校验的是 ${IMPORT_MAP}。两者必须一致,` +
+            `否则 deploy 用的是一份没人校验过的 map。`,
+        );
+        continue;
+      }
+      if (!exists(resolved)) {
+        errors.push(`[functions.${name}] 的 import_map 指向的文件不存在:${resolved}`);
+        continue;
+      }
+      if (cfg.verify_jwt === undefined) {
+        errors.push(
+          `[functions.${name}] 没有显式声明 verify_jwt。默认值是 true,` +
+            `会让平台在函数代码运行之前拒掉没有 Supabase 身份的调用方(比如 GHL)。` +
+            `要真为 true 也请写出来。`,
+        );
+      }
+    }
   }
 }
 

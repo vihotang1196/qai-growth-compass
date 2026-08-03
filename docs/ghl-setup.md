@@ -183,28 +183,42 @@ cd ~/qai-growth-compass && git pull
 # 1) 先应用 migration —— 四个,含原子 upsert 函数
 supabase db push
 
-# 2) 再部署函数
-supabase functions deploy assessment-ghl-webhook
+# 2) 再部署函数。走 npm 脚本而不是裸 CLI ——
+#    它会先跑一遍 npm run verify(含 check:dep-sync,那道门现在会校验
+#    import_map 是否声明、deploy 时拿不拿得到 import map)
+npm run deploy:functions
 ```
+
+本机没跑 Docker 的话:`npm run verify && supabase functions deploy --use-api`
 
 **顺序反了的话**:函数会调用一个还不存在的 RPC `upsert_assessment_entitlement`,每次请求都 500,而且 500 的响应体不带细节(故意的),排查得去看函数日志。
 
-### 关于 `--no-verify-jwt`
-
-**不需要加这个 flag** —— `supabase/config.toml` 里已经声明了:
+### `config.toml` 里的两条声明,都是必需的
 
 ```toml
 [functions.assessment-ghl-webhook]
 verify_jwt = false
+import_map = "./functions/deno.json"     # 路径相对 supabase/
 ```
 
-config.toml 是持久化的、进仓库的、换机器也一致的;flag 只作用于那一次 deploy。两者都写会重复但无害,想加 `--no-verify-jwt` 也可以。
+**`verify_jwt = false`** —— 不需要再加 `--no-verify-jwt` flag。config.toml 是持久化的、进仓库的、换机器一致;flag 只作用于那一次 deploy。两个都写重复但无害。
 
-**Docker 相关**:`functions deploy` 默认用 Docker 打包。本机没跑 Docker 就加 `--use-api`(服务端打包):
+**`import_map`** —— 这条是第一次 deploy 失败的根因。我们的 import map 在 `supabase/functions/deno.json`,也就是**函数目录的上一层**;CLI 为某个函数查找 import map 时不会往上找,于是那份文件根本没被上传,服务端打包器拿不到映射:
 
-```bash
-supabase functions deploy assessment-ghl-webhook --use-api
 ```
+Relative import path "@supabase/supabase-js" not prefixed with / or ./ or ../
+  at .../_shared/supa.ts:1:51
+```
+
+map 放共享位置是有理由的 —— `libphonenumber-js` 的版本必须与 `package.json` 一致(`check:dep-sync` 守着),一份共享的 map 才守得住。所以修法不是把 map 复制到每个函数目录下,而是显式声明路径。
+
+**这条声明现在由 `npm run check:dep-sync` 强制**:函数目录存在却没有对应的 `[functions.<name>]` + `import_map`,或者 `import_map` 指向另一份没人校验的 map,构建直接失败。
+
+> 如果 deploy 仍然报同样的错,说明这个 CLI 版本不认 config.toml 里的 `import_map`(我没能在本地证明它认 —— `supabase config push` 对未知 key 和合法 key 报同一个错)。那就退到 flag,它在 `--help` 里是明确存在的:
+> ```bash
+> npm run verify && supabase functions deploy --import-map supabase/functions/deno.json
+> ```
+> 两种都失败再走 B 方案(源码里写全 `npm:@supabase/supabase-js@2.110.8`),但那要同时改 `check:dep-sync` 去扫源码里的版本号,否则守卫就变成在验一份没人用的配置。
 
 ### 为什么这个函数不校验 JWT 是安全的
 

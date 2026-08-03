@@ -1,11 +1,27 @@
 # Supabase 本地配置。
 #
-# project_id 由 `supabase link --project-ref <ref>` 写入,这里不硬编码 ——
-# ref 属于环境信息,不进仓库。
+# project_id 由 `supabase link --project-ref <ref>` 写入。ref 不是密钥
+# (它出现在每个 API URL 里),CLI 写进来之后直接 commit,别为它加 gitignore ——
+# 那会连下面的 verify_jwt / import_map 声明一起丢掉。
 #
 # 所有客户侧函数都 verify_jwt = false:鉴权由函数内部自己做,而且各不相同 ——
 # webhook 查共享密钥、客户端查 session cookie、admin 查 JWT + 允许名单。
 # 交给平台统一验 JWT 反而拦掉 GHL 这种没有 Supabase 身份的调用方。
+#
+# ── import_map 为什么必须显式声明 ──────────────────────────────────
+# 我们的 import map 在 supabase/functions/deno.json,也就是【函数目录的上一层】。
+# CLI 为某个函数查找 import map 时不会往上一层找,于是 deploy 时那份文件
+# 根本没被上传 —— 服务端打包器拿不到映射,裸标识符 @supabase/supabase-js
+# 直接报 "Relative import path not prefixed with / or ./ or ../"。
+#
+# 把它放在共享位置是有理由的:libphonenumber-js 的版本必须与 package.json
+# 保持一致(见 scripts/check-dep-sync.mjs),一份共享的 map 才守得住。
+# 所以不是把 map 挪到每个函数目录下(那就每个函数一份副本),而是显式声明路径。
+#
+# 路径相对 config.toml 所在目录(即 supabase/)。
+# 这条声明由 `npm run check:dep-sync` 强制:函数目录存在但没有对应的
+# [functions.<name>] + import_map,构建失败。
 
 [functions.assessment-ghl-webhook]
 verify_jwt = false
+import_map = "./functions/deno.json"
