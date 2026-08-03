@@ -92,32 +92,13 @@ export function parseWebhookPayload(raw: unknown): ParseResult {
 }
 
 /**
- * upsert 冲突时允许覆盖的列。
+ * 【可变列白名单不在这里】
  *
- * 【刻意不含 access_token】重发不轮换,老链接必须继续有效。
- * 【刻意不含 status 与三个时间戳】webhook 重复触发不能把一个已完成的人打回 pending,
- * 也不能抹掉 first_login_at / completed_at / link_sent_at。
- * 【刻意不含 access_revoked_at】作废是 Admin 的决定,webhook 无权撤销它。
+ * 冲突时哪些列允许被覆盖、哪些刻意不动,唯一定义在
+ * supabase/migrations/20260731000300_upsert_entitlement_fn.sql 的
+ * `on conflict do update set` 里。
+ *
+ * 早先这里有一份 MUTABLE_ON_CONFLICT 常量与一个 mutableFields() ——
+ * 与 SQL 各存一份、靠人同步。改用原子 upsert 之后已删除:
+ * 同一份东西存两处本身就是 bug 源,加一致性守卫只是给它上保险。
  */
-export const MUTABLE_ON_CONFLICT = [
-  'phone_e164',
-  'phone_tail',
-  'phone_raw',
-  'email_lower',
-  'name',
-  'cohort_id',
-] as const;
-
-export function mutableFields(
-  value: NormalizedEntitlement,
-  cohortId: string | null,
-): Record<string, unknown> {
-  return {
-    phone_e164: value.phone_e164,
-    phone_tail: value.phone_tail,
-    phone_raw: value.phone_raw,
-    email_lower: value.email_lower,
-    name: value.name,
-    cohort_id: cohortId,
-  };
-}

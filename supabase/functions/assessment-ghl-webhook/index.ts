@@ -14,7 +14,7 @@
 import { secretMatches } from '../_shared/secret.ts';
 import { serviceClient } from '../_shared/supa.ts';
 import { generateAccessToken, magicLink } from '../_shared/token.ts';
-import { mutableFields, parseWebhookPayload } from '../_shared/webhookPayload.ts';
+import { parseWebhookPayload } from '../_shared/webhookPayload.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -22,8 +22,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 }
 
-/** Postgres 唯一键冲突 */
-const UNIQUE_VIOLATION = '23505';
+/** upsert_assessment_entitlement 的返回行 */
+interface UpsertRow {
+  entitlement_id: string;
+  token: string;
+  was_created: boolean;
+}
 
 interface CohortResolution {
   cohort_id: string | null;
@@ -122,67 +126,31 @@ Deno.serve(async (req: Request) => {
     const cohort = await resolveCohort(supa, value.cohort_tag);
 
     // ── 4. 幂等写入 ───────────────────────────────────────────
-    // 为什么不用单条 upsert:upsert 会把提供的所有列一起覆盖,而 access_token
-    // 与 status / 三个时间戳【不能】被覆盖(重发不轮换、不能把已完成的人打回 pending)。
-    // 所以走「查 → 有则更新可变列,无则插入」,并用唯一键冲突兜住并发重复触发。
-    const { data: existing, error: selError } = await supa
-      .from('assessment_entitlements')
-      .select('id, access_token, status')
-      .eq('ghl_contact_id', value.ghl_contact_id)
-      .maybeSingle();
-    if (selError) throw selError;
+    // 一条 insert ... on conflict do update,原子、无竞态。
+    // 可变列白名单唯一定义在那个 SQL 函数里(migration 20260731000300),
+    // TypeScript 这边不再持有第二份 —— 同一份东西存两处本身就是 bug 源。
+    //
+    // p_access_token 每次请求都生成,但只在 insert 分支落库:
+    // access_token 不在 do update set 的白名单里,所以重复触发时它被丢弃,
+    // 返回的仍是原有 token。这正是「重发不轮换」。
+    const { data, error } = await supa.rpc('upsert_assessment_entitlement', {
+      p_ghl_contact_id: value.ghl_contact_id,
+      p_access_token: generateAccessToken(),
+      p_cohort_id: cohort.cohort_id,
+      p_phone_e164: value.phone_e164,
+      p_phone_tail: value.phone_tail,
+      p_phone_raw: value.phone_raw,
+      p_email_lower: value.email_lower,
+      p_name: value.name,
+    });
+    if (error) throw error;
 
-    let entitlementId: string;
-    let accessToken: string;
-    let created: boolean;
+    const row = (Array.isArray(data) ? data[0] : data) as UpsertRow | undefined;
+    if (!row) throw new Error('upsert_assessment_entitlement returned no row');
 
-    if (existing) {
-      const { error } = await supa
-        .from('assessment_entitlements')
-        .update(mutableFields(value, cohort.cohort_id))
-        .eq('id', existing.id);
-      if (error) throw error;
-      entitlementId = existing.id;
-      accessToken = existing.access_token;
-      created = false;
-    } else {
-      const token = generateAccessToken();
-      const { data, error } = await supa
-        .from('assessment_entitlements')
-        .insert({
-          ghl_contact_id: value.ghl_contact_id,
-          access_token: token,
-          ...mutableFields(value, cohort.cohort_id),
-        })
-        .select('id, access_token')
-        .single();
-
-      if (error) {
-        // 并发重复触发:另一个请求刚插进去。退化成更新,不新建 token
-        if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
-          const { data: raced, error: raceError } = await supa
-            .from('assessment_entitlements')
-            .select('id, access_token')
-            .eq('ghl_contact_id', value.ghl_contact_id)
-            .single();
-          if (raceError) throw raceError;
-          const { error: updError } = await supa
-            .from('assessment_entitlements')
-            .update(mutableFields(value, cohort.cohort_id))
-            .eq('id', raced.id);
-          if (updError) throw updError;
-          entitlementId = raced.id;
-          accessToken = raced.access_token;
-          created = false;
-        } else {
-          throw error;
-        }
-      } else {
-        entitlementId = data.id;
-        accessToken = data.access_token;
-        created = true;
-      }
-    }
+    const entitlementId = row.entitlement_id;
+    const accessToken = row.token;
+    const created = row.was_created;
 
     const allWarnings = [...warnings, ...(cohort.warning ? [cohort.warning] : [])];
     if (allWarnings.length) {

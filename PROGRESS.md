@@ -1435,18 +1435,28 @@ npm run check:cross    36 行逐字相同  (需要 deno,不进构建链)
 | 邮箱 | `trim().toLowerCase()` → `email_lower` |
 | token | 32 字节 CSPRNG → base64url 无填充(43 字符)。**只在首次创建时生成一次** |
 
-### 为什么没用单条 upsert
+### 写入走 DB function,原子无竞态
 
-`upsert` 会把提供的所有列一起覆盖,而这几列**不能**被覆盖:
+supabase-js 的 `.upsert()` 会把提供的所有列一起覆盖,而这几列**不能**被覆盖:`access_token`(重发不轮换)、`status`(不能把已完成的人打回 `pending`)、`first_login_at` / `completed_at` / `link_sent_at`、`access_revoked_at`(作废是 Admin 的决定)。
 
-- `access_token` —— 重发不轮换,老链接必须继续有效
-- `status` —— 重复触发不能把一个已完成的人打回 `pending`
-- `first_login_at` / `completed_at` / `link_sent_at` —— 不能被抹掉
-- `access_revoked_at` —— 作废是 Admin 的决定,webhook 无权撤销
+第一版因此走了「查 → 有则只更新可变列,无则插入」+ 唯一键冲突码 `23505` 兜底。那是**正确的补救,但不是「不会发生」** —— GHL 重复触发是常态(网络重试、workflow 配错、手动重跑),那条补救路径会被反复走,而且冲突后还要再查一次才能拿到 token 返回,分支变多。
 
-所以走「查 → 有则只更新可变列,无则插入」,并用唯一键冲突码 `23505` 兜住并发重复触发(两个请求同时插同一个 contact,后到的退化成更新,不生成新 token)。
+改成一条 DB function:[`20260731000300_upsert_entitlement_fn.sql`](supabase/migrations/20260731000300_upsert_entitlement_fn.sql)
 
-> 更干净的做法是一条 `insert ... on conflict (ghl_contact_id) do update set <可变列>`,原子且无竞态。但那要么需要 raw SQL(supabase-js 给不了),要么需要一个 DB function —— 而 DB function 得走 migration,要你先批。**当前实现是正确的**(竞态有兜底),想换成原子版本说一声,我出 migration 给你看。
+| | 列 |
+|---|---|
+| `do update set` **会**覆盖 | `cohort_id`、`phone_e164`、`phone_tail`、`phone_raw`、`email_lower`、`name` |
+| 刻意**不**覆盖 | `access_token`、`status`、`first_login_at`、`completed_at`、`link_sent_at`、`access_revoked_at`、`created_at`、`updated_at`(由 trigger 维护) |
+
+三个实现细节:
+
+- `was_created` 由 `xmax::text::bigint = 0` 判定 —— 比比较 `created_at`/`updated_at` 可靠。`xid` 不能直接和整数比,所以经 text 转
+- **`security invoker`(默认),不用 definer** —— 调用方是 service_role,本就绕过 RLS,不需要提权。`search_path` 仍然钉住
+- **收回了 PUBLIC 的 execute 权限**。函数默认对 PUBLIC 授予 execute,而 anon / authenticated 继承 PUBLIC —— 不收回的话它们能通过 REST 的 `/rpc` 端点调到这个函数。虽然 invoker 模式下 RLS 仍会拦住写入(9 张表零 policy),但多一个可达的写入入口本身就不该存在
+
+**副产品:删掉了一份复制品。** 可变列白名单原来同时存在于 `webhookPayload.ts` 的 `MUTABLE_ON_CONFLICT` 常量和 SQL 里,靠人同步。现在只存在于 `do update set` —— 那也是它唯一该待的地方,改错一列会立刻在数据上体现,而不是等某个分支被走到。
+
+> ⚠️ **部署顺序有依赖**:必须先 `supabase db push` 应用这个 migration,**再** `supabase functions deploy`。反过来的话函数会调用一个还不存在的 RPC,每次请求都 500。
 
 ### 为什么不接受 `contact_id` / `contactId` 别名
 
