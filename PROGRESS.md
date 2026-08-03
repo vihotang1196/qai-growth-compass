@@ -1297,13 +1297,67 @@ access_revoked_at = now()  →  生成新 access_token  →  触发重发
 
 列现在就加,比以后迁移便宜。
 
+## ✅ migration 已应用(Supabase,Singapore region)
+
+三个 migration 全部成功,验证结果与设计一致:
+
+| 检查 | 结果 |
+|---|---|
+| 表数量 | 9 |
+| `is_default = true` 的批次 | 1 |
+| `reports` bucket `public` | false |
+| RLS 未开启的表 | 0 |
+
+> Region 说明:原建在孟买,趁库空时删掉重建到新加坡。旧 project ref 作废 —— 我这边全程没拿到过任何 keys,PROGRESS.md 里也只有占位符。
+
+## ✅ 字体资产齐全(CDN 5 个文件,全部 200)
+
+```
+NotoSansSC-Regular.otf              8,331,336 B   fontconfig 兜底层
+NotoSansSC-Regular.subset.woff2     1,165,800 B   排版层
+NotoSansSC-Bold.subset.woff2        1,191,732 B   排版层
+Sora-VF.woff2                          49,436 B   标题拉丁 + 数字
+PlusJakartaSans-VF.woff2               60,548 B   正文拉丁 + 数字
+```
+
+Vercel 已配 3 个变量:`VITE_CDN_FONT_BASE`、`CDN_FONT_BASE`(同值 `https://cdn.qiai.tech/fonts`)、`INTERNAL_FN_SECRET`。
+
 ## 未完成
 
 | 项 | 卡在 |
 |---|---|
-| **migration 执行** | 等批准 SQL + Supabase project ref 与 keys。**一行都没执行** |
-| 字体探针 | 等 CDN URL |
-| Vercel preview | 本次修完再看能否起来 |
+| 字体探针实测 | 合 main → Production 部署后跑 |
+
+## 字体探针的三处加固
+
+**1. secret 走 header,不走 query string**
+
+原来是 `?secret=...` —— 会落进 Vercel 访问日志、浏览器历史和任何中间代理的日志。跟 `GHL_RESEND_WEBHOOK_URL` 同一条标准:是 secret 就别放 URL。改成 `X-Internal-Secret` header,并用 `timingSafeEqual` 定长比较(先 sha256 消除长度差异,避免长度本身泄露信息)。
+
+```bash
+curl -sS -H "X-Internal-Secret: $INTERNAL_FN_SECRET" \
+  "https://compass.qiai.tech/api/font-probe" -o probe.png
+```
+
+**2. 两个 CDN base 的一致性做成了真守卫,不是眼睛对照**
+
+`VITE_CDN_FONT_BASE` 进 bundle、`CDN_FONT_BASE` 在运行时,构建期确实比对不了 —— 但**它们属于同一个部署**,所以探针可以 fetch 自己站点的 HTML 与 JS,把 Vite 烘进去的字面量抠出来程序化比对。
+
+- 比的是**生效值**而不是「环境变量有没有设」:任一侧没设都会回落到代码默认值,而真正要防的是「网页从一个 CDN 取字体、PDF 从另一个取」。只要两边生效值相同就没问题,与各自怎么拿到的无关。
+- 结论进 PNG 第 4 块,同时进响应头 `X-Cdn-Base-Check: match | mismatch | unverified`,不看图也能用脚本消费。
+- **抓不到 bundle 就报 `unverified`,绝不当作通过** —— 拿不出证据就说拿不出,不让抓取失败伪装成一致。
+
+**3. 探针第 2 块现在真的在考兜底层**
+
+`RARE` 的那五个字已由 `scripts/subset-fonts.mjs` 显式排除在 subset 之外,并由该脚本断言「必须不在 subset 内」。所以它们出现在探针里就是真的在考 fontconfig,不会被 subset 顺手满足。这一层保证写进了探针的注释,免得以后有人把它们加回 subset。
+
+## 顺带补上一个盲区:`api/` 一直没有类型检查
+
+`tsconfig.app.json` 只 `include: ["src"]`,所以 `api/` 下的代码**从来没被 `tsc -b` 检查过** —— 错误只会在 Vercel 构建时才暴露。改完探针才发现自己刚写了 200 行没类型检查的生产代码。
+
+新增 `tsconfig.api.json` 并挂进根 `references`。反向验证:往 `api/` 放一个 `const x: number = "..."`,`tsc -b` 报 `error TS2322`,删掉后恢复。
+
+Stage 4 的 `/api/[...path].ts` 代理和 Stage 9 的 `render-pdf` 本来都会落进这个盲区。
 
 ## 验证总览
 
@@ -1312,7 +1366,7 @@ npm run build          (五道门,纯 Node,Vercel 也跑得动)
   ✓ lint:cjk           无硬编码中文
   ✓ check:dim          维度色仅用于填充
   ✓ check:dep-sync     4 个共享文件、2 个 specifier 两侧一致
-  ✓ tsc -b             类型检查通过
+  ✓ tsc -b             类型检查通过(src + api + 构建脚本三个 project)
   ✓ vite build         1674 modules
   ✓ check:bundle       无 secret 泄漏
 
