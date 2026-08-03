@@ -41,7 +41,29 @@
 | 5 | 本地路径确认 `~/qai-growth-compass` | 已 clone |
 | 6 | 新增 D8(GHL 字段映射的持久化位置)、D9(缺字段时的写回行为) | rev3 派生 |
 
-**rev3 → rev4(本轮,Stage 0 定稿)**
+**rev5 — 设计补漏:魔法链接的来源(Stage 3 实施时发现)**
+
+原方案写「到指定时间由 GHL 批量发链接」,但**从头到尾没说 GHL 手上的链接从哪来**。`access_token` 是 32 字节随机值,GHL 猜不出来;`qai_assessment_report_url` 要等 Stage 11 答完题才写回,时间点完全错位 —— 那时候链接早该发出去了。
+
+**这个洞的失败形态是最难查的一种**:数据库记录齐全、`created: true`、日志无异常,但没人收到链接。要等 Stage 4 测登录时才撞上,而那时会先去查登录逻辑,根因却在三个 Stage 之前的 GHL 配置里。
+
+**定稿的契约:**
+
+```
+GHL 付款 workflow → Webhook action → POST /assessment-ghl-webhook
+  ← 响应体 { "magic_link": "https://compass.qiai.tech/?t=<43 字符 token>", ... }
+  → GHL 把响应字段 magic_link 映射进自定义字段 qai_assessment_magic_link
+  → 到指定时间,发链接的 workflow 从该字段取值发出
+```
+
+- 初始链接**只能**走这条响应映射。Stage 3 因此不需要引入 GHL API 依赖
+- `qai_assessment_report_url`(Stage 11 写回)与它是两个不同时间点的东西,**不能互相替代**
+- 重复触发返回同一个 `magic_link`(token 不轮换),GHL 重复映射同一个值,幂等
+- 需要在 GHL 建的字段:`qai_assessment_magic_link`(单行文本)—— 这是 Stage 3 唯一需要提前建的自定义字段
+
+配置步骤见 [`docs/ghl-setup.md`](docs/ghl-setup.md) 的「Response —— 这一步必须配」。
+
+**rev3 → rev4(Stage 0 定稿)**
 
 | # | 变更 | 来源 |
 |---|---|---|
@@ -984,6 +1006,8 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | 分支策略 | **Stage 0–1 直接提交 main**(新仓库、无协作者、未部署,开分支只是仪式)。**Stage 2 起一个 Stage 一条分支**,首条 `stage-2-schema-phone` —— 那时 Vercel 已接上,分支能出 preview 部署,这才是分支值钱的地方 |
 | Push | **每次 push 都要明说**。一次「push」授权只覆盖当次那批 commit,不是长期通行证 |
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
+| **守卫的覆盖边界会被代码越过** | 已经栽了三次:`api/` 目录建了但没进 `tsc -b`;`check:dep-sync` 只扫 `_shared/` 而函数本体在外面;Deno 侧代码一直没 `deno check`。**每加一个新运行时或新目录,就多一个没人检查的角落。** 加目录 / 加运行时时先问:现有守卫的边界是手写的吗?会不会把它落在外面 |
+| 验证分两层 | `npm run build` 是**纯 Node** 的五道门,Vercel 也跑得动。需要 deno 的三项(`check:deno` / `test:deno` / `check:cross`)进不了构建链。本地与 CI 用 `npm run verify` 一次跑全部 |
 | **配置跟着实现走** | 不给尚未存在的文件写配置。提前的配置只有两种下场:**直接炸**(Vercel 对 `functions` 里不存在的函数硬失败)或**静默腐烂**(import map 里没人用的条目不受任何校验,可以漂到别的版本而无人发现)。也不要为了让部署过去建空占位文件 —— 占位函数一部署就是一个真实可访问的端点,而且下个 Stage 会接手一个来路不明的文件 |
 | 依赖审计 | 每个 Stage 收尾跑 `npm audit --omit=dev`,只看生产依赖。devDependencies 的漏洞不进产物,不管。**不跑 `npm audit fix --force`** —— 会拉高大版本把验过的构建链弄坏 |
 | seed 数据的归属 | **功能依赖进 migration,环境配置手动。** 判断标准是「换一个环境重建,代码还能不能正常跑」。没有默认 cohort 代码就跑不对 → migration;没有 admin 只是没人能登录 → 手动 |
