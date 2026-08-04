@@ -24,6 +24,7 @@ import { magicLink } from '../_shared/token.ts';
 import { hashIdentifier } from '../_shared/identifierHash.ts';
 import { DEFAULT_RATE_LIMIT, evaluateRateLimit, lookbackMs } from '../_shared/rateLimit.ts';
 import { buildResendPayload } from '../_shared/resendPayload.ts';
+import { triggerAccepted } from '../_shared/ghlTriggerResponse.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 /** 同一记录的重发间隔 */
@@ -215,18 +216,32 @@ Deno.serve(async (req: Request) => {
           lang,
         });
 
-        // 【非 2xx 只能抓到网络故障与 GHL 宕机,抓不到「trigger 换了 UUID」】
-        // 实测:假 location + 假 UUID 也返回 200 {"status":"Success: test request received"}。
-        // GHL 这个端点不校验 trigger 是否存在。所以 200 不等于消息发出去了,
-        // 别把「日志没报错」当成发送成功的证据。见 docs/ghl-setup.md 3.5。
+        // 【两层判读,分别对应两种不同的故障】
+        //   非 2xx        → 网络故障 / GHL 宕机
+        //   200 但无 id   → trigger 不存在(URL 过期、UUID 变了)。状态码看不出来:
+        //                   假 trigger 也回 200,差别只在响应体有没有 id。
+        //                   见 _shared/ghlTriggerResponse.ts
+        //
+        // 【能证明与不能证明,别混】有 id 只能证明「对面有 workflow 接住了、进了执行
+        // 队列」。**不能**证明消息送达 —— workflow 可能是 Draft、可能中途某个 action
+        // 报错、可能 contact 没有可用号码。要闭环到送达只能靠 workflow 回调,没建。
         const res = await fetch(resendUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+        const resBody = await res.text().catch(() => '');
+
         if (!res.ok) {
           console.error(
-            `GHL resend webhook returned ${res.status} for entitlement ${sendable.id}`,
+            `GHL resend webhook returned ${res.status} for entitlement ${sendable.id}: ` +
+              resBody.slice(0, 200),
+          );
+        } else if (!triggerAccepted(resBody)) {
+          console.error(
+            `GHL accepted the POST but returned no trigger id for entitlement ${sendable.id} — ` +
+              `GHL_RESEND_WEBHOOK_URL is probably stale (trigger deleted or UUID changed). ` +
+              `Nothing was queued. Response: ${resBody.slice(0, 200)}`,
           );
         }
 

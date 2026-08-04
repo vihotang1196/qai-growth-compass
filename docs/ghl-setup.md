@@ -311,7 +311,31 @@ supabase secrets list
 
 **Publish workflow 放在最后** —— 等 `assessment-login-request` 部署好、能真正触发一次之后再 Publish。在那之前保持 Draft,免得样本请求或联调把真消息发出去。
 
-> **trigger 重建会换 UUID。** 如果在 GHL 里删掉重建了 Inbound Webhook trigger,URL 里的 UUID 会变,必须重新 `supabase secrets set`,否则重发会静默失败(POST 到一个不存在的 trigger)。**这个失败形态没有告警** —— 我们只知道 POST 出去了,不知道对面有没有 workflow 接。
+### ✅ 实测:trigger 是否有效,可以从响应体判断
+
+**trigger 重建会换 UUID。** 在 GHL 里删掉重建 Inbound Webhook trigger,URL 里的 UUID 就变了,必须重新 `supabase secrets set`。
+
+好消息是这个失败形态**不是静默的** —— 虽然状态码看不出来:
+
+| | 状态码 | 响应体 |
+|---|---|---|
+| 真 trigger | 200 | `{"status":"Success: request sent to trigger execution server","id":"jgQ3xUHIHauEHadGtRmM"}` |
+| 失效 / 不存在的 trigger | **200** | `{"status":"Success: test request received"}` |
+
+差别是**真 trigger 带一个 `id`**。`assessment-login-request` 据此判读,并在缺 `id` 时打 error 日志明确指向 `GHL_RESEND_WEBHOOK_URL` 过期。
+
+**判据用 `id` 有无,不匹配 `status` 文案** —— 文案是 GHL 的实现细节,改一个字检测就静默失效了;`id` 有无是行为差异(进没进执行队列),更稳。
+
+### 能检测什么、不能检测什么
+
+| | |
+|---|---|
+| ✅ **trigger 存在** | 有 `id` 就说明对面有一个 workflow 接住了、进了执行队列 |
+| ❌ **消息送达** | 检测不到。workflow 可能是 Draft、可能中途某个 action 报错、contact 可能没有可用号码 |
+
+要闭环到「送达」只有一条路:让 workflow 发完之后回调我们一个端点。那是新功能,目前没建。
+
+> 这一节最初写成了「无法检测,失败是静默的」—— 那个结论错在**只测了假 trigger 一个样本**。一个样本只能说明「假的长这样」,证明不了「真假一样」。做「能不能区分 A 和 B」的判断,两边都要有样本。
 
 ### 3.6 安全说明
 
