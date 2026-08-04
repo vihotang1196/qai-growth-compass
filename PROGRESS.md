@@ -1007,7 +1007,7 @@ Stage 0 已定稿。剩余待办均为**你侧的交付物**,不是待裁决的�
 | Push | **每次 push 都要明说**。一次「push」授权只覆盖当次那批 commit,不是长期通行证 |
 | 守卫标准 | 任何守卫类的东西(lint、门禁、校验)必须**反向验证**:证明它会拦,而不是证明它不报错。做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感 |
 | **「能不能区分 A 和 B」必须两边都有样本** | 判断 GHL 无效 trigger 能否检测时,只测了假 trigger、拿到 200 就下了「不能检测」的结论。实际上真 trigger 也回 200,但响应体带一个 `id` —— 差异一直在,只是**手上没有对照样本**。一个样本只能证明「A 长这样」,证明不了「A 和 B 一样」。凡是结论形如「两者无法区分」「没有信号」的,先问:另一边的样本在哪 |
-| **守卫的覆盖边界会被代码越过** | 已经栽了三次:`api/` 目录建了但没进 `tsc -b`;`check:dep-sync` 只扫 `_shared/` 而函数本体在外面;Deno 侧代码一直没 `deno check`。**每加一个新运行时或新目录,就多一个没人检查的角落。** 加目录 / 加运行时时先问:现有守卫的边界是手写的吗?会不会把它落在外面 |
+| **守卫的覆盖边界会被代码越过** | 已经栽了**五次**:`api/` 目录建了但没进 `tsc -b`;`check:dep-sync` 只扫 `_shared/` 而函数本体在外面;Deno 侧代码一直没 `deno check`;`deploy` 两条守卫都不经过;**环境变量的需求在代码里,而配置在人的记忆里**(Stage 4 端到端时 `LOGIN_HASH_PEPPER` 与 `SESSION_SECRET` 两次 500,都是 Stage 1 清单里标着「以后才用」的变量,而没有任何东西提醒去补)。**每加一个新运行时、新目录、新配置维度,就多一个没人检查的角落。** 加之前先问:现有守卫的边界是手写的吗?会不会把它落在外面 |
 | 验证分两层 | `npm run build` 是**纯 Node** 的五道门,Vercel 也跑得动。需要 deno 的三项(`check:deno` / `test:deno` / `check:cross`)进不了构建链。本地用 `npm run verify` 一次跑全部 |
 | ⚠️ **已知开着的洞:`verify` 靠人记得跑** | Vercel 只跑 `npm run build`,所以需要 deno 的三项**在 CI 上永远不会执行**。这跟我们拆掉的那些手写清单是同一类问题 —— 一个依赖人自觉的检查。当前单人开发、本地跑 verify 够用,**所以现在不做**。触发条件:①加人 ②开始出现漏跑。到那时上 GitHub Actions 跑 `npm run verify`(runner 装 deno 即可)。记在这里是为了知道它开着,而不是假装它不存在 |
 | **三条执行路径,守卫覆盖各不相同** | ① Vercel 部署 → 只跑 `npm run build`(五道门)。② 本地开发 → `npm run verify`(五道门 + deno 三项)。③ **`supabase functions deploy` / `db push` → 本地 CLI 直连 Supabase,两边都不经过**。第三条是 Stage 3 才暴露的:deploy 失败而 `check:dep-sync` 是绿的。已把 deploy 收进 `npm run deploy:functions`(= `verify && supabase functions deploy`),让它**必须**经过守卫,而不是靠人记得先跑 |

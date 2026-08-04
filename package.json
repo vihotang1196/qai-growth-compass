@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run lint:cjk && npm run check:dim && npm run check:dep-sync && tsc -b && vite build && npm run check:bundle",
+    "build": "npm run lint:cjk && npm run check:dim && npm run check:dep-sync && npm run check:env && tsc -b && vite build && npm run check:bundle",
     "build:ci": "tsc -b && vite build",
     "preview": "vite preview",
     "verify": "npm run build && npm test && npm run check:deno && npm run test:deno && npm run check:cross",
-    "deploy:functions": "npm run verify && supabase functions deploy",
+    "deploy:functions": "npm run verify && node scripts/check-env.mjs --print && supabase functions deploy",
     "lint": "eslint .",
     "lint:cjk": "eslint --config eslint.cjk.config.js \"src/**/*.{ts,tsx}\"",
     "check:bundle": "node scripts/check-bundle-secrets.mjs",
@@ -20,7 +20,8 @@
     "test:watch": "vitest",
     "test:deno": "cd supabase/functions && deno task test",
     "check:deno": "cd supabase/functions && deno task check",
-    "fonts:subset": "node scripts/subset-fonts.mjs"
+    "fonts:subset": "node scripts/subset-fonts.mjs",
+    "check:env": "node scripts/check-env.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",

@@ -25,6 +25,7 @@ import { hashIdentifier } from '../_shared/identifierHash.ts';
 import { DEFAULT_RATE_LIMIT, evaluateRateLimit, lookbackMs } from '../_shared/rateLimit.ts';
 import { buildResendPayload } from '../_shared/resendPayload.ts';
 import { triggerAccepted } from '../_shared/ghlTriggerResponse.ts';
+import { readEnv } from '../_shared/env.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 /** 同一记录的重发间隔 */
@@ -127,13 +128,15 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'method_not_allowed', expected: 'POST' }, 405);
   }
 
-  const pepper = Deno.env.get('LOGIN_HASH_PEPPER');
-  const resendUrl = Deno.env.get('GHL_RESEND_WEBHOOK_URL');
-  const appBaseUrl = Deno.env.get('APP_BASE_URL');
-  if (!pepper || !resendUrl || !appBaseUrl) {
-    console.error('missing LOGIN_HASH_PEPPER / GHL_RESEND_WEBHOOK_URL / APP_BASE_URL');
+  // 只列真正缺失的那些 —— 三个一起列的话排查时还得逐个比对
+  const env = readEnv(['LOGIN_HASH_PEPPER', 'GHL_RESEND_WEBHOOK_URL', 'APP_BASE_URL'] as const);
+  if (env.missing.length) {
+    console.error(`server_misconfigured: missing ${env.missing.join(', ')}`);
     return json({ error: 'server_misconfigured' }, 500);
   }
+  const pepper = env.values.LOGIN_HASH_PEPPER;
+  const resendUrl = env.values.GHL_RESEND_WEBHOOK_URL;
+  const appBaseUrl = env.values.APP_BASE_URL;
 
   let body: Record<string, unknown>;
   try {
