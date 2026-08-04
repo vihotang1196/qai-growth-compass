@@ -1,27 +1,25 @@
 /**
- * 环境变量读取 + 缺失报告。
+ * 缺失环境变量的报告。
  *
- * 【为什么要这个小工具】原来的写法是:
+ * 【为什么不是 readEnv(['A','B']) 那种写法】上一版是那样的,而它让刚做好的
+ * `check:env` 瞎了三个变量 —— 那个守卫扫的是 `Deno.env.get('字面量')`,
+ * 而名字被包进数组参数之后,静态扫描看不见。
  *
- *   if (!a || !b || !c) console.error('missing A / B / C')
+ * 修法不是让守卫去认 `readEnv([...])` —— 那是让守卫追代码的写法,
+ * 下次有人写出第四种读法它又瞎了。修法是让读取点回到语言原生写法:
  *
- * 三个变量一起列,不指明缺的是哪个。实际排查时(Stage 4 端到端)这条日志出现了两次,
- * 两次都得靠人逐个去 `supabase secrets list` 里比对 —— 而信息本来就在函数手上。
+ *   const env = {
+ *     SESSION_SECRET: Deno.env.get('SESSION_SECRET'),
+ *     APP_BASE_URL:   Deno.env.get('APP_BASE_URL'),
+ *   };
+ *   const missing = missingKeys(env);
  *
- * 用这个函数之后,日志里只出现真正缺的那些名字。
+ * 每个变量名仍然以字面量形式出现在 `Deno.env.get()` 里,守卫看得见;
+ * 而 `missing` 从对象的键推导,所以日志里仍然只列真正缺的那些。
+ * 名字在同一行出现两次是有意的代价 —— 写歪了肉眼就能看出来。
  */
-export interface EnvResult<K extends string> {
-  values: Record<K, string>;
-  missing: K[];
-}
-
-export function readEnv<K extends string>(names: readonly K[]): EnvResult<K> {
-  const values = {} as Record<K, string>;
-  const missing: K[] = [];
-  for (const name of names) {
-    const v = Deno.env.get(name);
-    if (v) values[name] = v;
-    else missing.push(name);
-  }
-  return { values, missing };
+export function missingKeys(env: Record<string, string | undefined>): string[] {
+  return Object.entries(env)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
 }

@@ -39,12 +39,21 @@ const HOP_BY_HOP = new Set([
 ]);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const base = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-  if (!base || !anonKey) {
-    console.error('missing SUPABASE_URL or SUPABASE_ANON_KEY');
+  // 变量名以字面量出现,check:env 才扫得到;missing 从键推导,
+  // 所以日志里只列真正缺的那些 —— 两个一起列的话排查时还得逐个比对
+  const env = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+  };
+  const missing = Object.entries(env)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  if (missing.length) {
+    console.error(`server_misconfigured: missing ${missing.join(', ')} (Vercel env)`);
     return res.status(500).json({ error: 'server_misconfigured' });
   }
+  const base = env.SUPABASE_URL!;
+  const anonKey = env.SUPABASE_ANON_KEY!;
 
   const raw = req.query.path;
   const segments = Array.isArray(raw) ? raw : raw ? [raw] : [];

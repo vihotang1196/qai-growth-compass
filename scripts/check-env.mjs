@@ -18,6 +18,7 @@
  * 【能做到与做不到】
  *   ✅ 列出代码实际读取的每一个变量,以及它必须配在哪一侧
  *   ✅ 强制:Vercel 与前端需要的变量必须出现在 .env.example 里(那是给人抄的模板)
+ *   ✅ 强制:不允许出现【静态扫不到的读取方式】,见下方 DYNAMIC_READS
  *   ❌ 无法验证 Supabase secrets 上到底配了什么 —— 那需要 Management API 权限。
  *      所以那一部分只做「把清单摆出来」,配没配靠人对一眼。
  */
@@ -33,6 +34,26 @@ const PLATFORM_INJECTED = new Set([
   'SUPABASE_SERVICE_ROLE_KEY',
   'SUPABASE_DB_URL',
 ]);
+
+/**
+ * 静态扫不到的读取方式 —— 出现即失败。
+ *
+ * 【为什么需要这一条】上一版有个 readEnv(['A','B','C']) 包装,把变量名放进数组参数,
+ * 于是这个脚本瞎了三个变量,而清单看起来是完整的 ——
+ * 「不完整但看起来完整的清单」比没有清单更糟:没有清单人会自己去翻代码,
+ * 有清单就不翻了。
+ *
+ * 关键在于:任何把变量名当数据传的包装,最终都必须调用 Deno.env.get(某个变量) ——
+ * 那是动态读取。所以检测动态读取能通吃所有包装写法,不需要这个脚本去认识
+ * readEnv、getConfig 或者以后任何第 N 种命名。
+ *
+ * 这就是「不让守卫追代码,而是让代码不长到守卫外面」的具体做法。
+ */
+const DYNAMIC_READS = [
+  [/Deno\.env\.get\(\s*(?!['"])/g, "Deno.env.get(变量) —— 变量名不是字面量,静态扫不到"],
+  [/Deno\.env\.toObject\s*\(/g, 'Deno.env.toObject() —— 整体读取,看不出用了哪些'],
+  [/process\.env\[\s*(?!['"])/g, 'process.env[变量] —— 键不是字面量,静态扫不到'],
+];
 
 /** Vite 自带的,不是我们的配置 */
 const VITE_BUILTINS = new Set(['DEV', 'PROD', 'MODE', 'BASE_URL', 'SSR']);
@@ -84,6 +105,32 @@ const TARGETS = [
   },
 ];
 
+/**
+ * 剥掉注释再扫。
+ *
+ * 【为什么必须剥】不剥的话:
+ *   1. 注释里的示例代码会被当成真读取 —— 实测撞到过:
+ *      `// 变量名以字面量出现在 Deno.env.get() 里` 被判成动态读取
+ *   2. 注释掉的旧变量会留在清单里,而它其实已经不需要配了
+ *
+ * 【为什么不剥行内 // 】字符串里的 URL 含 `//`(如 https://cdn.qiai.tech/),
+ * 从 `//` 剥到行尾会把代码切坏。所以只剥整行注释与块注释 ——
+ * 我们的示例代码都写在那两种里面。
+ */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return !t.startsWith('//') && !t.startsWith('*');
+    })
+    .join('\n');
+}
+
+/** 检查器自身:DYNAMIC_READS 的模式定义会匹配到自己,不是真的读环境变量 */
+const SELF = 'scripts/check-env.mjs';
+
 function walk(dir, exts) {
   const out = [];
   let entries;
@@ -124,7 +171,7 @@ function collect(target) {
   for (const file of files) {
     let src;
     try {
-      src = readFileSync(file, 'utf8');
+      src = stripComments(readFileSync(file, 'utf8'));
     } catch {
       continue;
     }
@@ -164,6 +211,33 @@ function envExampleKeys() {
 
 const documented = envExampleKeys();
 const errors = [];
+
+// ── 先查有没有静态扫不到的读取方式 ──────────────────────────────
+for (const target of TARGETS) {
+  const files = [
+    ...(target.roots ?? []).flatMap((r) => walk(r, target.exts)),
+    ...(target.files ?? []),
+  ];
+  for (const file of files) {
+    if (file === SELF) continue;
+    let src;
+    try {
+      src = stripComments(readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    for (const [re, why] of DYNAMIC_READS) {
+      re.lastIndex = 0;
+      if (re.test(src)) {
+        errors.push(
+          `${file}: ${why}。改成 Deno.env.get('字面量') / process.env.字面量 —— ` +
+            `否则这份清单会漏掉那些变量,而漏掉的清单比没有清单更糟。`,
+        );
+      }
+    }
+  }
+}
+
 const report = [];
 let total = 0;
 

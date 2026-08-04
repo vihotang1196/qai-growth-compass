@@ -22,12 +22,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
-  const base = process.env.SUPABASE_URL;
-  const internal = process.env.INTERNAL_FN_SECRET;
-  if (!base || !internal) {
-    console.error('missing SUPABASE_URL or INTERNAL_FN_SECRET');
+  const env = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    INTERNAL_FN_SECRET: process.env.INTERNAL_FN_SECRET,
+  };
+  const missing = Object.entries(env)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  if (missing.length) {
+    console.error(`server_misconfigured: missing ${missing.join(', ')} (Vercel env)`);
     return res.status(500).json({ error: 'server_misconfigured' });
   }
+  const base = env.SUPABASE_URL!;
+  const internal = env.INTERNAL_FN_SECRET!;
 
   try {
     const upstream = await fetch(
