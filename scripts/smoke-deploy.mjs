@@ -25,6 +25,13 @@
  * 并消耗 IP 限流额度。改用 GET 换 405,同样能证明代理解析出了正确的函数名。
  */
 
+/**
+ * 我们自己签发的 session cookie 名。
+ * 必须与 supabase/functions/_shared/session.ts 的 SESSION_COOKIE
+ * 以及 api/[...path].ts 的 FORWARDED_COOKIES 一致。
+ */
+const SESSION_COOKIE = 'compass_session';
+
 const args = process.argv.slice(2);
 const baseIdx = args.indexOf('--base');
 const base = (baseIdx >= 0 ? args[baseIdx + 1] : process.env.APP_BASE_URL ?? '')?.replace(/\/$/, '');
@@ -78,9 +85,19 @@ const checks = [
       if (parsed.target !== '/expired?lang=zh') {
         return `期望 target=/expired?lang=zh,实际 ${JSON.stringify(parsed)}`;
       }
-      // 无效 token 绝不能下 session cookie
-      const setCookie = res.headers.getSetCookie?.() ?? [];
-      if (setCookie.length) return `无效 token 却下了 cookie:${setCookie.join(' | ')}`;
+      /**
+       * 【按 cookie 名判定,不按有无判定】
+       *
+       * 第一版写的是「有任何 Set-Cookie 就算失败」,结果被 Supabase 边缘层的
+       * `__cf_bm`(Cloudflare bot 管理)撞红 —— 那跟我们的 session 毫无关系。
+       *
+       * 断言写宽了会产出假红,而假红比没有断言更糟:它会让人开始怀疑整个 smoke,
+       * 然后跳过它。真正的不变量只有一条 —— 无效 token 不能创建 session。
+       */
+      const ours = (res.headers.getSetCookie?.() ?? []).filter((c) =>
+        c.trimStart().startsWith(`${SESSION_COOKIE}=`),
+      );
+      if (ours.length) return `无效 token 却签发了 session:${ours.join(' | ')}`;
       return null;
     },
   },

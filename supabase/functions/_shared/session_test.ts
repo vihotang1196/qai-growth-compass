@@ -76,6 +76,30 @@ Deno.test('清除 cookie 用 Max-Age=0 且保留同样的属性', () => {
   assertEquals(header.includes('Secure'), true);
 });
 
+/**
+ * cookie 名在三个运行时里各有一份字面量,跨运行时没法共享模块:
+ *   supabase/functions/_shared/session.ts   ← 真相源(本文件测的这个)
+ *   api/[...path].ts                        ← Vercel 代理的透传白名单
+ *   scripts/smoke-deploy.mjs                ← 部署后断言
+ *
+ * 三者漂移的后果不对称:代理写错 → 登录立刻断(响的);
+ * **smoke 写错 → 断言盯着一个不存在的 cookie 名,永远绿(静默的)**。
+ * 有一处失败是静默的,就必须有守卫。
+ *
+ * 放在这里而不是 smoke 脚本里,是为了让它进 `npm run verify` —— 每次构建都跑,
+ * 而不是等到部署那一刻。
+ */
+Deno.test('cookie 名在代理与 smoke 脚本里保持一致', async () => {
+  for (const path of ['../../../api/[...path].ts', '../../../scripts/smoke-deploy.mjs']) {
+    const src = await Deno.readTextFile(new URL(path, import.meta.url));
+    assertEquals(
+      src.includes(`'${SESSION_COOKIE}'`),
+      true,
+      `${path} 里没有 '${SESSION_COOKIE}' 这个字面量 —— 三处名字漂移了`,
+    );
+  }
+});
+
 Deno.test('从 Cookie 头里挑出自己那一个', () => {
   const mk = (cookie: string) => new Request('https://x.test', { headers: { Cookie: cookie } });
   assertEquals(readSessionCookie(mk(`${SESSION_COOKIE}=v1`)), 'v1');

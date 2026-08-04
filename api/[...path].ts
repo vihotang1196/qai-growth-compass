@@ -25,6 +25,38 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  */
 const ALLOWED = new Set(['assessment-auth', 'assessment-login-request']);
 
+/**
+ * 允许透传给浏览器的 cookie 名 —— 白名单,只放我们自己签发的。
+ *
+ * 【为什么要过滤】上游是 Supabase,它的边缘层(Cloudflare)会带自己的 cookie,
+ * 实测见到过 `__cf_bm; Domain=supabase.co`。那一条其实无害:浏览器收到它是从
+ * compass.qiai.tech 发出的,而 RFC 6265 不允许给自己不属于的域设 cookie,
+ * 浏览器会直接丢弃。
+ *
+ * 真正要防的是另一种:**上游设一个不带 Domain 属性的 cookie** —— 那是 host-only,
+ * 浏览器会把它记在 compass.qiai.tech 上,等于我们替第三方在自己的第一方域上
+ * 种了一个 cookie。那是不可控的面。
+ *
+ * 而且不过滤已经产生过一次假信号:smoke 里「无效 token 不该下 cookie」那条断言
+ * 被 __cf_bm 撞红。以后有人在 DevTools 里看到不认识的 cookie 也会花同样的时间。
+ *
+ * 【这是一条手写清单,代价是自觉的】新加我们自己的 cookie 时要记得加进来。
+ * 但这条清单的失败形态是「我新加的 cookie 没到浏览器」——开发时立刻会撞到,是响的;
+ * 而不过滤的失败形态是静默的。所以这个方向的取舍值得。
+ * 漏加时看 `proxy dropped upstream cookies` 那条日志,它会直接点名。
+ *
+ * 名字必须与 supabase/functions/_shared/session.ts 的 SESSION_COOKIE 一致。
+ * 不 import 是因为那是 Deno 侧的模块,跨运行时引一个常量会把
+ * check:dep-sync 的扫描范围搅乱,不值得。
+ */
+const FORWARDED_COOKIES = new Set(['compass_session']);
+
+/** 从 Set-Cookie 那一整行里取出 cookie 名 */
+function cookieName(setCookie: string): string {
+  const eq = setCookie.indexOf('=');
+  return (eq > 0 ? setCookie.slice(0, eq) : setCookie).trim();
+}
+
 const HOP_BY_HOP = new Set([
   'connection',
   'keep-alive',
@@ -119,9 +151,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const upstreamRes = await fetch(upstream, { method: req.method, headers, body });
 
-    // Set-Cookie 可能有多条,必须逐条透传 —— 合并成一条会让浏览器整条丢弃
+    // Set-Cookie 可能有多条,必须逐条透传 —— 合并成一条会让浏览器整条丢弃。
+    // 但只透传【我们自己签发的】那些,见 FORWARDED_COOKIES。
     const setCookies = upstreamRes.headers.getSetCookie?.() ?? [];
-    if (setCookies.length) res.setHeader('Set-Cookie', setCookies);
+    const kept = setCookies.filter((c) => FORWARDED_COOKIES.has(cookieName(c)));
+    const dropped = setCookies.filter((c) => !FORWARDED_COOKIES.has(cookieName(c)));
+    if (kept.length) res.setHeader('Set-Cookie', kept);
+    if (dropped.length) {
+      // 只记名字不记值 —— 值可能是敏感的。
+      // 这条日志的用途:哪天我们自己新加了一个 cookie 却忘了加进白名单,
+      // 症状会是「cookie 没到浏览器」,而这里会直接说出被丢掉的是谁
+      console.log(`proxy dropped upstream cookies: ${dropped.map(cookieName).join(', ')}`);
+    }
 
     upstreamRes.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
