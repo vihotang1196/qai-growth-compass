@@ -184,17 +184,15 @@ https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
 
 **这个 URL 就是我要的 `GHL_RESEND_WEBHOOK_URL`。** 复制给我。
 
-> ⚠️ **推测,把握不大 —— 以下三条都没有验证过。**
+> ✅ **实测确认(原为推测,已升级):**
 >
-> 第 1 节那个错(以为基础 Webhook action 能做响应映射)说明我对 GHL webhook 界面的模型是不可靠的,而下面这几条出自同一个模型:
+> 1. **必须先打一次样本请求**,字段才会出现在变量选择器里
+> 2. 打完之后变量选择器里会出现一个 **"Inbound Webhook Trigger"** 分组,六个字段与样本**逐字对应**:Contact Id / Magic Link / Name / Phone / Email / Lang
+> 3. **没有多包一层** —— 直接 `{{inboundWebhookRequest.magic_link}}` 就能取到,不是 `...request.data.magic_link`
 >
-> 1. Inbound Webhook trigger 要先收到一次样本请求,字段才能在后续 action 里被选到
-> 2. 打样本时先别 Publish,否则会真发消息出去
-> 3. `{{inboundWebhookRequest.<字段>}}` 能直接取到 payload 的根字段
+> 第 3 条与 Custom Webhook 的行为**不一致**:那边响应被包成 `{"status":200,"data":{...}}` 且 `response` 指向 `data` 层,这边 payload 没有被包。**GHL 在这两处的解析规则不同,别互相类推。**
 >
-> **第 3 条最可疑。** Custom Webhook 那边 GHL 把响应包成了 `{"status":200,"data":{...}}`,`response` 实际指向 `data` 层 —— Inbound Webhook 完全可能也在 payload 外面包一层,那 `{{inboundWebhookRequest.magic_link}}` 就取不到,得换路径。**配的时候先用样本请求确认变量到底解析成什么**,对不上就回来更新本文档。
->
-> 如果它确实显示「等待第一个请求」,用下面的 curl 打一发样本:
+> 先用下面的 curl 打一发样本:
 >
 > ```bash
 > curl -X POST '<你的 Inbound Webhook URL>' \
@@ -228,16 +226,60 @@ https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
 |---|---|---|
 | `contact_id` | ✅ 一定有 | 在 workflow 里定位 contact。**这是唯一可靠的收件人来源** |
 | `magic_link` | ✅ 一定有 | 消息正文里的链接 |
-| `name` | ❌ 可能 null | 称呼。**必须给它准备兜底**,见下 |
-| `phone` | ❌ 可能 null | 仅供参考,发送对象请用 contact 本身的号码 |
+| `name` | ❌ 可能 null | 称呼。**必须给它准备兜底**,见下。**不要映射进 Create Contact**(3.4.1) |
+| `phone` | ❌ 可能 null | Create Contact 的匹配键之一。**映射它有覆盖风险,见 3.4.1** |
 | `email` | ❌ 可能 null | 同上 |
+
+> **值为 null 的键会被整个省掉,而不是送一个显式 `null`。** 例如只有邮箱的学员,payload 里根本不会出现 `phone` 这个键。理由见 3.4.1 —— 这是为了给 GHL 的 upsert 留出「不改」的可能。
 | `lang` | ✅ 一定有 | `zh` 或 `en`,用来分支选模板 |
 
-### 3.4 Action:双通道发送
+### 3.4 Action 结构 —— ✅ 实测:必须先有 Create Contact
+
+```
+Inbound Webhook Trigger
+  → Create Contact        ← 少了这一步,后面两个 action 挂不上收件人
+  → Send Email
+  → Send WhatsApp / SMS
+```
+
+**为什么必须有 Create Contact**:Inbound Webhook 是外部触发,workflow **没有 contact 上下文**。`Send Email` / `Send WhatsApp` 找不到收件人。Create Contact 按 phone/email 去重,所以它实际是 upsert,不会产生重复联系人。
+
+> 这一步一开始被判断成「不该有」—— 理由是「这条 workflow 是给已在名单里的人重发链接的,不该创建联系人」。那个理由听起来对,但**它假设了 workflow 有 contact 上下文,而 Inbound Webhook 触发的 workflow 没有**。删掉它会得到一条挂不上人的 workflow,而症状是「消息没发出去」,不会指向缺了这个 action。
+>
+> ⚠️ **推测,值得一试**:我们的 payload 里**一定带 `contact_id`**。如果 GHL 有办法直接按 contact id 绑定 workflow(而不是按 phone/email upsert),那会严格更好 —— 没有 upsert 就没有下面那个覆盖风险。没验证过。
+
+### 3.4.1 ⚠️ Create Contact 的字段映射有数据丢失风险
+
+**Create Contact 是 upsert:映射了哪个字段就覆盖哪个字段。** 而我们 payload 里的 `name` / `phone` / `email` **都可能是 null** —— webhook 入库时就缺。
+
+最坏的情况**不是名字被刷空**:
+
+| 场景 | 后果 | 严重度 |
+|---|---|---|
+| 映射了 `name`,而它是 null | GHL 里原有的名字被刷空 | 称呼变难看,可恢复(GHL 有历史) |
+| **映射了 `phone`,而它是 null**(只有邮箱的学员) | **GHL contact 的手机号被刷空** | **这条 workflow 亲手拆掉自己发 WhatsApp 的通道**。而且我们库里那个号码也是 null,补不回来 |
+| 映射了 `email`,而它是 null(只有号码的学员) | 邮箱被刷空 | 同上,拆掉 Email 通道 |
+
+第二行是关键:**症状会是「WhatsApp 没发出去」,没人会往「重发链接的 Create Contact 映射」这一步查。**
+
+**配置建议**:
+
+1. **不要映射 `name`** —— GHL 匹配到人之后名字本来就在,我们那份反而可能是残缺的
+2. **`phone` 与 `email` 是匹配所必需的,但两者都可能为 null** —— 所以不能简单地「只映射匹配字段」了事,必须先确认 GHL 对 null / 缺失键的行为
+
+**待实测的三种情况**(结果出来后把这一节从「建议」改成「定论」):
+
+| 送什么 | GHL 的行为? |
+|---|---|
+| 字段值是 JSON `null` | 覆盖成空,还是当作「不改」? |
+| 字段值是空字符串 `""` | 同上 |
+| **payload 里干脆没有这个键** | 同上 —— 这个最重要,因为**我们这一侧可以做到**:重发时把 null 字段整个从 payload 里省掉,不送 `null` |
+
+**我们这一侧会配合**:`assessment-login-request` 发出的 payload **会省掉值为 null 的键**,不送显式 `null`。这样如果 GHL 把「缺失键」当作「不改」,风险就被消掉了;如果它连缺失键也覆盖,那就只能靠「不映射任何可能为 null 的字段」,那时 Create Contact 只能靠 `contact_id`(见上方推测)或者接受这个风险。
+
+### 3.4.2 双通道发送
 
 按 Stage 0 定的,**同时发 WhatsApp 与 Email**,两条都发,不做二选一 —— 客户丢了链接时我们不知道他哪个渠道能收到。
-
-> ⚠️ **下面模板里的 `{{inboundWebhookRequest.magic_link}}` 是推测的路径**,见 3.2 的说明。真实路径以样本请求跑出来的结果为准 —— 如果 GHL 也在 payload 外面包了一层,这里要跟着改。**「双通道都发」和「收件人用 contact 自己的渠道」这两条决定不受影响**,只是变量路径可能不同。
 
 **Action 1 — Send WhatsApp / SMS**
 
@@ -260,12 +302,16 @@ Hi {{contact.first_name}},
 
 ### 3.5 建完之后
 
-1. 把 Inbound Webhook 的 URL 给我
-2. 我配进 Supabase:
-   ```bash
-   supabase secrets set GHL_RESEND_WEBHOOK_URL="<那个 URL>"
-   ```
-3. Publish workflow
+```bash
+# URL 是 secret,只进 Supabase 的 Edge Function secrets。
+# 不进 Vercel、不进代码、不进本仓库任何文件。
+supabase secrets set GHL_RESEND_WEBHOOK_URL="<Inbound Webhook 的 URL>"
+supabase secrets list
+```
+
+**Publish workflow 放在最后** —— 等 `assessment-login-request` 部署好、能真正触发一次之后再 Publish。在那之前保持 Draft,免得样本请求或联调把真消息发出去。
+
+> **trigger 重建会换 UUID。** 如果在 GHL 里删掉重建了 Inbound Webhook trigger,URL 里的 UUID 会变,必须重新 `supabase secrets set`,否则重发会静默失败(POST 到一个不存在的 trigger)。**这个失败形态没有告警** —— 我们只知道 POST 出去了,不知道对面有没有 workflow 接。
 
 ### 3.6 安全说明
 
