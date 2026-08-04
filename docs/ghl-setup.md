@@ -226,12 +226,12 @@ https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
 |---|---|---|
 | `contact_id` | ✅ 一定有 | 在 workflow 里定位 contact。**这是唯一可靠的收件人来源** |
 | `magic_link` | ✅ 一定有 | 消息正文里的链接 |
-| `name` | ❌ 可能 null | 称呼。**必须给它准备兜底**,见下。**不要映射进 Create Contact**(3.4.1) |
-| `phone` | ❌ 可能 null | Create Contact 的匹配键之一。**映射它有覆盖风险,见 3.4.1** |
-| `email` | ❌ 可能 null | 同上 |
-
-> **值为 null 的键会被整个省掉,而不是送一个显式 `null`。** 例如只有邮箱的学员,payload 里根本不会出现 `phone` 这个键。理由见 3.4.1 —— 这是为了给 GHL 的 upsert 留出「不改」的可能。
+| `name` | ⚠️ 可能没有这个键 | 称呼。**必须给它准备兜底**,见下。建议不映射进 Create Contact(3.4.1) |
+| `phone` | ⚠️ 可能没有这个键 | Create Contact 的匹配键之一 |
+| `email` | ⚠️ 可能没有这个键 | 同上 |
 | `lang` | ✅ 一定有 | `zh` 或 `en`,用来分支选模板 |
+
+> **没有值的字段是「这个键不出现」,不是「键在但值为 `null`」。** 例如只有邮箱的学员,payload 里根本不会有 `phone` 这个键。GHL 遇到编译不出值的字段会整个跳过、不写空值 —— 实测确认,见 3.4.1。
 
 ### 3.4 Action 结构 —— ✅ 实测:必须先有 Create Contact
 
@@ -248,34 +248,42 @@ Inbound Webhook Trigger
 >
 > ⚠️ **推测,值得一试**:我们的 payload 里**一定带 `contact_id`**。如果 GHL 有办法直接按 contact id 绑定 workflow(而不是按 phone/email upsert),那会严格更好 —— 没有 upsert 就没有下面那个覆盖风险。没验证过。
 
-### 3.4.1 ⚠️ Create Contact 的字段映射有数据丢失风险
+### 3.4.1 ✅ 实测:缺失键不会覆盖,风险不存在
 
-**Create Contact 是 upsert:映射了哪个字段就覆盖哪个字段。** 而我们 payload 里的 `name` / `phone` / `email` **都可能是 null** —— webhook 入库时就缺。
+**Create Contact 是 upsert,映射了哪个字段就覆盖哪个字段** —— 而我们 payload 里的 `name` / `phone` / `email` 都可能没有(webhook 入库时就缺)。当时担心的最坏情况是:
 
-最坏的情况**不是名字被刷空**:
+> 给一个只有邮箱的学员重发链接 → `phone` 被写空 → **这条 workflow 亲手拆掉自己发 WhatsApp 的通道**。症状是「WhatsApp 没发出去」,没人会往这一步查,而且我们库里那个号码也是 null,补不回来。
 
-| 场景 | 后果 | 严重度 |
-|---|---|---|
-| 映射了 `name`,而它是 null | GHL 里原有的名字被刷空 | 称呼变难看,可恢复(GHL 有历史) |
-| **映射了 `phone`,而它是 null**(只有邮箱的学员) | **GHL contact 的手机号被刷空** | **这条 workflow 亲手拆掉自己发 WhatsApp 的通道**。而且我们库里那个号码也是 null,补不回来 |
-| 映射了 `email`,而它是 null(只有号码的学员) | 邮箱被刷空 | 同上,拆掉 Email 通道 |
+**实测证明这个风险不存在。** GHL 执行日志原文:
 
-第二行是关键:**症状会是「WhatsApp 没发出去」,没人会往「重发链接的 Create Contact 映射」这一步查。**
+```
+Existing Contact with ID N8GL7vMz64lLeyWfwNJp was found and updated.
+Fields included: Email
+Skipped Fields: phone (Why? Field {{inboundWebhookRequest.phone}} was invalid
+after compiling)
+```
 
-**配置建议**:
+三件事一次确认了:
 
-1. **不要映射 `name`** —— GHL 匹配到人之后名字本来就在,我们那份反而可能是残缺的
-2. **`phone` 与 `email` 是匹配所必需的,但两者都可能为 null** —— 所以不能简单地「只映射匹配字段」了事,必须先确认 GHL 对 null / 缺失键的行为
-
-**待实测的三种情况**(结果出来后把这一节从「建议」改成「定论」):
-
-| 送什么 | GHL 的行为? |
+| | |
 |---|---|
-| 字段值是 JSON `null` | 覆盖成空,还是当作「不改」? |
-| 字段值是空字符串 `""` | 同上 |
-| **payload 里干脆没有这个键** | 同上 —— 这个最重要,因为**我们这一侧可以做到**:重发时把 null 字段整个从 payload 里省掉,不送 `null` |
+| **缺失键 → 整个字段被跳过** | GHL 编译不出值就 skip,**不写空值**。`Skipped Fields: phone` |
+| **按 email 匹配到已有 contact** | `Existing Contact ... was found and updated`,没有产生重复 |
+| **我们这一侧的做法足够** | payload 省掉值为 null 的键,GHL 侧不需要再做任何防护 |
 
-**我们这一侧会配合**:`assessment-login-request` 发出的 payload **会省掉值为 null 的键**,不送显式 `null`。这样如果 GHL 把「缺失键」当作「不改」,风险就被消掉了;如果它连缺失键也覆盖,那就只能靠「不映射任何可能为 null 的字段」,那时 Create Contact 只能靠 `contact_id`(见上方推测)或者接受这个风险。
+`assessment-login-request` 发出的 payload **不会出现 `null`** —— `buildResendPayload()` 只带有值的键,并且有一条测试穷举 27 种组合断言序列化结果里不含 `null`。
+
+**⚠️ 这个结论的边界:只覆盖「键完全不存在」这一种。**
+
+| 送什么 | 验证状态 |
+|---|---|
+| **payload 里没有这个键** | ✅ 实测 —— 跳过,不覆盖。**这是我们实际会发的唯一一种** |
+| 字段值是 JSON `null` | ❓ 未测 |
+| 字段值是空字符串 `""` | ❓ 未测 |
+
+后两种没测,因为我们永远不会发。但**如果哪天有人改了 `buildResendPayload()` 让它开始送 `null` 或 `""`,这个结论就不适用了** —— 那时要重新测,不能假设"缺失键会跳过"能推广到"空值也会跳过"。`resendPayload_test.ts` 里那条穷举断言就是防这个的。
+
+**`name` 要不要映射**:数据丢失的理由消失了(缺失就跳过)。剩下的理由弱一些但仍成立 —— GHL 匹配到人之后名字本来就在,而我们那份可能是残缺的。**建议仍然不映射,但这已经是偏好而不是风险。**
 
 ### 3.4.2 双通道发送
 

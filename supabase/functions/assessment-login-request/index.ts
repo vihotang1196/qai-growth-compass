@@ -206,7 +206,16 @@ Deno.serve(async (req: Request) => {
       const lastSent = sendable.link_sent_at ? new Date(sendable.link_sent_at).getTime() : 0;
       const withinCooldown = Date.now() - lastSent < RESEND_COOLDOWN_MS;
 
-      if (!withinCooldown) {
+      if (withinCooldown) {
+        // 【为什么要这条日志】被节流时响应与「已发送」完全相同(那是刻意的,
+        // 可区分的状态会泄露名单),所以从外部看不出节流有没有生效。
+        // 这条日志是唯一的直接观测点 —— 另一个是 link_sent_at 没被更新,
+        // 但那要靠比对两次的时间戳来推断。
+        console.log(
+          `resend throttled for entitlement ${sendable.id}: ` +
+            `${Date.now() - lastSent}ms since link_sent_at, cooldown is ${RESEND_COOLDOWN_MS}ms`,
+        );
+      } else {
         const payload = buildResendPayload({
           ghlContactId: sendable.ghl_contact_id,
           magicLink: magicLink(appBaseUrl, sendable.access_token),
