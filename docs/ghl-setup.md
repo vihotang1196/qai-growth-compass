@@ -2,11 +2,22 @@
 
 照这份配 GHL 后台。字段名区分大小写,**一个字符都不能改** —— 后端只认这些名字。
 
+## 关于本文档的可信度分级
+
+GHL 后台的实际行为跟它的文档、以及跟「一般 webhook 工具长什么样」都有出入。第 1 节原本写错过一次(说基础 Webhook action 能做响应映射,实际不能),所以本文档里凡是涉及 **GHL 界面怎么操作** 的内容一律标注来源:
+
+| 标记 | 含义 |
+|---|---|
+| ✅ **实测** | 在真实 GHL 后台跑通过,可以照做 |
+| ⚠️ **推测** | 从 GHL 文档或通用模式推的,**没有验证过**。照做时如果对不上,以实际界面为准并回来更新本文档 |
+
+**涉及我们自己后端的部分(URL、header、payload 字段、响应结构、状态码)没有这个问题** —— 那些有代码和测试兜着,不是推测。
+
 ---
 
 ## 1. 付款 workflow → Webhook action
 
-在付款成功的 workflow 里加一个 **Webhook** action。
+在付款成功的 workflow 里加一个 **Custom Webhook** action(✅ 实测。**不是基础 Webhook** —— 那个做不到响应写回,原因见下方「Response」一节)。
 
 ### 基本设置
 
@@ -70,11 +81,42 @@
 }
 ```
 
-**`magic_link` 必须被映射进 contact 的一个自定义字段**,否则到了发链接那一步 GHL 手上没有链接可发。
+**`magic_link` 必须被写进 contact 的一个自定义字段**,否则到了发链接那一步 GHL 手上没有链接可发。
 
-在 GHL 的 Webhook action 里把响应字段 `magic_link` 映射到自定义字段(建议 key:`qai_assessment_magic_link`,类型单行文本)。
+### ✅ 实测:要两个 action,而且不能用基础 Webhook
 
-> 这一处在 Stage 0 的方案里没写清 —— 当时只写了「到指定时间由 GHL 批量发链接」,没说 GHL 从哪拿到链接。**初始链接必须走这条响应映射**;`qai_assessment_report_url` 是答完题之后由 Stage 11 的写回填的,时间点完全不同,不能拿来当发链接的来源。
+**基础 Webhook action 做不到** —— 它是 fire-and-forget,根本不保存响应。
+
+正确做法是两步:
+
+**第一步 —— Custom Webhook action**
+
+| 项 | 值 |
+|---|---|
+| Action 类型 | **Custom Webhook**(Premium action,**按执行次数计费**) |
+| Method / URL / Header / Body | 与上面「基本设置」各节相同 |
+| 必须勾上 | **Save response from this Webhook** |
+| 配置时 | 先发一次测试请求,让 GHL 记住响应结构 |
+
+**第二步 —— Update Contact Field action**
+
+Custom Webhook 自己**没有映射区域**,它只把响应存起来。所以后面还要接一个 `Update Contact Field`:
+
+| 项 | 值 |
+|---|---|
+| 字段 | `qai_assessment_magic_link` |
+| 值 | `{{custom_webhook.1.response.magic_link}}` |
+
+**⚠️ 变量路径里是 `response.magic_link`,不是 `response.data.magic_link`。**
+GHL 把响应包成 `{"status":200,"data":{...}}` 之后,`response` 指向的是 **`data` 那一层**,所以后面直接接我们 JSON 的根字段名。这一条是实测确认的,别按直觉写成 `data.magic_link`。
+
+> ⚠️ **推测**:`custom_webhook.1` 里那个 `1` 应该是 workflow 内 Custom Webhook action 的序号。如果一个 workflow 里有多个 Custom Webhook,序号会变 —— 没验证过,加第二个的时候留意。
+
+### 成本要知道
+
+Custom Webhook 是 **Premium action,按执行次数计费**。这条 workflow 每有一个人付款就执行一次,所以这是**每个付费客户一次的持续成本**,不是一次性的。当前量级下可忽略,但它会随成交量线性增长 —— 记着有这笔。
+
+> 这一处在 Stage 0 的方案里没写清 —— 当时只写了「到指定时间由 GHL 批量发链接」,没说 GHL 从哪拿到链接。**初始链接必须走这条响应写回**;`qai_assessment_report_url` 是答完题之后由 Stage 11 的写回填的,时间点完全不同,不能拿来当发链接的来源。
 
 | 响应字段 | 用途 |
 |---|---|
@@ -142,7 +184,17 @@ https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
 
 **这个 URL 就是我要的 `GHL_RESEND_WEBHOOK_URL`。** 复制给我。
 
-> GHL 的 Inbound Webhook trigger 通常要求先收到一次样本请求才能在后续 action 里选到字段。如果它显示「等待第一个请求」,用下面的 curl 打一发样本,GHL 就会记住字段结构:
+> ⚠️ **推测,把握不大 —— 以下三条都没有验证过。**
+>
+> 第 1 节那个错(以为基础 Webhook action 能做响应映射)说明我对 GHL webhook 界面的模型是不可靠的,而下面这几条出自同一个模型:
+>
+> 1. Inbound Webhook trigger 要先收到一次样本请求,字段才能在后续 action 里被选到
+> 2. 打样本时先别 Publish,否则会真发消息出去
+> 3. `{{inboundWebhookRequest.<字段>}}` 能直接取到 payload 的根字段
+>
+> **第 3 条最可疑。** Custom Webhook 那边 GHL 把响应包成了 `{"status":200,"data":{...}}`,`response` 实际指向 `data` 层 —— Inbound Webhook 完全可能也在 payload 外面包一层,那 `{{inboundWebhookRequest.magic_link}}` 就取不到,得换路径。**配的时候先用样本请求确认变量到底解析成什么**,对不上就回来更新本文档。
+>
+> 如果它确实显示「等待第一个请求」,用下面的 curl 打一发样本:
 >
 > ```bash
 > curl -X POST '<你的 Inbound Webhook URL>' \
@@ -184,6 +236,8 @@ https://services.leadconnectorhq.com/hooks/<location-id>/webhook-trigger/<uuid>
 ### 3.4 Action:双通道发送
 
 按 Stage 0 定的,**同时发 WhatsApp 与 Email**,两条都发,不做二选一 —— 客户丢了链接时我们不知道他哪个渠道能收到。
+
+> ⚠️ **下面模板里的 `{{inboundWebhookRequest.magic_link}}` 是推测的路径**,见 3.2 的说明。真实路径以样本请求跑出来的结果为准 —— 如果 GHL 也在 payload 外面包了一层,这里要跟着改。**「双通道都发」和「收件人用 contact 自己的渠道」这两条决定不受影响**,只是变量路径可能不同。
 
 **Action 1 — Send WhatsApp / SMS**
 
