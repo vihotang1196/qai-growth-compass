@@ -55,20 +55,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const base = env.SUPABASE_URL!;
   const anonKey = env.SUPABASE_ANON_KEY!;
 
-  const raw = req.query.path;
-  const segments = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  const name = segments[0] ?? '';
+  /**
+   * 【不依赖 req.query.path 的形状】
+   *
+   * 第一版用的是 req.query.path,结果生产上 assessment-auth 明明在 ALLOWED 里却 404 ——
+   * 解析出来的 name 不对。Vercel 对非 Next.js 项目的 [...slug] 到底怎么填 req.query
+   * (数组?斜杠拼接的字符串?键名一定是 path 吗?)我没有把握,而照着 Next.js 的模型
+   * 去推正是上一次判断 GHL 响应映射时犯的错。
+   *
+   * 所以改成从 pathname 解析 —— 那是请求里实打实的东西,不依赖平台怎么填 query。
+   * 并且对「带不带 /api 前缀」两种形态都成立,因为这一点我同样没有把握。
+   */
+  const parsed = new URL(req.url ?? '/', 'http://proxy.invalid');
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'api') parts.shift();
+  const name = parts[0] ?? '';
 
-  if (!ALLOWED.has(name)) {
-    // 不回显 ALLOWED 的内容 —— 那是一份内部路由表
+  // 函数名之后不接受子路径:目前没有函数需要它,允许它只会扩大转发面
+  if (!ALLOWED.has(name) || parts.length > 1) {
+    // 响应体不回显 ALLOWED 的内容(那是内部路由表),但日志里必须够诊断 ——
+    // 第一版这里只回一个 not_found,导致只能靠猜。把实际收到的东西都记下来。
+    console.error(
+      `proxy 404: url=${req.url} pathname=${parsed.pathname} ` +
+        `parsedName=${JSON.stringify(name)} parts=${JSON.stringify(parts)} ` +
+        `queryKeys=${JSON.stringify(Object.keys(req.query ?? {}))} ` +
+        `queryPath=${JSON.stringify(req.query?.path)}`,
+    );
     return res.status(404).json({ error: 'not_found' });
   }
-  if (segments.length > 1) {
-    // 函数名之后不接受子路径:目前没有函数需要它,允许它只会扩大转发面
-    return res.status(404).json({ error: 'not_found' });
-  }
 
-  const query = req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const query = parsed.search;
   const upstream = `${base.replace(/\/$/, '')}/functions/v1/${name}${query}`;
 
   const headers = new Headers();

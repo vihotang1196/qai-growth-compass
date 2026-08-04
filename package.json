@@ -21,7 +21,8 @@
     "test:deno": "cd supabase/functions && deno task test",
     "check:deno": "cd supabase/functions && deno task check",
     "fonts:subset": "node scripts/subset-fonts.mjs",
-    "check:env": "node scripts/check-env.mjs"
+    "check:env": "node scripts/check-env.mjs",
+    "smoke": "node scripts/smoke-deploy.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",
