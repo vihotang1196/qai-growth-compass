@@ -1645,6 +1645,35 @@ where ghl_contact_id in ('t_401','t_idem','t_badphone','t_badtag');
 
 **「查看报告」按钮禁用而不是隐藏** —— 让人知道它会有,Stage 8 接上。
 
+## magic link 回调的 URL 残留
+
+登录后地址栏留下 `compass.qiai.tech/admin#`。查了装在本地的 auth-js 源码,它**确实清了 token,但用的机制不好**:
+
+```js
+// PKCE(code 在 query)—— 干净
+url.searchParams.delete('code');
+window.history.replaceState(window.history.state, '', url.toString());
+
+// Implicit(token 在 hash)—— 我们现在走的这条
+window.location.hash = '';
+```
+
+给 `location.hash` 赋值是**一次 fragment 导航,会新增一条历史记录**,而带 `access_token` 的那条留在后面。所以地址栏看着干净(只剩裸 `#`),但按后退键能回到含 token 的 URL。管理员凭证泄露比学员链接更严重。
+
+`AdminLayout` 里加了 `stripUrlFragment()`,用 `replaceState` 把当前这条换成干净 URL。判断条件用 `href.includes('#')` 而不是 `location.hash` —— 后者在 auth-js 清完之后返回 `''`,永远为假。
+
+### ⚠️ 这只是缓解,不是根治
+
+**更早那条含 token 的历史记录删不掉** —— History API 没有删除条目的能力,`replaceState` 只能改当前这一条。要让 token 从头到尾不出现在 URL 里,只有换 PKCE:
+
+```ts
+createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
+```
+
+那样 magic link 回调带的是 `?code=`,token 完全不进 URL,而 auth-js 对 `code` 用的就是 `replaceState`。
+
+**代价是真实的,所以没有擅自改**:PKCE 的 code verifier 存在发起登录的那个浏览器里,**magic link 必须在同一个浏览器打开**。在手机上点开电脑上申请的登录邮件会失败(`code verifier not found`)。后台只有一两个人,这个约束大概能接受,但那是产品决定不是技术决定 —— 要换说一声。
+
 ## 待你操作
 
 | | |

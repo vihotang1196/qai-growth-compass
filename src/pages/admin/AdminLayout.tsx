@@ -17,6 +17,31 @@ import Roster from './Roster';
  * 【为什么刻意写得这么薄】一个看起来很严密的前端守卫会让后来的人以为那一层有保护,
  * 从而在后端放松检查。薄反而更诚实:任何人看这个文件三十秒就知道它不负责安全。
  */
+/**
+ * 清掉 magic link 回调留下的 fragment。
+ *
+ * 【auth-js 自己清了,但用的机制不好】它走 implicit flow 时用
+ * `window.location.hash = ''` 把 token 抹掉。那是一次 fragment 导航 ——
+ * 它【新增一条历史记录】,而带 access_token 的那条留在后面。
+ * 结果是:地址栏干净了(只剩一个裸 `#`),但按后退键能回到含 token 的 URL。
+ *
+ * 管理员凭证泄露比学员链接更严重,所以这里用 replaceState 把当前这条记录
+ * 换成干净 URL —— 与客户端魔法链接用 `navigate(..., { replace: true })` 同一个理由。
+ *
+ * 【判断条件不能用 location.hash】auth-js 清完之后它返回 '',而 URL 上那个裸 `#`
+ * 还在。要看 href 里有没有 `#`。
+ *
+ * ⚠️ **这只能清掉当前那一条。** 更早那条含 token 的历史记录删不掉 ——
+ * History API 没有删除条目的能力。要让 token 从头到尾不出现在 URL 里,
+ * 只能换 PKCE flow(token 不进 hash,只有一个 code 进 query,
+ * 且 auth-js 对它用的就是 replaceState)。代价见 PROGRESS.md Stage 5。
+ */
+function stripUrlFragment(): void {
+  const { pathname, search, href } = window.location;
+  if (!href.includes('#')) return;
+  window.history.replaceState(window.history.state, '', `${pathname}${search}`);
+}
+
 export default function AdminLayout() {
   const { tk } = useT();
   const [checked, setChecked] = useState(false);
@@ -29,6 +54,7 @@ export default function AdminLayout() {
     void auth.getSession().then(({ data }) => {
       setSignedIn(data.session !== null);
       setChecked(true);
+      stripUrlFragment();
     });
     const { data: sub } = auth.onAuthStateChange((_event, session) => {
       setSignedIn(session !== null);
