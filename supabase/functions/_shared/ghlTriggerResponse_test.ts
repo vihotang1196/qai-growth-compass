@@ -2,17 +2,21 @@ import { assertEquals } from '@std/assert';
 import { triggerAccepted } from './ghlTriggerResponse.ts';
 
 /** 两条都是实测抓到的真实响应体,不是构造的 */
-const REAL_TRIGGER =
-  '{"status":"Success: request sent to trigger execution server","id":"jgQ3xUHIHauEHadGtRmM"}';
-const STALE_TRIGGER = '{"status":"Success: test request received"}';
+const QUEUED = '{"status":"Success: request sent to trigger execution server","id":"jgQ3xUHIHauEHadGtRmM"}';
+/**
+ * 这一条来自假 UUID,但**同一个响应体也出现在 workflow 还是 Draft 的时候** ——
+ * 所以它代表的是「没进执行队列」这个结果,而不是某一个具体原因。
+ * 检测分不开「trigger 不存在」与「workflow 是 Draft」,见 ghlTriggerResponse.ts。
+ */
+const NOT_QUEUED = '{"status":"Success: test request received"}';
 
-Deno.test('真 trigger 的响应 → accepted', () => {
-  assertEquals(triggerAccepted(REAL_TRIGGER), true);
+Deno.test('进了执行队列的响应 → accepted', () => {
+  assertEquals(triggerAccepted(QUEUED), true);
 });
 
-Deno.test('失效 trigger 的响应 → 不 accepted', () => {
+Deno.test('没进执行队列的响应 → 不 accepted', () => {
   // 这一条是整个模块存在的理由:两者状态码都是 200,只有响应体不同
-  assertEquals(triggerAccepted(STALE_TRIGGER), false);
+  assertEquals(triggerAccepted(NOT_QUEUED), false);
 });
 
 Deno.test('判据是 id 有无,与 status 文案无关', () => {

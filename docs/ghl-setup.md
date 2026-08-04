@@ -334,14 +334,31 @@ supabase secrets list
 
 **判据用 `id` 有无,不匹配 `status` 文案** —— 文案是 GHL 的实现细节,改一个字检测就静默失效了;`id` 有无是行为差异(进没进执行队列),更稳。
 
-### 能检测什么、不能检测什么
+### 能检测什么、不能检测什么 —— 以及一个已知盲区
 
-| | |
+| 响应 | 能推出什么 |
 |---|---|
-| ✅ **trigger 存在** | 有 `id` 就说明对面有一个 workflow 接住了、进了执行队列 |
-| ❌ **消息送达** | 检测不到。workflow 可能是 Draft、可能中途某个 action 报错、contact 可能没有可用号码 |
+| 有 `id` | **trigger 存在 且 workflow 已 Publish。两者合一,分不开。** |
+| 无 `id` | 请求没进执行队列。**两种可能:** ① trigger 不存在 / UUID 变了 ② **workflow 还是 Draft** |
 
-要闭环到「送达」只有一条路:让 workflow 发完之后回调我们一个端点。那是新功能,目前没建。
+**Draft 状态下 GHL 回的响应体与假 trigger 完全相同**(都是 `{"status":"Success: test request received"}`),所以这个检测**无法单独证明「trigger 有效」** —— 它证明的是「trigger 存在且处于可执行状态」。
+
+**这是检测本身的边界,不是 bug。** 对生产用途够用:线上 workflow 必然是 Publish 的,无 `id` 就是真出事了。但别让人以为它能单独证明 trigger 有效。
+
+#### 看到「returned no trigger id」时的排查顺序
+
+```
+1. 先看 workflow 是不是 Draft        ← Draft 是开发期的常态
+2. 再看 GHL_RESEND_WEBHOOK_URL       ← UUID 变了是罕见事件
+```
+
+**先查常见的那个。** 反过来会花很长时间去核对一个其实没问题的 URL。函数日志里那条 error 已经按这个顺序写好了。
+
+> 开发期尤其容易撞到:如果先合 main 让 `/api` 代理生效、但 workflow 还没 Publish,那时提交重发表单会走完整流程并留下这条 error —— **那是误报**。避开办法是先 Publish 再测。
+
+#### 仍然检测不到的:消息送达
+
+即使进了执行队列,中途某个 action 可能报错、contact 可能没有可用号码。要闭环到「送达」只有一条路:让 workflow 发完之后回调我们一个端点。那是新功能,目前没建。
 
 > 这一节最初写成了「无法检测,失败是静默的」—— 那个结论错在**只测了假 trigger 一个样本**。一个样本只能说明「假的长这样」,证明不了「真假一样」。做「能不能区分 A 和 B」的判断,两边都要有样本。
 

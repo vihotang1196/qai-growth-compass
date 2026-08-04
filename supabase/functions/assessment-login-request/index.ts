@@ -227,13 +227,16 @@ Deno.serve(async (req: Request) => {
 
         // 【两层判读,分别对应两种不同的故障】
         //   非 2xx        → 网络故障 / GHL 宕机
-        //   200 但无 id   → trigger 不存在(URL 过期、UUID 变了)。状态码看不出来:
-        //                   假 trigger 也回 200,差别只在响应体有没有 id。
-        //                   见 _shared/ghlTriggerResponse.ts
+        //   200 但无 id   → 请求没进执行队列。状态码看不出来:失效 trigger 也回 200,
+        //                   差别只在响应体有没有 id。见 _shared/ghlTriggerResponse.ts
         //
-        // 【能证明与不能证明,别混】有 id 只能证明「对面有 workflow 接住了、进了执行
-        // 队列」。**不能**证明消息送达 —— workflow 可能是 Draft、可能中途某个 action
-        // 报错、可能 contact 没有可用号码。要闭环到送达只能靠 workflow 回调,没建。
+        // 【无 id 有两种原因,而且分不开】trigger 不存在 / UUID 变了,**或者
+        // workflow 还是 Draft** —— Draft 时 GHL 回的响应体与假 trigger 完全相同。
+        // 所以日志里的排查顺序是先 workflow 状态、再 URL:Draft 是开发期常态,
+        // UUID 变了是罕见事件。
+        //
+        // 【有 id 也不等于送达】中途某个 action 可能报错、contact 可能没有可用号码。
+        // 要闭环到送达只能靠 workflow 回调,没建。
         const res = await fetch(resendUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -249,8 +252,10 @@ Deno.serve(async (req: Request) => {
         } else if (!triggerAccepted(resBody)) {
           console.error(
             `GHL accepted the POST but returned no trigger id for entitlement ${sendable.id} — ` +
-              `GHL_RESEND_WEBHOOK_URL is probably stale (trigger deleted or UUID changed). ` +
-              `Nothing was queued. Response: ${resBody.slice(0, 200)}`,
+              `nothing was queued. Check in this order: ` +
+              `(1) is the resend workflow published? A Draft workflow looks identical here. ` +
+              `(2) is GHL_RESEND_WEBHOOK_URL stale (trigger deleted or its UUID changed)? ` +
+              `Response: ${resBody.slice(0, 200)}`,
           );
         }
 
