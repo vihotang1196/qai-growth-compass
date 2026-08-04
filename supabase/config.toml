@@ -41,3 +41,9 @@ import_map = "./functions/deno.json"
 [functions.assessment-maintenance]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 后台的唯一入口,按 action 分发。鉴权在函数内部:每次验 Supabase Auth 的 JWT
+# 并查 admin_users 允许名单,不信任前端路由守卫。
+[functions.assessment-admin]
+verify_jwt = false
+import_map = "./functions/deno.json"

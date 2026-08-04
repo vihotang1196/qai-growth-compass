@@ -23,7 +23,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  * 服务器到服务器没有 cookie 参与);assessment-maintenance 也不在(它由
  * api/cron/retention.ts 用 INTERNAL_FN_SECRET 调,不该从浏览器可达)。
  */
-const ALLOWED = new Set(['assessment-auth', 'assessment-login-request']);
+const ALLOWED = new Set(['assessment-auth', 'assessment-login-request', 'assessment-admin']);
 
 /**
  * 允许透传给浏览器的 cookie 名 —— 白名单,只放我们自己签发的。

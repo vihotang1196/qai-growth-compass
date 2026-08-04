@@ -20,11 +20,9 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { normalizeEmail, normalizePhone, tailFromInput } from '../_shared/phone.ts';
-import { magicLink } from '../_shared/token.ts';
 import { hashIdentifier } from '../_shared/identifierHash.ts';
 import { DEFAULT_RATE_LIMIT, evaluateRateLimit, lookbackMs } from '../_shared/rateLimit.ts';
-import { buildResendPayload } from '../_shared/resendPayload.ts';
-import { triggerAccepted } from '../_shared/ghlTriggerResponse.ts';
+import { sendMagicLink } from '../_shared/resendLink.ts';
 import { missingKeys } from '../_shared/env.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -225,56 +223,9 @@ Deno.serve(async (req: Request) => {
             `${Date.now() - lastSent}ms since link_sent_at, cooldown is ${RESEND_COOLDOWN_MS}ms`,
         );
       } else {
-        const payload = buildResendPayload({
-          ghlContactId: sendable.ghl_contact_id,
-          magicLink: magicLink(appBaseUrl, sendable.access_token),
-          name: sendable.name,
-          phoneE164: sendable.phone_e164,
-          emailLower: sendable.email_lower,
-          lang,
-        });
-
-        // 【两层判读,分别对应两种不同的故障】
-        //   非 2xx        → 网络故障 / GHL 宕机
-        //   200 但无 id   → 请求没进执行队列。状态码看不出来:失效 trigger 也回 200,
-        //                   差别只在响应体有没有 id。见 _shared/ghlTriggerResponse.ts
-        //
-        // 【无 id 有两种原因,而且分不开】trigger 不存在 / UUID 变了,**或者
-        // workflow 还是 Draft** —— Draft 时 GHL 回的响应体与假 trigger 完全相同。
-        // 所以日志里的排查顺序是先 workflow 状态、再 URL:Draft 是开发期常态,
-        // UUID 变了是罕见事件。
-        //
-        // 【有 id 也不等于送达】中途某个 action 可能报错、contact 可能没有可用号码。
-        // 要闭环到送达只能靠 workflow 回调,没建。
-        const res = await fetch(resendUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const resBody = await res.text().catch(() => '');
-
-        if (!res.ok) {
-          console.error(
-            `GHL resend webhook returned ${res.status} for entitlement ${sendable.id}: ` +
-              resBody.slice(0, 200),
-          );
-        } else if (!triggerAccepted(resBody)) {
-          console.error(
-            `GHL accepted the POST but returned no trigger id for entitlement ${sendable.id} — ` +
-              `nothing was queued. Check in this order: ` +
-              `(1) is the resend workflow published? A Draft workflow looks identical here. ` +
-              `(2) is GHL_RESEND_WEBHOOK_URL stale (trigger deleted or its UUID changed)? ` +
-              `Response: ${resBody.slice(0, 200)}`,
-          );
-        }
-
-        const patch: Record<string, unknown> = { link_sent_at: new Date().toISOString() };
-        if (sendable.status === 'pending') patch.status = 'link_sent';
-        const { error } = await supa
-          .from('assessment_entitlements')
-          .update(patch)
-          .eq('id', sendable.id);
-        if (error) console.error(`failed to stamp link_sent_at for ${sendable.id}: ${error.message}`);
+        // 发送逻辑抽到 _shared/resendLink.ts —— Stage 5 的后台「重发链接」要用同一份。
+        // 两份 GHL POST 的话,以后改 payload 字段只改一处就成了静默的半修。
+        await sendMagicLink(supa, sendable, lang, resendUrl, appBaseUrl);
       }
     }
 

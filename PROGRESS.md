@@ -1318,12 +1318,16 @@ Vercel Cron 每天删 `created_at < now() - interval '30 days'` 的行。30 天�
 
 这个 token 是永久的完整访问权,报告里有对方的营收、询盘量、经营弱点。链接经 WhatsApp 与邮箱流转,转发、截图、共用设备、换手机号都可能让它落到别人手里,而目前**没有任何补救手段**。
 
-新增 `access_revoked_at timestamptz`。Admin 名单页给一个「作废并重发新链接」:
+⚠️ **原文自相矛盾,Stage 5 实现时才发现。** 原文写的是「置 `access_revoked_at = now()`、生成新 `access_token`、触发重发」,同时又写「校验 token 时 `access_revoked_at is not null` 一律拒绝」—— **这两条一起成立的话,新发的那条链接也会被拒**。
 
-```
-access_revoked_at = now()  →  生成新 access_token  →  触发重发
-校验 token 时:access_revoked_at is not null → 一律拒绝,跳 /expired
-```
+达成意图(旧链接失效、新链接可用)其实**只需要轮换 token**:旧 token 不再匹配任何行,自然就死了,不需要那个标记。所以拆成两个独立动作:
+
+| 动作 | 做什么 | 什么时候用 |
+|---|---|---|
+| `rotate`(换新链接) | 生成新 `access_token` + **清空** `access_revoked_at` + 发送 | 怀疑某个人的链接落到别人手里 —— 换一条 |
+| `revoke`(停用) | 置 `access_revoked_at = now()`,**不发新链接** | 彻底停掉这个人(退款、误发给非学员) |
+
+`resend`(单纯重发同一条)对已停用的记录返回 409,提示改用 `rotate` —— 否则它会把一条本该死的链接又送出去。
 
 **不做自动过期** —— 学员可能几周后才回来看报告,自动过期会制造大量「链接失效」的客服工作。要的是出事时能补救,不是预防性地制造麻烦。
 
@@ -1605,6 +1609,49 @@ curl -s -X POST "$URL" -H "X-QAI-Secret: $S" -H "Content-Type: application/json"
 delete from public.assessment_entitlements
 where ghl_contact_id in ('t_401','t_idem','t_badphone','t_badtag');
 ```
+
+---
+
+# Stage 5 — Admin 认证 + 名单管理页
+
+分支 `stage-5-admin`。
+
+## 授权:两步都在后端,前端那层刻意写薄
+
+```
+浏览器 → Supabase Auth magic link → 拿到 access token
+      → POST /api/assessment-admin,带 X-Admin-Token: <token>
+      → 函数内:验 JWT → 查 admin_users 允许名单 → 判定
+```
+
+**`X-Admin-Token` 而不是 `Authorization`**:代理会把 `Authorization` 换成 anon key(Edge Functions 网关要求),后台的 JWT 必须走另一个头,否则会被覆盖。
+
+**401 与 403 分开**,这不是洁癖:不在名单的账号再登一百次也是 403,把它当 401 会造成「登录成功 → 被弹回登录页 → 再登录成功」的死循环,而那种循环极难自查。前端因此有两个分支:401 → 登录页;403 → 显示「这个账号不在允许名单里」。
+
+**前端守卫是 UX,不是安全边界。** `AdminLayout` 只做一件事:没有 session 就显示登录页而不是空表格。它不保护任何数据。**刻意写得薄** —— 一个看起来很严密的前端守卫会让后来的人以为那一层有保护,从而在后端放松检查。
+
+## CSV 导出:两个只在「用 Excel 打开」时才暴露的问题
+
+| | |
+|---|---|
+| **公式注入** | 以 `= + - @` 或制表符开头的单元格会被 Excel 当公式执行。**学员姓名来自 GHL,是外部输入** —— 一个叫 `=cmd\|'/c calc'!A1` 的「姓名」在文件被打开时就会执行。前面加单引号中和。代价:真负数也会变文本,但我们导出的数值列(总分)不会是负数,而姓名列可能以 `-` 开头 —— 宁可让一个不存在的负数变文本 |
+| **BOM + CRLF** | 不加 BOM,Excel 在中文 Windows 上会按本地代码页解码 UTF-8,姓名和维度名全是乱码 |
+
+8 条测试,含真实注入载荷。
+
+## 已知限制,写在代码里不是随口一提
+
+**筛选在前端做,后端一次返回全量。** 分数区间要跨到 `assessment_results`,而 PostgREST 对嵌套表的过滤很别扭;当前批次几十到一两百人够用,而且省一张视图(视图要走 migration)。**批次上到几千人时要把筛选推回 SQL。**
+
+**「查看报告」按钮禁用而不是隐藏** —— 让人知道它会有,Stage 8 接上。
+
+## 待你操作
+
+| | |
+|---|---|
+| `admin_users` insert | `insert into public.admin_users (email, name) values ('jianan1196@gmail.com', '<名字>');` —— **邮箱必须小写**,函数侧会 `trim().toLowerCase()` 再比,大小写不一致会永远 403 而看起来像「我明明插了记录」 |
+| Supabase Auth 配置 | Site URL + Redirect URLs,见下 |
+| Vercel 环境变量 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`(**带** `VITE_` 前缀,前端登录要用) |
 
 ---
 
