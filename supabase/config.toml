@@ -31,3 +31,13 @@ import_map = "./functions/deno.json"
 [functions.assessment-auth]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 备用路径:重发魔法链接。未登录状态调用,鉴权靠 IP 限流 + 恒定耗时。
+[functions.assessment-login-request]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+# 保留策略清理。由 Vercel Cron 经 INTERNAL_FN_SECRET 调用,不对外。
+[functions.assessment-maintenance]
+verify_jwt = false
+import_map = "./functions/deno.json"

@@ -6,6 +6,7 @@
   "functions": {
     "api/font-probe.ts": { "maxDuration": 60, "memory": 1769 }
   },
+  "crons": [{ "path": "/api/cron/retention", "schedule": "17 3 * * *" }],
   "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }],
   "headers": [
     {

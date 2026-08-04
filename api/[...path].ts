@@ -16,8 +16,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  * Supabase 就好 —— 走代理只是多一跳、多一个故障点。见 docs/ghl-setup.md。
  */
 
-/** 只允许代理到明确列出的函数。开放式转发等于把整个 Supabase 项目暴露出去 */
-const ALLOWED = new Set(['assessment-auth']);
+/**
+ * 只允许代理到明确列出的函数。开放式转发等于把整个 Supabase 项目暴露出去。
+ *
+ * 【只放浏览器会直接调的函数】assessment-ghl-webhook 不在这里(GHL 直连 Supabase,
+ * 服务器到服务器没有 cookie 参与);assessment-maintenance 也不在(它由
+ * api/cron/retention.ts 用 INTERNAL_FN_SECRET 调,不该从浏览器可达)。
+ */
+const ALLOWED = new Set(['assessment-auth', 'assessment-login-request']);
 
 const HOP_BY_HOP = new Set([
   'connection',
