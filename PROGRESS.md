@@ -18,7 +18,7 @@
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
 | 7 | 计分 Edge Function + 问卷页 | **收尾:判据实现完成,待部署实测(字段映射 N/key 由你回报)** |
-| 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | 未开始 |
+| 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | **代码完成,待部署实测(渲染未预览)** |
 | 9 | PDF 异步渲染 + Storage + 分享卡 | 未开始 |
 | 10 | Admin Portal 其余四模块 + 现场模式 | 未开始 |
 | 11 | GHL 写回 + 重试(**含从 Stage 7 挂回的:tags、Vercel Cron 定时、Admin 刷新字段映射按钮**) | 部分先行(字段映射 / 判据 / sweep 已在 Stage 7 做掉) |
@@ -2028,6 +2028,49 @@ Node 146 / Deno 117 / 跨运行时一致。
 **为什么它们一度在 Stage 7:** 判据不定,就验不了写回到底成没成,Stage 7 的验收(「手算分数与系统一致」延伸到「分数确实写进了 GHL」)就是假的。这个理由到判据定完用尽 —— 字段映射 / 判据 / sweep 是验证的必要前提,tags 不是。
 
 已在 Stage 7 提前做掉的 Stage 11 部分:key→id 字段映射(D8)、写回判据(D9 三分类)、重试 sweep 消费端。Stage 11 剩上面三件。
+
+---
+
+# Stage 8 — 报告页(9 板块)
+
+数据层上一轮已做(assessment-report 端点 + reportContent/reportStats 纯逻辑)。这轮是页面渲染。
+
+## 九个板块
+
+1. 总分 + 五边形雷达(手写 SVG,本人黄 / 基准墨虚线,维度色只在轴标签的小方块上)
+2. 分档解读(config.tiers 的 zh + zh_desc)
+3. 批次位置(cohort 非 null 才渲染;分位区间 + 同档人数 + 各维度差值,B1)
+4. 强项 Top 2
+5. 短板 Top 2:根因(action_library.root_cause 按 low/mid/high)/ 代价(computeCosts,带每条 zh_note + 总 disclaimer)
+6. 15 项子模块明细(徽章走 badgeForScore)
+7. 30 天行动清单(selectActions,难度 + 影响)
+8. 下一步 offer(offer_routing 按最弱维度)+ mismatch 高亮(priority ≠ weakest[0])
+9. PDF / 打印(Stage 9 接自动 PDF,先给浏览器打印保底)
+
+## 兑现的三处(你点名的)
+
+- **徽章走 `scoring.badgeForScore` 不走 `markStateFromScore`** —— v3 归一化后,3 选项题 index 2 是满分 5.0,旧逻辑会错标 partial。废弃标注这里兑现。
+- **代价金额带 `disclaimer_zh` + 每条 `zh_note`** —— 系数是行业下沿估值不是精算,一个看起来确定的数字客户对不上真实账目就会毁掉整份报告的信任。
+- **cohort < 10 整块隐藏,radar 基准回落 global** —— 现在只有 1 条记录,cohort_rank 板块不渲染,radar 两条线重合(正确退化)。
+
+## `window.__REPORT_READY__`
+
+数据到 + 渲染后置 true,卸载时置 false。Stage 9 的 PDF 渲染器 waitForFunction 它 —— SVG 同步渲染,mount 即画完,这个信号好埋(这也是不装 recharts 手写 SVG 的一个理由)。
+
+## 打印保底(print.css)
+
+index.css 末尾加 @media print:交互件(语言切换、打印按钮)不进纸、板块尽量不跨页断、
+**保留背景色**(print-color-adjust: exact —— 布局主义靠墨边框和填充表意,变白纸黑字会丢信息)。
+
+## ⚠️ 渲染没预览过
+
+预览工具解析的是本会话主工作目录(qaiconversationai-main),起出来的是另一个 app —— 
+导航 /report 得到 404(那是别的项目)。所以报告页只过了 tsc + build + 纯逻辑测试,
+**渲染效果没亲眼看**,与 Stage 6 答题页同样的限制。你部署后看,尤其:算出的最弱维度是否
+与你心里一致、30 天清单是否是你真会对客户说的话 —— 那两样只有你能判断,不一致就是题目
+校准或 action_library 文案要调。
+
+Node 169 / Deno 117 / 跨运行时一致。端点与页面一起部署一次验:deploy:functions(assessment-report 新增)+ 前端部署。
 
 ---
 

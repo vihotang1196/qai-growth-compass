@@ -3,3 +3,27 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── 打印保底(print.css)——————————————————————————————
+   Stage 9 接自动 PDF 渲染;在那之前(以及渲染失败时)客户用浏览器打印/存 PDF
+   也能拿到一份可读的报告。规则刻意保守:只做「能打印」,不做精排。 */
+@media print {
+  /* 语言切换、打印按钮等交互件不进纸 */
+  .no-print,
+  button[aria-label] {
+    display: none !important;
+  }
+  /* 报告每个板块尽量不跨页断开 */
+  .report-section {
+    break-inside: avoid;
+  }
+  /* 布局主义靠墨边框和填充表意,打印必须保留背景色,否则整份报告变白纸黑字丢信息 */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  main {
+    padding: 0 !important;
+    background: #fff !important;
+  }
+}

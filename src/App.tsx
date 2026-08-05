@@ -4,14 +4,14 @@ import Expired from '@/pages/Expired';
 import Landing from '@/pages/Landing';
 import Quiz from '@/pages/Quiz';
 import Survey from '@/pages/Survey';
+import Report from '@/pages/Report';
 import Showcase from '@/pages/Showcase';
 import LanguageToggle from '@/components/LanguageToggle';
-import StagePlaceholder from '@/pages/StagePlaceholder';
 
 /**
  * 路由表见 PROGRESS.md 0.5。
  *
- * /report 目前挂占位页 —— 它存在是为了让 Stage 4 的跳转
+ * /report 是 Stage 8,已挂载;之前占位页是为了让 Stage 4 的跳转
  * 可被验证(后端把 target 推导成这三个之一),分别由 Stage 6 / 7 / 8 替换。
  *
  * /quiz 是 Stage 6;/survey 是 Stage 7;/admin 是 Stage 5,均已挂载。
@@ -27,7 +27,7 @@ export default function App() {
         <Route path="/expired" element={<Expired />} />
         <Route path="/quiz" element={<Quiz />} />
         <Route path="/survey" element={<Survey />} />
-        <Route path="/report" element={<StagePlaceholder route="/report" stage="STAGE 8" />} />
+        <Route path="/report" element={<Report />} />
         {/* 后台。守卫在 AdminLayout 里,而那一层只是 UX —— 真正的拦阻在
             assessment-admin 中(每次验 JWT + 查允许名单)。Stage 10 的其余四个模块
             会挂在 /admin 之下 */}
