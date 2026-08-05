@@ -10,6 +10,8 @@
  * 扩过去只增成本不增信号。两侧各自的测试套件已经够。
  */
 
+import { mapOption } from './optionMap.ts';
+
 export type QuizStep =
   | { phase: 'profile'; index: number }
   | { phase: 'questions'; index: number }
@@ -26,7 +28,7 @@ export type QuizStep =
  *   - 我们自己以后加「允许跳过」
  *
  * 如果按「最后已答之后」续,空洞会被**永久跳过**。而那题的答案缺失不会有任何提示 ——
- * 它会一路走到算分:该维度的 raw_sum 少一题,而公式是 `(raw_sum / 12) * 100`,
+ * 它会一路走到算分:该维度的 raw_sum 少一题,而公式是 `(raw_sum / 12) * 5`,
  * 分母写死 12,于是那一维的分数被**静默低估**,报告的「最弱维度」可能因此指错。
  *
  * 那是错的结论,不是差的体验。所以这里一定是第一个未答。
@@ -80,14 +82,14 @@ export function progress(
  * 直接 `return optionIndex` 今天也对。但那样一旦标度改成 `[0,1,3,5]`
  * 之类的非线性,这里会静默继续用下标 —— 分数全错而没有任何报错。
  *
- * 【越界返回 null 而不是抛】越界只可能来自客户端传来的脏数据,
- * 那是一个 400 而不是一个 500。让调用方决定怎么回。
+ * 【实现委托给 mapOption】「下标 → 语义值」这个形状在 config 里出现了五次
+ * (题目分数、S1 维度、S7 意向值、P2/P3/S2 数值)。越界检查、非整数检查各写一遍的话,
+ * 任何一处漏掉都会让脏下标静默变成 undefined。所以只有一份实现,这里是它的一个特例。
+ * 越界返回 null(400 不是 500)的约定也由那一份统一定义。
  */
 export function scoreForOption(
   optionIndex: number,
   optionValues: readonly number[],
 ): number | null {
-  if (!Number.isInteger(optionIndex)) return null;
-  if (optionIndex < 0 || optionIndex >= optionValues.length) return null;
-  return optionValues[optionIndex];
+  return mapOption(optionIndex, optionValues);
 }

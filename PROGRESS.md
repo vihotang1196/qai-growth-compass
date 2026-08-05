@@ -17,7 +17,7 @@
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
-| 7 | 计分 Edge Function + 问卷页 | **计分核心完成(config v2 + 三组手算过);问卷页 + Edge Function + GHL 写回待做** |
+| 7 | 计分 Edge Function + 问卷页 | **代码完成,待部署实测(GHL 写回的 key/id 匹配未验证)** |
 | 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | 未开始 |
 | 9 | PDF 异步渲染 + Storage + 分享卡 | 未开始 |
 | 10 | Admin Portal 其余四模块 + 现场模式 | 未开始 |
@@ -1816,6 +1816,70 @@ delete from assessment_results;
 delete from assessment_sessions;
 ```
 四张表名已核对存在,顺序子表先、entitlements 保留。**config 已校验通过,可以清了。**
+
+---
+
+# Stage 7 下半 — 问卷页 + 计分函数 + GHL 写回
+
+## 一处必须先说的 schema 阻塞(已修)
+
+`assessment_results.total` 原本是 **`int`**,而 v2 的总分是 0.0–5.0 一位小数。往 int 列插 `2.8`,PostgreSQL 会**四舍五入成 3 且不报错**。后果:报告页显示 2.8(前端算的),库里存 3;档位若从库里的值重算,2.8 属于 `spot`、3.0 属于 `semi_auto` —— **直接换档**。学员同时看得见分数和档位,两者不一致他会直接不信报告。
+
+迁移 `20260805000000_scoring_v2_decimal.sql`:`total` → `numeric(2,1)`,加 `check (total between 0.0 and 5.0)`。越界报错而不是截断 —— 上游算出 5.1 应该炸。顺带修了 `dim_scores` 的过时注释(`0..100` → `0.0–5.0`),以及 `quizFlow.ts` / 测试里两处 `(raw_sum/12)*100` 的过时注释。
+
+## apply-config 脚本(下载失败三次之后的固定通路)
+
+```
+npm run config:apply <文件>      落盘 + 校验
+pbpaste | npm run config:apply -  从剪贴板
+npm run config:check              只校验当前 config
+```
+
+**校验不通过就不落盘。** 一份坏 config 落盘之后所有测试会一起红,而排查方向会被引到测试上而不是 config 上。规则从 `meta` 读(题数 / 维度数 / 每维题数 / 分母 / 刻度都不写死),所以下次再改维度数这个脚本不用动。落盘前自动备份旧版到 `.v1.0.0.bak`。
+
+## 「下标 → 语义值」只有一份实现
+
+这个形状在 config 里出现五次:题目分数、S1 维度、S7 意向值、P2/P3/S2 数值。`src/lib/optionMap.ts` 是唯一实现,`quizFlow.scoreForOption` 现在委托给它。
+
+多选的语义是刻意的:**任一下标越界就整体拒绝,不跳过坏的那个** —— 跳过会让客户勾 5 项存 4 项而不知情,而后面按工具分流的销售判断就基于一份不完整的事实。
+
+**问卷存语义值不存下标**:存下标的话,以后调整选项顺序,库里的历史数据会静默指向不同的语义。
+
+## GHL domain 校验:三种形态
+
+| 形态 | 例 | 处理 |
+|---|---|---|
+| 枚举数组 | `["manual","spot",…]` | 值必须在数组里 |
+| **区间字符串** | `"0.0-5.0"` | 数值落在闭区间内 |
+| null | goal_90d | 只查 `max_length` |
+
+只做 `Array.isArray(domain) && includes(v)` 的话,区间型会走到 else 分支 —— **永远失败**(总分永远写不进 GHL)或**永远跳过**(等于没校验)。两种都静默。
+
+另外三条刻意的选择:**domain 本身写坏了(比如用了全角破折号)要显式报**,否则那个字段的校验静默失效;**未声明的 key 一律拒绝**,打错的 key 会在 GHL 创建一个无人知晓的自定义字段而本该填的那个永远是空;**超长报错不截断**,S5 是销售最好用的一句话,截半句比拒绝更糟。
+
+## ⚠️ GHL 写回有一处我没验证过
+
+实际 API 调用写了(`PUT /contacts/{id}`,`Version: 2021-07-28`),但 **`customFields` 用 `key` 还是 `id`(UUID)我没有把握**。config 里存的是 key,而如果这个端点只认 UUID,调用会**返回 200 而字段没写进去** —— 静默失败。
+
+这正是 Stage 3 学到的同一类:GHL 收下请求不代表它做了我们以为的事。所以:
+
+- 日志里记下了响应体和写入的 key 列表,并显式写了 `VERIFY ON THE CONTACT — a 200 does not prove the custom fields were matched by key`
+- 验收时**必须去 GHL contact 上肉眼确认字段有值**,不能只看函数返回 ok
+- 不匹配的话两条退路:先查 custom field 列表拿 id 再写,或者改用 Inbound Webhook + workflow(那条路重发链接上已经验过)
+
+## 问卷页与答题页的差别是刻意的
+
+答题页每题即存(20 题掉线要重来代价太大);问卷 7 题约一分钟,而且是**报告前最后一步**,逐题往返会在客户最接近终点的地方加 7 次等待。所以本地攒完一次提交,失败时内容还在页面上。
+
+提交分两步 `save` → `finalize`:`finalize` 会拒绝「测评题没答满」,而那时问卷内容应该已经存住 —— 不然客户填完 7 题被打回去补测评题,回来还要重填。服务端指名哪一题出错就把客户送回那一屏。
+
+## finalize 里一处容易忽略的选择
+
+**重算分数,不直接信库里的 `score` 列。** 库里的 score 是当初按 `option_values` 算的;标度改过之后,旧 score 就是按旧标度算的 —— 直接用会让同一批人里有的按新标度、有的按旧标度。以 `option_index` 为准重算,因为 option_index 是不受标度影响的事实。
+
+## 待部署实测
+
+新增两个函数(`assessment-score`)+ 一个迁移,所以要 `supabase db push` 和 `npm run deploy:functions`。环境变量无新增(`GHL_PRIVATE_TOKEN` / `GHL_LOCATION_ID` 已在清单里)。
 
 ---
 

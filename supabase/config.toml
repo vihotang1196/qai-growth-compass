@@ -52,3 +52,8 @@ import_map = "./functions/deno.json"
 [functions.assessment-quiz]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 问卷提交 + 计分 + 写结果 + GHL 写回。cookie 鉴权,分数一律服务端算。
+[functions.assessment-score]
+verify_jwt = false
+import_map = "./functions/deno.json"

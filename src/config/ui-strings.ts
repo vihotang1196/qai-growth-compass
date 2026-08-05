@@ -80,6 +80,29 @@ export const UI_STRINGS = {
     en: 'Saved after every answer. Close it and your link brings you back to this question.',
   },
 
+  // ── Survey ──────────────────────────────────────────────
+  'survey.title': { zh: '最后 7 个问题', en: 'Last 7 questions' },
+  'survey.hint': {
+    zh: '这几题不计分,但决定了报告里给你的建议有多贴合你的实际情况。',
+    en: 'These are not scored, but they decide how well the report fits your actual situation.',
+  },
+  'survey.progress': { zh: '第 {current} / {total} 题', en: 'Question {current} of {total}' },
+  'survey.optional': { zh: '选填', en: 'Optional' },
+  'survey.multiHint': { zh: '可多选', en: 'Select all that apply' },
+  'survey.submit': { zh: '提交并查看报告', en: 'Submit and see my report' },
+  'survey.submitting': { zh: '正在生成你的报告…', en: 'Building your report…' },
+  'survey.required': { zh: '这一题需要填写。', en: 'This one is required.' },
+  'survey.tooLong': { zh: '最多 {max} 字。', en: 'Max {max} characters.' },
+  'survey.saveFailed': {
+    zh: '提交没成功,所以停在这里 —— 点重试,你填的内容还在。',
+    en: "Submission didn't go through, so we stopped here. Retry — your answers are still here.",
+  },
+  'survey.incomplete': {
+    zh: '测评题还没答完,先回去补齐才能出报告。',
+    en: 'Some assessment questions are still unanswered — finish those first.',
+  },
+  'survey.charCount': { zh: '{n} / {max}', en: '{n} / {max}' },
+
   // ── Admin ───────────────────────────────────────────────
   'admin.title': { zh: '学员名单', en: 'Roster' },
   'admin.login.title': { zh: '后台登录', en: 'Admin sign-in' },
