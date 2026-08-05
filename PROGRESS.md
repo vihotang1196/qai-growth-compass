@@ -17,11 +17,11 @@
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
-| 7 | 计分 Edge Function + 问卷页 | **v3 重构完成,待部署实测(GHL key/id 仍未验证)** |
+| 7 | 计分 Edge Function + 问卷页 | **收尾:判据实现完成,待部署实测(字段映射 N/key 由你回报)** |
 | 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | 未开始 |
 | 9 | PDF 异步渲染 + Storage + 分享卡 | 未开始 |
 | 10 | Admin Portal 其余四模块 + 现场模式 | 未开始 |
-| 11 | GHL 写回 + 重试 | 未开始 |
+| 11 | GHL 写回 + 重试(**含从 Stage 7 挂回的:tags、Vercel Cron 定时、Admin 刷新字段映射按钮**) | 部分先行(字段映射 / 判据 / sweep 已在 Stage 7 做掉) |
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 ---
@@ -2014,6 +2014,20 @@ parseFieldMap / verifyWrittenFields / classifyGhlError 抽到 `src/lib/ghlVerify
 - **Admin「刷新字段映射」按钮** —— 目前靠自愈 force-refresh 覆盖常见场景。
 
 Node 146 / Deno 117 / 跨运行时一致。
+
+---
+
+# Stage 7 收尾 + 归属澄清
+
+判据验通即 Stage 7 收尾。以下三件**挂回 Stage 11**(它们本来就是 Stage 11「GHL 写回 + 重试」的活):
+
+- **tags**(tags_always + tags_conditional,含 assessment_mismatch)—— 纯新功能,不影响任何验证
+- **Vercel Cron 定时**(api/cron/ghl-retry.ts + vercel.json)—— sweep 现靠手动 curl
+- **Admin「刷新字段映射」按钮** —— 现靠 syncToGhl 里的自愈 force-refresh 覆盖常见场景
+
+**为什么它们一度在 Stage 7:** 判据不定,就验不了写回到底成没成,Stage 7 的验收(「手算分数与系统一致」延伸到「分数确实写进了 GHL」)就是假的。这个理由到判据定完用尽 —— 字段映射 / 判据 / sweep 是验证的必要前提,tags 不是。
+
+已在 Stage 7 提前做掉的 Stage 11 部分:key→id 字段映射(D8)、写回判据(D9 三分类)、重试 sweep 消费端。Stage 11 剩上面三件。
 
 ---
 
