@@ -17,7 +17,7 @@
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
-| 7 | 计分 Edge Function + 问卷页 | 未开始 |
+| 7 | 计分 Edge Function + 问卷页 | **计分核心完成(config v2 + 三组手算过);问卷页 + Edge Function + GHL 写回待做** |
 | 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | 未开始 |
 | 9 | PDF 异步渲染 + Storage + 分享卡 | 未开始 |
 | 10 | Admin Portal 其余四模块 + 现场模式 | 未开始 |
@@ -1751,6 +1751,71 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 ## 部署前要做
 
 `supabase secrets` 里 `assessment-quiz` 用到的是已有的 `SESSION_SECRET`,**没有新变量**。要 `npm run deploy:functions`(新增了一个函数)。
+
+---
+
+# config v2.0.0 + Stage 7 计分核心
+
+分支 `stage-7-scoring`。
+
+## config v2.0.0
+
+第三次下载没落地(下载这条路在客户那边一直不通),改为把 JSON 贴进来我落盘。落盘后**独立校验 29 条全过**——不看客户自检,自己跑一遍,含 4 条客户没单列的交叉引用:
+
+| 交叉引用 | 为什么单独查 |
+|---|---|
+| `ghl_writeback` 的 tier / weakest domain == tiers / dimensions | 改一处忘另一处,写回 GHL 的值不在域内,而 GHL 那边只会静默拒绝 |
+| `cost_model` / `offer_routing` 维度 key 都在 5 维内 | offer 指向一个不存在的维度 → 报告尾部 CTA 空白 |
+| `offer_routing` 引用的 product 都已定义 | 同上 |
+| measure 彻底清除(维度 / 题 / offer_routing 三处) | 静默残留:一道 dimension:"measure" 的题会被算进 raw_sum 却无对应维度 |
+
+主要改动:6→5 维(移除 measure)、24→20 题、计分 0–100→0–5.0、总分木桶加权→**五维简单平均**、新增 `action_library`、`offer_routing` 重写为两产品、survey S1 加 `option_to_dimension`、tiers 改 0–5 刻度。
+
+**总分改简单平均的理由(客户的设计决定):** 客户能自己验算——五个数加起来除以五就对上。算不出来的分数会让人怀疑整份报告。木桶效应移到叙事层:分数用平均,报告单独高亮最弱维度 + 代价换算。所以 `weakest_selection` 仍是主线。
+
+## Stage 6 断言随 config 一起改
+
+改 config 前先确认断言**正在红**(证明它们真在盯着 config):只有硬编码 `toHaveLength(24/6)` 那一条红,其余结构断言因为**动态遍历 dimensions**,自动适配了 5 维——这是当初写成动态 + 反向断言的回报。
+
+改成 20/5,分母 12 断言保留(每维仍 4 题 × 满分 3)。并把 ad-hoc 校验里的交叉引用**固化进 CI**(S1 映射对齐 order、ghl domain 对齐、offer_routing 覆盖、tiers 无缝、action_library 齐全)——ad-hoc 跑一次不如锁在测试里,Stage 8 要依赖这些。
+
+## Stage 7 计分核心(`src/lib/scoring.ts`)
+
+三处最容易错、单独锁死:
+
+1. **总分取整一次,显示与档位判定共用同一个值。** 否则显示 2.8、档位按未取整的 2.84999 判,两者对不上,学员直接不信报告。
+2. **tiers 查找在十分位整数上做。** 绕开 2.1 存成 2.0999… 的浮点边界。区间有缝/重叠都由 config 测试锁死(0.0–5.0 无缝无重叠)。
+3. **最弱/最强平分按 dimension.order 靠前优先**,不是数组顺序、不是字典序。
+
+**缺一个维度直接抛,不拿 0 顶替**——拿 0 顶替会算出看起来正常的错分数,那正是断点续答那条链路要防的静默错误。
+
+`round1` 加 `Number.EPSILON`:裸 `Math.round(2.85*10)/10` 会得 2.8(2.85*10 在 float 里是 28.4999…),加 EPSILON 顶回 2.9。
+
+### 三组手算验收(实际输出,已核对)
+
+| 输入 | 各维 | 总分 | 档位 | 最弱 | 最强 |
+|---|---|---|---|---|---|
+| 全 0 | 全 0.0 | 0.0 | manual | goal,traffic | goal,traffic |
+| 全 3 | 全 5.0 | 5.0 | flywheel | goal,traffic | goal,traffic |
+| goal 全 0 其余全 3 | goal 0.0 其余 5.0 | **4.0** | systemic | goal,traffic | traffic,capture |
+
+第三组是唯一能区分简单平均(4.0)与木桶加权(2.8)的。有一条测试显式钉住 `total !== 2.8`——谁把公式改回木桶,它会红并指名 2.8。
+
+## Stage 7 还没做的(下一轮)
+
+- **问卷页**(7 题,混合题型:single_select / multi_select / open_text）
+- **计分 Edge Function**:答满 → 触发 `computeResult` → 写 `assessment_results` → GHL 写回
+- **GHL 写回**:按 `ghl_writeback.custom_fields` 的 domain 校验后写,不在域内报 CONFIG 错不静默写
+
+## 数据清理(客户来跑,config 校验已通过)
+
+```
+delete from assessment_answers;
+delete from assessment_survey;
+delete from assessment_results;
+delete from assessment_sessions;
+```
+四张表名已核对存在,顺序子表先、entitlements 保留。**config 已校验通过,可以清了。**
 
 ---
 

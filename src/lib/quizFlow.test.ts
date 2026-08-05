@@ -67,9 +67,19 @@ describe('assessment-config structural assumptions', () => {
   const dimensions = config.dimensions;
   const optionValues = config.scoring.option_values;
 
-  it('24 scored questions across 6 dimensions', () => {
-    expect(questions).toHaveLength(24);
-    expect(dimensions).toHaveLength(6);
+  // v2.0.0：20 题 / 5 维(移除了「测数据 / measure」)。分母 12 不变 —— 每维仍是 4 题 × 满分 3
+  it('20 scored questions across 5 dimensions', () => {
+    expect(questions).toHaveLength(20);
+    expect(dimensions).toHaveLength(5);
+    expect(config.meta.version).toBe('2.0.0');
+  });
+
+  it('the measure dimension is fully gone', () => {
+    // 静默残留最危险:一道 dimension:"measure" 的题会被算进 raw_sum 却没有对应维度,
+    // 或 offer_routing 留一个死 key。三处一起查
+    expect(dimensions.map((d) => d.key)).not.toContain('measure');
+    expect(questions.some((q) => q.dimension === 'measure')).toBe(false);
+    expect(config.offer_routing).not.toHaveProperty('measure');
   });
 
   it('exactly 4 questions per dimension — otherwise the /12 denominator is wrong', () => {
@@ -156,6 +166,67 @@ describe('assessment-config structural assumptions', () => {
     for (const p of config.profile_questions) {
       if (!('value_map' in p) || !p.value_map) continue;
       expect(p.value_map.length, `${p.id} value_map`).toBe(p.zh.options.length);
+    }
+  });
+
+  /**
+   * ── v2 新增的交叉引用(把 config 校验从 ad-hoc 脚本固化进 CI)──
+   *
+   * 这几条锁的是「两处必须一致」的地方。它们的失败形态都是静默的:改一处忘了改另一处,
+   * 代码照跑,只是写回 GHL 的值不在域内、或报告尾部的 Offer 指向一个不存在的维度。
+   * Stage 8 直接依赖这些对齐,所以在这里就锁住。
+   */
+  it('survey S1 option_to_dimension order == dimensions order', () => {
+    // 不一致的话:客户点「造流量」,写回 GHL 的 priority 却是别的维度,
+    // 而 assessment_mismatch 标签(priority != weakest)会因此系统性算错
+    const orderKeys = [...dimensions].sort((a, b) => a.order - b.order).map((d) => d.key);
+    const s1 = config.survey_questions.find((s) => s.id === 'S1')!.option_to_dimension;
+    expect(s1).toEqual(orderKeys);
+  });
+
+  it('ghl_writeback tier / weakest domains align with tiers / dimensions', () => {
+    const cf = config.ghl_writeback.custom_fields;
+    const tierDomain = cf.find((f) => f.key === 'qai_assessment_tier')!.domain as string[];
+    expect([...tierDomain].sort()).toEqual([...config.tiers.map((t) => t.key)].sort());
+    const weakDomain = cf.find((f) => f.key === 'qai_assessment_weakest_1')!.domain as string[];
+    expect([...weakDomain].sort()).toEqual([...dimensions.map((d) => d.key)].sort());
+  });
+
+  it('offer_routing covers all 5 dimensions and every product is defined', () => {
+    const products = Object.keys(config.offer_routing.products);
+    for (const d of dimensions) {
+      const route = (config.offer_routing as unknown as Record<string, { product: string }>)[d.key];
+      expect(route, `offer_routing.${d.key}`).toBeDefined();
+      expect(products, `${d.key} product`).toContain(route.product);
+    }
+  });
+
+  it('tiers cover 0.0-5.0 seamlessly at 1-decimal resolution, no overlap', () => {
+    // 学员同时看得见分数和档位。区间有缝的话,某个分数会落不进任何档 → 档位空白;
+    // 有重叠的话,同一分数落进两档 → 取哪个看实现顺序,不可预期。
+    // 用「十分位整数」判断,避开浮点边界(2.1 存成 2.0999… 之类)
+    const covered = new Set<number>();
+    let overlap = false;
+    for (const t of config.tiers) {
+      for (let x = Math.round(t.min * 10); x <= Math.round(t.max * 10); x++) {
+        if (covered.has(x)) overlap = true;
+        covered.add(x);
+      }
+    }
+    expect(overlap, 'tiers overlap').toBe(false);
+    for (let x = 0; x <= 50; x++) {
+      expect(covered.has(x), `score ${(x / 10).toFixed(1)} lands in no tier`).toBe(true);
+    }
+  });
+
+  it('action_library: 5 actions per dimension + low/mid/high root_cause', () => {
+    for (const d of dimensions) {
+      const a = (config.action_library as unknown as Record<string, { actions: unknown[]; root_cause: Record<string, string> }>)[d.key];
+      expect(a, `action_library.${d.key}`).toBeDefined();
+      expect(a.actions, `${d.key} actions`).toHaveLength(5);
+      for (const level of ['low', 'mid', 'high']) {
+        expect(a.root_cause[level], `${d.key} root_cause.${level}`).toBeTruthy();
+      }
     }
   });
 });
