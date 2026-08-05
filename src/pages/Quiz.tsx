@@ -80,7 +80,7 @@ export default function Quiz() {
   );
   const bar = useMemo(() => progress(PROFILE_IDS, QUESTION_IDS, answeredSet), [answeredSet]);
 
-  // 答满之后交给 Stage 9 的问卷环节
+  // 答满之后交给 Stage 7 的问卷页
   useEffect(() => {
     if (step.phase === 'done') navigate(`/survey?lang=${locale}`, { replace: true });
   }, [step.phase, navigate, locale]);

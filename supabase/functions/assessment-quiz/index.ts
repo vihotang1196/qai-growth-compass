@@ -200,7 +200,7 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
   const answered = new Set([...Object.keys(profile), ...Object.keys(answers)]);
 
   /**
-   * 【答满就把 status 推到 survey】status 是给后台名单页与 Stage 9 看的。
+   * 【答满就把 status 推到 survey】status 是给后台名单页与 Stage 7 的问卷页看的。
    * 用 isComplete 而不是「计数等于 27」—— 库里可能留着改版前删掉的题的答案,
    * 那样计数会凑够而覆盖没够。见 quizFlow.ts 的注释。
    */
