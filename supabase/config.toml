@@ -62,3 +62,8 @@ import_map = "./functions/deno.json"
 [functions.assessment-ghl-resync]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 报告页取数。GET,cookie 鉴权,只读(不重算分数、不触发渲染)。
+[functions.assessment-report]
+verify_jwt = false
+import_map = "./functions/deno.json"

@@ -1,0 +1,163 @@
+/**
+ * assessment-report —— 报告页取数。GET,cookie 鉴权。
+ *
+ * 【只读,不重算分数、不触发渲染】读 assessment_results 里已经算好的分数/档位/最弱最强;
+ * 徽章需要的每题归一化分从 answers 重算(用同一个 perQuestionScore,不会与 finalize 分叉);
+ * 基准线 / 分位从同批次 + 全库结果算。分数本身不重跑 —— finalize 已经定过了。
+ *
+ * 返回九个板块要的全部数据,前端只做渲染不做判断:baselineSource / cohort 是否够样本
+ * 都在这里定好,前端不猜(PROGRESS 0.9)。
+ */
+import { serviceClient } from '../_shared/supa.ts';
+import { readSessionCookie, verifySession } from '../_shared/session.ts';
+import { missingKeys } from '../_shared/env.ts';
+import { perQuestionScore } from '../_shared/scoring.ts';
+import {
+  cohortStanding,
+  dimensionDiffs,
+  selectBaseline,
+  type ResultRow,
+} from '../../../src/lib/reportStats.ts';
+import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+
+const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+
+const DIM_KEYS = config.dimensions.map((d) => d.key);
+const SCALE = config.meta.score_scale;
+const MIN_N = config.cohorts.min_n_for_baseline;
+const QUESTIONS = config.questions;
+const P2 = config.profile_questions.find((p) => p.id === 'P2');
+const P3 = config.profile_questions.find((p) => p.id === 'P3');
+
+/** value_map 解析:下标越界 / 缺失 → null(报告里代价换算那块据此隐藏,不硬凑) */
+function fromValueMap(profile: Record<string, unknown>, id: string, map: number[] | undefined): number | null {
+  const idx = profile[id];
+  if (typeof idx !== 'number' || !map || idx < 0 || idx >= map.length) return null;
+  return map[idx];
+}
+
+Deno.serve(async (req: Request) => {
+  // 报告是只读,GET;cookie 鉴权(render token / admin JWT 留给 Stage 9 / 后台)
+  if (req.method !== 'GET') return json({ error: 'method_not_allowed', expected: 'GET' }, 405);
+
+  const env = { SESSION_SECRET: Deno.env.get('SESSION_SECRET') };
+  const missing = missingKeys(env);
+  if (missing.length) {
+    console.error(`server_misconfigured: missing ${missing.join(', ')}`);
+    return json({ error: 'server_misconfigured' }, 500);
+  }
+
+  const verified = await verifySession(readSessionCookie(req), env.SESSION_SECRET!, Date.now());
+  if (!verified) return json({ error: 'unauthorized' }, 401);
+
+  const supa = serviceClient();
+
+  try {
+    const { data: ent, error: entErr } = await supa
+      .from('assessment_entitlements')
+      .select('id, cohort_id, access_revoked_at')
+      .eq('id', verified.entitlementId)
+      .maybeSingle();
+    if (entErr) throw entErr;
+    if (!ent || ent.access_revoked_at) return json({ error: 'revoked' }, 403);
+
+    const { data: session, error: sErr } = await supa
+      .from('assessment_sessions')
+      .select('id, locale, profile, status')
+      .eq('entitlement_id', ent.id)
+      .maybeSingle();
+    if (sErr) throw sErr;
+    if (!session) return json({ error: 'no_session' }, 409);
+
+    const { data: result, error: rErr } = await supa
+      .from('assessment_results')
+      .select('dim_scores, total, tier, weakest, strongest, pdf_status')
+      .eq('session_id', session.id)
+      .maybeSingle();
+    if (rErr) throw rErr;
+    // 结果还没算出来 —— 报告没准备好(还没走完 finalize)
+    if (!result) return json({ error: 'not_ready' }, 404);
+
+    // ── 徽章:每题归一化分,按维度 + submodule_index 归位 ──
+    const { data: answerRows, error: aErr } = await supa
+      .from('assessment_answers')
+      .select('question_id, option_index')
+      .eq('session_id', session.id);
+    if (aErr) throw aErr;
+    const answers = new Map((answerRows ?? []).map((r) => [r.question_id as string, r.option_index as number]));
+
+    const submodules: Record<string, (number | null)[]> = {};
+    for (const k of DIM_KEYS) submodules[k] = [null, null, null];
+    for (const q of QUESTIONS) {
+      const idx = answers.get(q.id);
+      if (idx === undefined) continue;
+      const s = perQuestionScore(idx, q.option_count, SCALE);
+      if (s !== null) submodules[q.dimension][q.submodule_index] = s;
+    }
+
+    // ── 问卷(mismatch 高亮、goal_90d 展示要用)──
+    const { data: surveyRow } = await supa
+      .from('assessment_survey')
+      .select('responses')
+      .eq('session_id', session.id)
+      .maybeSingle();
+    const survey = (surveyRow?.responses ?? {}) as Record<string, unknown>;
+
+    // ── 基准线 / 分位:同批次 + 全库结果 ──
+    const { data: allRows, error: allErr } = await supa
+      .from('assessment_results')
+      .select('dim_scores, total, tier, session:assessment_sessions(status, entitlement:assessment_entitlements(cohort_id))')
+      .eq('session.status', 'completed');
+    if (allErr) throw allErr;
+
+    const norm = (r: { dim_scores: unknown; total: number; tier: string }): ResultRow => ({
+      dimensions: (r.dim_scores ?? {}) as Record<string, number>,
+      total: r.total,
+      tier: r.tier,
+    });
+    const globalRows: ResultRow[] = (allRows ?? []).map(norm);
+    const cohortRows: ResultRow[] = (allRows ?? [])
+      .filter((r) => {
+        // deno-lint-ignore no-explicit-any
+        const cid = (r as any).session?.entitlement?.cohort_id;
+        return ent.cohort_id !== null && cid === ent.cohort_id;
+      })
+      .map(norm);
+
+    const baseline = selectBaseline(cohortRows, globalRows, DIM_KEYS, MIN_N);
+
+    const myDims = (result.dim_scores ?? {}) as Record<string, number>;
+    // cohort_rank 板块:样本够才给;不足则 null,前端整块隐藏(跨期分位没意义,B1)
+    const cohort = cohortRows.length >= MIN_N
+      ? {
+        standing: cohortStanding(result.total, result.tier, cohortRows),
+        diffs: dimensionDiffs(myDims, baseline.means, DIM_KEYS),
+      }
+      : null;
+
+    const profile = (session.profile ?? {}) as Record<string, unknown>;
+
+    return json({
+      locale: session.locale,
+      result: {
+        dimensions: myDims,
+        total: result.total,
+        tier: result.tier,
+        weakest: result.weakest,
+        strongest: result.strongest,
+      },
+      submodules,
+      leadsPerMonth: fromValueMap(profile, 'P2', P2?.value_map),
+      dealValue: fromValueMap(profile, 'P3', P3?.value_map),
+      survey,
+      baseline,
+      cohort,
+      pdfStatus: result.pdf_status,
+    });
+  } catch (err) {
+    console.error(`report failed: ${err instanceof Error ? err.message : String(err)}`);
+    return json({ error: 'internal_error' }, 500);
+  }
+});
