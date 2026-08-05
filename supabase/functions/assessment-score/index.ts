@@ -17,7 +17,7 @@ import { missingKeys } from '../_shared/env.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
 import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
-import { checkFields, type FieldSpec } from '../_shared/ghlDomain.ts';
+import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -191,8 +191,8 @@ async function saveSurvey(
  * 算分并写结果。
  *
  * 【先确认答满再算】isComplete 用覆盖判断而不是计数 —— 库里可能留着改版前删掉的
- * 题的答案,那样计数会凑够而覆盖没够。答不满就算分会让某维 raw_sum 少题,
- * 而分母写死 12,那一维被静默低估。
+ * 题的答案,那样计数会凑够而覆盖没够。答不满就算分会让某维少一道题,
+ * 那一维的平均分被静默拉偏。
  */
 async function finalize(
   supa: ReturnType<typeof serviceClient>,
@@ -281,160 +281,9 @@ async function finalize(
     .eq('id', session.id);
   if (stErr) console.error(`failed to mark session ${session.id} completed: ${stErr.message}`);
 
-  // ── GHL 写回 ──
-  const writeback = await syncToGhl(supa, session.id, ghlContactId, result, survey);
+  // ── GHL 写回(共用 _shared/ghlWriteback,与重试 sweep 同一份实现)──
+  const payload = buildWritebackPayload(result, survey);
+  const writeback = await syncToGhl(supa, session.id, ghlContactId, payload, 'finalize');
 
   return json({ ok: true, result, writeback });
-}
-
-/**
- * 组装并校验 GHL payload。
- *
- * 【校验失败不写、且记 CONFIG 类错误】config 的 custom_fields_note 明确要求这一点。
- * 静默写入的后果是 GHL 那边字段值不在域内,而 workflow 只会静默不匹配 ——
- * 没有任何报警,只是这个人再也不会进任何自动化流程。
- *
- * 【写回失败不让 finalize 失败】分数已经落库了,报告能出。写回有 ghl_synced /
- * ghl_sync_attempts / ghl_next_retry_at 三列支撑重试(D2),这里只做第一次尝试。
- */
-async function syncToGhl(
-  supa: ReturnType<typeof serviceClient>,
-  sessionId: string,
-  ghlContactId: string,
-  result: { total: number; tier: string; weakest: [string, string] },
-  survey: Record<string, unknown>,
-): Promise<{ attempted: boolean; ok: boolean; detail?: string }> {
-  const payload: Record<string, unknown> = {
-    qai_assessment_status: 'completed',
-    qai_assessment_total: result.total,
-    qai_assessment_tier: result.tier,
-    qai_assessment_weakest_1: result.weakest[0],
-    qai_assessment_weakest_2: result.weakest[1],
-  };
-  // 问卷里有的才写 —— 缺字段的行为见 D9,不在这里静默补默认值
-  if (typeof survey.priority_dimension === 'string') {
-    payload.qai_assessment_priority = survey.priority_dimension;
-  }
-  if (typeof survey.goal_90d === 'string') payload.qai_assessment_goal_90d = survey.goal_90d;
-  if (typeof survey.consult_interest === 'string') {
-    payload.qai_assessment_consult_interest = survey.consult_interest;
-  }
-
-  const specs = config.ghl_writeback.custom_fields as unknown as FieldSpec[];
-  const failures = checkFields(payload, specs);
-  if (failures.length) {
-    const detail = failures.map((f) => `${f.key}: ${f.reason}`).join('; ');
-    // CONFIG 类错误 —— 不写入,显式记下来。这不是网络问题,重试也不会好
-    console.error(`CONFIG: GHL writeback payload rejected for session ${sessionId}: ${detail}`);
-    // CONFIG 类错误不排重试 —— 重试一百次也还是同样的 payload。
-    // 只记 ghl_last_error,不设 ghl_next_retry_at
-    await supa
-      .from('assessment_results')
-      .update({ ghl_last_error: `CONFIG: ${detail}`.slice(0, 1000) })
-      .eq('session_id', sessionId);
-    return { attempted: false, ok: false, detail };
-  }
-
-  // 变量名以字面量出现在 Deno.env.get() 里,check:env 才扫得到。见 _shared/env.ts
-  const ghlEnv = {
-    GHL_PRIVATE_TOKEN: Deno.env.get('GHL_PRIVATE_TOKEN'),
-    GHL_LOCATION_ID: Deno.env.get('GHL_LOCATION_ID'),
-  };
-  const missingGhl = missingKeys(ghlEnv);
-  if (missingGhl.length) {
-    // 缺凭证不让整个提交失败 —— 分数已经落库,报告能出。交给 D2 的重试
-    console.error(
-      `CONFIG: GHL writeback skipped for session ${sessionId}, missing ${missingGhl.join(', ')}`,
-    );
-    await markSyncFailure(supa, sessionId, `CONFIG: missing ${missingGhl.join(', ')}`);
-    return { attempted: false, ok: false, detail: `missing ${missingGhl.join(', ')}` };
-  }
-
-  /**
-   * 【customFields 用 key 还是 id —— 这一点我没有验证过】
-   *
-   * GHL v2 的 contact 更新接口接受 `customFields: [{ id, field_value }]`,
-   * 而部分端点也接受 `key`。我们的 config 里存的是 key(qai_assessment_*),
-   * 因为那是人能读懂的东西;但如果这个端点只认 UUID,这次调用会成功返回 200
-   * 而字段没有被写进去 —— **静默失败**。
-   *
-   * 所以:第一次真实调用之后必须去 GHL contact 上肉眼确认字段有值。
-   * 不匹配的话要么改成先查 custom field 列表拿 id 再写,要么改用
-   * Inbound Webhook + workflow 那条路(那条路我们在重发链接上已经验过)。
-   * 这里刻意把响应体记进日志,让那次确认有据可查,而不是靠猜。
-   */
-  const url = `https://services.leadconnectorhq.com/contacts/${ghlContactId}`;
-  const customFields = Object.entries(payload).map(([key, value]) => ({ key, field_value: value }));
-
-  try {
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${ghlEnv.GHL_PRIVATE_TOKEN}`,
-        'Content-Type': 'application/json',
-        // GHL v2 要求显式版本头,缺了会 4xx
-        Version: '2021-07-28',
-      },
-      body: JSON.stringify({ customFields }),
-    });
-    const text = await res.text().catch(() => '');
-
-    if (!res.ok) {
-      const detail = `GHL returned ${res.status}: ${text.slice(0, 400)}`;
-      console.error(`GHL writeback failed for session ${sessionId}: ${detail}`);
-      await markSyncFailure(supa, sessionId, detail);
-      return { attempted: true, ok: false, detail };
-    }
-
-    /**
-     * 【200 不等于写进去了】见上面关于 key / id 的注释。所以把响应体记下来 ——
-     * 那是判断「字段到底有没有被接受」的唯一线索。这与 Stage 3 学到的一样:
-     * GHL 收下 POST 不代表它做了我们以为的事。
-     */
-    console.log(
-      `GHL writeback 200 for contact ${ghlContactId}, session ${sessionId}. ` +
-        `Wrote keys: ${Object.keys(payload).join(',')}. Response: ${text.slice(0, 400)}. ` +
-        `VERIFY ON THE CONTACT — a 200 does not prove the custom fields were matched by key.`,
-    );
-    const { error } = await supa
-      .from('assessment_results')
-      .update({ ghl_synced: true, ghl_last_error: null })
-      .eq('session_id', sessionId);
-    if (error) console.error(`failed to mark ghl_synced for ${sessionId}: ${error.message}`);
-    return { attempted: true, ok: true };
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    console.error(`GHL writeback threw for session ${sessionId}: ${detail}`);
-    await markSyncFailure(supa, sessionId, detail);
-    return { attempted: true, ok: false, detail };
-  }
-}
-
-/**
- * 记一次写回失败,并推进重试计数(D2:3 列 + Vercel Cron 指数退避)。
- *
- * 退避:2^attempts 分钟,上限 6 小时。attempts 由这里自增,Cron 只管挑
- * ghl_synced = false 且 ghl_next_retry_at 已过的行。
- */
-async function markSyncFailure(
-  supa: ReturnType<typeof serviceClient>,
-  sessionId: string,
-  detail: string,
-): Promise<void> {
-  const { data } = await supa
-    .from('assessment_results')
-    .select('ghl_sync_attempts')
-    .eq('session_id', sessionId)
-    .maybeSingle();
-  const attempts = ((data?.ghl_sync_attempts as number) ?? 0) + 1;
-  const backoffMin = Math.min(2 ** attempts, 360);
-  const { error } = await supa
-    .from('assessment_results')
-    .update({
-      ghl_sync_attempts: attempts,
-      ghl_last_error: detail.slice(0, 1000),
-      ghl_next_retry_at: new Date(Date.now() + backoffMin * 60_000).toISOString(),
-    })
-    .eq('session_id', sessionId);
-  if (error) console.error(`failed to record sync failure for ${sessionId}: ${error.message}`);
 }

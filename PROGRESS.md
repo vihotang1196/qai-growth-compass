@@ -1939,6 +1939,40 @@ Node 127 / Deno 106 / 跨运行时逐字一致。
 
 ---
 
+# GHL 写回:重试 sweep + 静默失败的实证
+
+## 实证:200 ≠ 写进去了(我的 bug)
+
+客户先建好 8 个自定义字段前,上一轮 finalize 的 `ghl_synced=true` / `ghl_last_error=null`,
+而那时字段在 GHL 里【根本不存在】。GHL 收下 PUT、返回 200、我们标 synced=true —— 
+字段却没有。**不是「写进去了看不到」,是「什么都没发生但报告成功」。**
+
+更糟:`syncToGhl` 上面就贴着「200 不证明字段被接受」的注释,逻辑里却仍在 200 时标
+synced=true。**注释承认了风险,代码没照做** —— 跟「打印一个值但不对它做判断」同一个病。
+
+## 重试 sweep 之前根本不存在
+
+只有 assessment-score 写那三列,没有任何东西读。D2 上一轮只建了列 + markSyncFailure
+(设 next_retry_at),没建消费端。所以「把 ghl_synced 重置成 false」本身什么都不会发生。
+新增 `assessment-ghl-resync`(内部接口,X-Internal-Secret,与 maintenance 同套鉴权)
+补上消费端;挑 ghl_synced=false 且 next_retry_at 已过的行重跑,批上限 50 到顶会明说。
+写回逻辑抽到 `_shared/ghlWriteback.ts`,finalize 与 sweep 共用一份,不造第二份副本。
+
+## 判据待定,故意留在这一轮之外
+
+响应体日志从截断 400 字改成完整记(最多 4000)—— 上一轮的截断可能正好切掉信号。这次
+重跑采集「字段存在时」GHL 返回什么,和上一轮「字段不存在时」对比,才知道 200 之外有没有
+可用信号(响应体里的 accepted/skipped),还是必须写回后回读 contact。**没在看到数据前
+把判据定死** —— 与当初区分真假 Inbound Webhook trigger 同一个方法。看到响应体后要做的:
+把成功判据从「200」改成「响应体确认字段被接受」或「回读 contact 核对」。
+
+## 触发命令(手动重跑一次)
+
+直接 curl Supabase 函数,带 apikey(anon)+ X-Internal-Secret。Vercel Cron 的定时 wiring
+(api/cron/ghl-retry.ts + vercel.json)是 D2 剩下的一步,不阻塞这次手动重跑。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

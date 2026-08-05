@@ -57,3 +57,8 @@ import_map = "./functions/deno.json"
 [functions.assessment-score]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# GHL 写回的重试 sweep(D2 消费端)。内部接口,X-Internal-Secret 鉴权,不进 /api 代理。
+[functions.assessment-ghl-resync]
+verify_jwt = false
+import_map = "./functions/deno.json"
