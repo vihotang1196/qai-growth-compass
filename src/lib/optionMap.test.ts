@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import config from '@/config/assessment-config.json';
 import { mapOption, mapOptions } from './optionMap';
-import { scoreForOption } from './quizFlow';
 
 describe('mapOption', () => {
   const table = ['goal', 'traffic', 'capture', 'convert', 'value'] as const;
@@ -48,15 +47,6 @@ describe('mapOptions (multi-select)', () => {
   });
 });
 
-describe('scoreForOption delegates to mapOption', () => {
-  // 同一份实现的证据:非线性标度下两者结果必须一致
-  it('agrees with mapOption on a non-linear scale', () => {
-    const scale = [0, 1, 3, 5];
-    for (const i of [-1, 0, 1, 2, 3, 4, 1.5, NaN]) {
-      expect(scoreForOption(i, scale)).toBe(mapOption(i, scale));
-    }
-  });
-});
 
 /**
  * 真实 config 的映射表长度必须与选项数一致。

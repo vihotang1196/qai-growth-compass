@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import config from '@/config/assessment-config.json';
-import { isComplete, nextStep, progress, scoreForOption } from './quizFlow';
-import { PROFILE_IDS, QUESTION_IDS, SCORE_CASES, STEP_CASES } from './quizFlow.cases';
+import { isComplete, nextStep, progress } from './quizFlow';
+import { PROFILE_IDS, QUESTION_IDS, STEP_CASES } from './quizFlow.cases';
 
 describe('nextStep', () => {
   for (const c of STEP_CASES) {
@@ -46,86 +46,67 @@ describe('progress', () => {
   });
 });
 
-describe('scoreForOption', () => {
-  for (const c of SCORE_CASES) {
-    it(`${c.optionIndex} of [${c.optionValues}] → ${c.expected} (${c.why})`, () => {
-      expect(scoreForOption(c.optionIndex, c.optionValues)).toBe(c.expected);
-    });
-  }
-});
-
 /**
- * 配置自身的完整性。
+ * 配置自身的完整性(Stage 6 断言,v3 更新)。
  *
- * 【为什么这些值得测】计分公式是 `(raw_sum / 12) * 5`,**分母 12 写死在配置里**,
- * 它成立的前提是「每维 4 题 × 每题满分 3」。改配置的人不会同时想到那个分母 ——
- * 加一道题、删一道题、或者某题少一个选项,都会让那一维的分数无声偏移。
+ * 【为什么这些值得测】v3 计分是「每题按 option_count 归一化 → 维度内平均」。
+ * 归一化的分母是 option_count-1,它必须与实际选项数组长度一致,否则某题的分数会静默偏。
+ * 而「每维恰好 3 题」是维度平均的前提。改题库的人不会同时想到这些耦合 ——
  * 这几条断言就是让那种改动当场变红。
  */
 describe('assessment-config structural assumptions', () => {
   const questions = config.questions;
   const dimensions = config.dimensions;
-  const optionValues = config.scoring.option_values;
 
-  // v2.0.0：20 题 / 5 维(移除了「测数据 / measure」)。分母 12 不变 —— 每维仍是 4 题 × 满分 3
-  it('20 scored questions across 5 dimensions', () => {
-    expect(questions).toHaveLength(20);
+  // v3.0.0:15 题 / 5 维 / 每维 3 题(移除了 5 道 maturity 题)
+  it('15 scored questions across 5 dimensions', () => {
+    expect(questions).toHaveLength(15);
     expect(dimensions).toHaveLength(5);
-    expect(config.meta.version).toBe('2.0.0');
+    expect(config.meta.version).toBe('3.0.0');
   });
 
   it('the measure dimension is fully gone', () => {
-    // 静默残留最危险:一道 dimension:"measure" 的题会被算进 raw_sum 却没有对应维度,
-    // 或 offer_routing 留一个死 key。三处一起查
+    // 静默残留最危险:一道 dimension:"measure" 的题会被算进分数却没有对应维度
     expect(dimensions.map((d) => d.key)).not.toContain('measure');
     expect(questions.some((q) => q.dimension === 'measure')).toBe(false);
     expect(config.offer_routing).not.toHaveProperty('measure');
   });
 
-  it('exactly 4 questions per dimension — otherwise the /12 denominator is wrong', () => {
-    // 维度的标识字段是 key,不是 id
+  it('exactly 3 questions per dimension', () => {
     const perDimension = new Map<string, number>();
     for (const q of questions) perDimension.set(q.dimension, (perDimension.get(q.dimension) ?? 0) + 1);
     for (const d of dimensions) {
-      expect(perDimension.get(d.key), `dimension ${d.key}`).toBe(4);
+      expect(perDimension.get(d.key), `dimension ${d.key}`).toBe(3);
     }
     // 反向:没有配置外的维度 —— 一道题挂到打错的维度上,正向断言拦不住
     expect([...perDimension.keys()].sort()).toEqual(dimensions.map((d) => d.key).sort());
   });
 
+  it('questions count == sum of all dimensions submodule counts (15 total)', () => {
+    const total = dimensions.reduce((n, d) => n + d.submodules_zh.length, 0);
+    expect(questions).toHaveLength(total);
+  });
+
   /**
-   * 每维的 4 题不是同质的,结构是【3 道子模块题 + 1 道成熟度题】:
-   *   submodule_index 0 / 1 / 2  → 对应 submodules_zh 的三项,报告里出徽章
-   *   submodule_index null       → type: 'maturity',不挂子模块
-   *
-   * Stage 8 的徽章渲染要按 submodule_index 取 submodules_zh 的下标,
-   * 所以这个结构必须锁住:下标越界或重复都会让某个子模块的徽章取错或取空,
-   * 而那要到 Stage 8 生成报告时才看得见。
+   * v3:每维 3 道题,submodule_index 0/1/2 各一道,【没有 maturity 题】。
+   * 徽章渲染要按 submodule_index 取 submodules_zh 的下标,下标越界或重复会让徽章取错或取空。
    */
-  it('per dimension: 3 submodule questions (index 0/1/2) + 1 maturity question', () => {
+  it('per dimension: submodule index 0/1/2, no maturity question', () => {
     const byKey = new Map(dimensions.map((d) => [d.key, d]));
     for (const d of dimensions) {
       const mine = questions.filter((q) => q.dimension === d.key);
-      const subIdx = mine
-        .filter((q) => q.submodule_index !== null)
-        .map((q) => q.submodule_index)
-        .sort();
-      // 0/1/2 各恰好一道 —— 重复会让一个子模块没有对应题
+      const subIdx = mine.map((q) => q.submodule_index).sort((a, b) => a - b);
       expect(subIdx, `dimension ${d.key} submodule indices`).toEqual([0, 1, 2]);
       expect(subIdx.length, `dimension ${d.key} submodule count`).toBe(byKey.get(d.key)!.submodules_zh.length);
-
-      const maturity = mine.filter((q) => q.submodule_index === null);
-      expect(maturity, `dimension ${d.key} maturity question`).toHaveLength(1);
-      expect(maturity[0].type, `${maturity[0].id}`).toBe('maturity');
+      // v3 移除了 maturity —— 不该有 submodule_index 为 null 的题
+      expect(mine.some((q) => q.submodule_index === null), `${d.key} has a null submodule`).toBe(false);
     }
   });
 
-  it('having a type and having a null submodule_index select the same questions', () => {
-    // 两个字段各自表达同一件事。分叉了的话,一处代码按 type 判断、
-    // 另一处按 submodule_index 判断,行为就会不一致
-    const withType = questions.filter((q) => q.type !== undefined).map((q) => q.id);
-    const nullIndex = questions.filter((q) => q.submodule_index === null).map((q) => q.id);
-    expect(withType).toEqual(nullIndex);
+  it('no question carries a maturity type any more', () => {
+    // v2 用 type:'maturity' + submodule_index:null 标第 4 题。v3 全删了 ——
+    // 残留一道会让它没有对应子模块,徽章表少一格或错位
+    expect(questions.some((q) => 'type' in q)).toBe(false);
   });
 
   it('submodule counts match across locales', () => {
@@ -134,15 +115,21 @@ describe('assessment-config structural assumptions', () => {
     }
   });
 
-  it('denominator 12 = 4 questions x max option value 3', () => {
-    const maxOption = Math.max(...optionValues);
-    expect(4 * maxOption).toBe(12);
+  /**
+   * v3 计分的核心前提:每题的 option_count 必须与实际选项数组长度一致。
+   * 归一化分母是 option_count-1;对不上会让分数静默偏。这是 v3 取代「固定分母 12」的那条。
+   */
+  it('each question option_count matches its actual option list length, in both locales', () => {
+    for (const q of questions) {
+      expect(q.zh.options, `${q.id} zh`).toHaveLength(q.option_count);
+      expect(q.en.options, `${q.id} en`).toHaveLength(q.option_count);
+    }
   });
 
-  it('each question has option_values-many options in both locales', () => {
+  it('every option_count is 3 or 4 and at least 2 (denominator guard)', () => {
     for (const q of questions) {
-      expect(q.zh.options, `${q.id} zh`).toHaveLength(optionValues.length);
-      expect(q.en.options, `${q.id} en`).toHaveLength(optionValues.length);
+      expect([3, 4], `${q.id}`).toContain(q.option_count);
+      expect(q.option_count, `${q.id}`).toBeGreaterThanOrEqual(2);
     }
   });
 

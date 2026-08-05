@@ -17,7 +17,7 @@
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | 未开始 |
 | 5 | Admin 认证 + 名单管理页 | 未开始 |
 | 6 | 答题流程(背景题 + 24 题 + 断点续答) | 未开始 |
-| 7 | 计分 Edge Function + 问卷页 | **代码完成,待部署实测(GHL 写回的 key/id 匹配未验证)** |
+| 7 | 计分 Edge Function + 问卷页 | **v3 重构完成,待部署实测(GHL key/id 仍未验证)** |
 | 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | 未开始 |
 | 9 | PDF 异步渲染 + Storage + 分享卡 | 未开始 |
 | 10 | Admin Portal 其余四模块 + 现场模式 | 未开始 |
@@ -1880,6 +1880,62 @@ npm run config:check              只校验当前 config
 ## 待部署实测
 
 新增两个函数(`assessment-score`)+ 一个迁移,所以要 `supabase db push` 和 `npm run deploy:functions`。环境变量无新增(`GHL_PRIVATE_TOKEN` / `GHL_LOCATION_ID` 已在清单里)。
+
+---
+
+# config v3.0.0 — 计分公式 + 选项数 + UI 全改
+
+分支 `stage-7-scoring`(接着 v2 那批往下)。这次比 v2 更伤,因为**计分公式本身变了**。
+
+## 计分:固定分母作废,改每题归一化
+
+选项数不再统一(T2/C2/C3 是 4 个,其余 12 题 3 个),固定分母 12 不成立。改为:
+
+```
+每题归一化 = (option_index / (option_count - 1)) * 5     # 3 选项 → 0/2.5/5;4 选项 → 0/1.667/3.333/5
+维度分     = round(mean(该维 3 题归一化分), 1)
+总分       = round(mean(五维分), 1)                       # 简单平均不变
+```
+
+**为什么归一化**:每题代表一个子模块,权重必须相等。4 选项的题不能因为格子多就占更大权重。归一化让顶格永远是 5.0、零格永远是 0,与选项数无关。
+
+三组手算(实际输出,已核对):全零→0.0/manual;全顶格→5.0/flywheel;一维全零其余顶格→**4.0**/systemic(木桶会给 2.8)。
+
+## 徽章的连带修正(你点名的那处)
+
+徽章从**按 option_index** 改成**按归一化分**。旧逻辑 `index===3→full` 在 v3 是错的:3 选项题的 index 2 已经是满分 5.0,却会被判成 partial。v3 真值是 `scoring.badgeForScore(归一化分, scale)`:`>=5.0` full、`==0` missing、其余 partial。
+
+`SubmoduleMark.markStateFromScore`(v2 的 option_index 判据)**已标注废弃**,只剩 Showcase 在用。**Stage 8 报告页必须用 `badgeForScore`,不要用组件里那个旧函数**——两者词汇不同(partial↔half、missing↔empty),Stage 8 接线时对上。
+
+## schema 连带:assessment_answers.score
+
+per-question 分是小数(2.5 / 1.667),而 score 列是 int。但 score 只是缓存——finalize 以 option_index 为准重算。迁移 `20260805100000` 把 score 改成可空,assessment-quiz 不再写它。留列不删是为避免部署顺序风险(迁移可能先于函数上线,老函数仍带 score 插入,列还在就不失败)。
+
+## apply-config 校验器同步改 v3
+
+上一轮那个校验器是 v2 形状写死的,会拒绝合法的 v3(每维 4 题、固定分母、maturity 结构)——这正是「约束活在两处」:校验器把 v2 的形状复制进了自己。已改成 v3 规则:每维 3 题、`option_count == 实际选项数`、子模块 0/1/2 无 maturity、题数 == 子模块总数。`npm run config:check` 通过 31 条。
+
+## 死代码清理
+
+v3 没有 `option_values`,`scoreForOption` 成了死代码,连同它的 SCORE_CASES 测试一并删除(quizFlow / optionMap / 两侧测试)。`mapOption` 保留——问卷的 S1/S7 映射还用它。
+
+## 答题页:滚动式 + 乐观保存
+
+一题一屏 + 等确认 → 一页滚动(背景题一段 + 五维各一段,带维度标题)+ 点选即刻生效、后台异步保存。**断点续答仍成立**:进来 bootstrap 回填 + 滚动定位到第一个未答;提交时统一校验有没有没答的 / 还在存的 / 存失败的,有则定位过去。防跳题的旧约束去掉了——滚动式下跳题本来就允许,那约束失去意义。
+
+## Stage 6 断言随 config 改到 v3
+
+20→15、每维 4→3 题、去掉 maturity 结构与固定分母那条,新增「option_count == 实际选项数」「无 maturity 题」「题数 == 子模块总数」。反向和动态断言照旧自动适配。
+
+## 数据清理(客户来跑,config 已校验通过)
+
+G4/T4/C4/V4/M4 指向已删除的题,旧 score 是旧标度。四张表清空,entitlements 保留。
+
+## 待部署
+
+`supabase db push`(两个新迁移:total→numeric 那条是 v2 的、score→nullable 这条是 v3 的)+ `npm run deploy:functions`(assessment-score 新增、assessment-quiz 改了)。GHL 两个变量客户已配,这轮 finalize 第一次真撞 key vs UUID —— 验收去 contact 上肉眼看字段。
+
+Node 127 / Deno 106 / 跨运行时逐字一致。
 
 ---
 

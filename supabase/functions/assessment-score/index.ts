@@ -14,7 +14,7 @@
 import { serviceClient } from '../_shared/supa.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
-import { isComplete, scoreForOption } from '../_shared/quizFlow.ts';
+import { isComplete } from '../_shared/quizFlow.ts';
 import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
 import { checkFields, type FieldSpec } from '../_shared/ghlDomain.ts';
@@ -29,10 +29,10 @@ const PROFILE_IDS = config.profile_questions.map((p) => p.id);
 const QUESTION_IDS = QUESTIONS.map((q) => q.id);
 const DIMENSIONS = config.dimensions.map((d) => ({ key: d.key, order: d.order }));
 const TIERS = config.tiers.map((t) => ({ key: t.key, min: t.min, max: t.max }));
-const OPTS = {
-  maxRaw: config.meta.max_raw_per_dimension,
-  scale: config.meta.score_scale,
-};
+// v3:每题按 option_count 归一化,固定分母作废。只需要 scale
+const SCALE = config.meta.score_scale;
+/** 题 id → option_count,finalize 归一化要用 */
+const OPTION_COUNT = new Map(config.questions.map((q) => [q.id, q.option_count]));
 
 interface SessionRow {
   id: string;
@@ -201,7 +201,7 @@ async function finalize(
 ): Promise<Response> {
   const { data: answerRows, error: aErr } = await supa
     .from('assessment_answers')
-    .select('question_id, option_index, score')
+    .select('question_id, option_index')
     .eq('session_id', session.id);
   if (aErr) throw aErr;
 
@@ -213,7 +213,7 @@ async function finalize(
   if (pErr) throw pErr;
 
   const answers = new Map(
-    (answerRows ?? []).map((r) => [r.question_id as string, r as { option_index: number; score: number }]),
+    (answerRows ?? []).map((r) => [r.question_id as string, r as { option_index: number }]),
   );
   const profileKeys = Object.keys((sessionRow?.profile ?? {}) as Record<string, unknown>);
   const answered = new Set([...profileKeys, ...answers.keys()]);
@@ -232,27 +232,34 @@ async function finalize(
   if (!surveyRow) return json({ error: 'survey_missing' }, 409);
   const survey = (surveyRow.responses ?? {}) as Record<string, unknown>;
 
-  // ── 每维 raw_sum。分数从库里读,而库里的分数当初也是服务端算的 ──
-  const rawSums: Record<string, number> = {};
-  for (const d of DIMENSIONS) rawSums[d.key] = 0;
+  /**
+   * ── 组装每道题的作答,交给 computeResult 归一化 ──
+   *
+   * 【以 option_index 为准,不信库里可能残留的 score】v3 计分按每题 option_count
+   * 归一化。option_index 是不受标度影响的事实;computeResult 内部按 config 的
+   * option_count 重新归一化,所以 config 改版之后同一批人不会新旧标度混着。
+   *
+   * option_count 从 config 取(不从答题时存的值),因为 config 是分数标度的唯一真相源。
+   */
+  const questionInputs = [];
   for (const q of QUESTIONS) {
     const row = answers.get(q.id);
     if (!row) continue; // isComplete 已经保证不会走到这里
-    /**
-     * 【重算一次分数而不是直接信库里的 score】库里的 score 是当初按 option_values
-     * 算的。如果标度改过(config 改版),旧的 score 就是按旧标度算的 ——
-     * 直接用会让同一批人里有的按新标度、有的按旧标度。以 option_index 为准重算,
-     * option_index 是不受标度影响的事实。
-     */
-    const score = scoreForOption(row.option_index, config.scoring.option_values);
-    if (score === null) {
-      console.error(`session ${session.id}: question ${q.id} has out-of-range option_index ${row.option_index}`);
-      return json({ error: 'corrupt_answer', id: q.id }, 500);
-    }
-    rawSums[q.dimension] += score;
+    questionInputs.push({
+      dimension: q.dimension,
+      optionIndex: row.option_index,
+      optionCount: OPTION_COUNT.get(q.id)!,
+    });
   }
 
-  const result = computeResult(rawSums, DIMENSIONS, TIERS, OPTS);
+  let result;
+  try {
+    result = computeResult(questionInputs, DIMENSIONS, TIERS, { scale: SCALE });
+  } catch (err) {
+    // computeResult 对越界 option_index / 缺维度会抛 —— 那是数据损坏,不是客户的错
+    console.error(`session ${session.id}: scoring failed: ${err instanceof Error ? err.message : String(err)}`);
+    return json({ error: 'corrupt_answer' }, 500);
+  }
 
   const { error: rErr } = await supa.from('assessment_results').upsert(
     {

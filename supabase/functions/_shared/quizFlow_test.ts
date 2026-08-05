@@ -1,11 +1,6 @@
 import { assertEquals } from '@std/assert';
-import { isComplete, nextStep, progress, scoreForOption } from './quizFlow.ts';
-import {
-  PROFILE_IDS,
-  QUESTION_IDS,
-  SCORE_CASES,
-  STEP_CASES,
-} from '../../../src/lib/quizFlow.cases.ts';
+import { isComplete, nextStep, progress } from './quizFlow.ts';
+import { PROFILE_IDS, QUESTION_IDS, STEP_CASES } from '../../../src/lib/quizFlow.cases.ts';
 
 // 用例与 Node 侧共用一份 —— 两侧各写一遍的话漏掉的那侧会显示「全部通过」
 for (const c of STEP_CASES) {
@@ -14,11 +9,6 @@ for (const c of STEP_CASES) {
   });
 }
 
-for (const c of SCORE_CASES) {
-  Deno.test(`scoreForOption: ${c.optionIndex} of [${c.optionValues}] → ${c.expected} (${c.why})`, () => {
-    assertEquals(scoreForOption(c.optionIndex, c.optionValues), c.expected);
-  });
-}
 
 Deno.test('isComplete:数量凑够但有配置外的旧答案 → 不算答完', () => {
   const answered = new Set(['P1', 'P2', 'P3', 'G1', 'G2', 'G3', 'G4', 'M1', 'X_DELETED']);

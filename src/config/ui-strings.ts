@@ -75,6 +75,24 @@ export const UI_STRINGS = {
     en: "This answer didn't save, so we stopped here. Retry — skipping would leave a gap.",
   },
   'quiz.loadFailed': { zh: '载入答题进度失败。', en: 'Could not load your progress.' },
+  'quiz.intro': { zh: '花大约 3 分钟,凭直觉选最接近的一项。答完立刻出你的增长罗盘分数。', en: 'About 3 minutes. Pick what fits best — your Compass score comes right after.' },
+  'quiz.profileSectionTitle': { zh: '先了解一下你的生意', en: 'First, about your business' },
+  'quiz.saved': { zh: '已保存', en: 'Saved' },
+  'quiz.savingOne': { zh: '保存中', en: 'Saving' },
+  'quiz.saveOneFailed': { zh: '这一题没存上,点一下重选即可重试', en: "This one didn't save — pick again to retry" },
+  'quiz.submit': { zh: '提交,查看我的分数', en: 'Submit and see my score' },
+  'quiz.unanswered': {
+    zh: '还有 {n} 题没答,已帮你定位到第一题。',
+    en: '{n} question(s) left — jumped you to the first.',
+  },
+  'quiz.stillSaving': {
+    zh: '还有答案在保存,稍等一两秒再提交。',
+    en: 'Some answers are still saving — try again in a second.',
+  },
+  'quiz.someFailed': {
+    zh: '有 {n} 题没保存成功,已定位到第一题,重选一下就会重试。',
+    en: '{n} answer(s) failed to save — jumped you to the first; re-pick to retry.',
+  },
   'quiz.autosaveNote': {
     zh: '每答一题即自动保存。中途关掉,下次点链接回来会从这一题继续。',
     en: 'Saved after every answer. Close it and your link brings you back to this question.',

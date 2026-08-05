@@ -63,33 +63,44 @@ function validate(c) {
     'questions 的 dimension 集合 == dimensions 的 key 集合',
   );
 
-  const maxOpt = Math.max(...(c.scoring?.option_values ?? [0]));
+  /**
+   * v3：固定分母作废。每题 option_count 为 3 或 4,且必须与实际选项数组长度一致 ——
+   * 计分按 option_count 归一化,长度对不上会让归一化的分母错,分数静默偏。
+   */
   chk(
-    perDim * maxOpt === c.meta?.max_raw_per_dimension,
-    `${perDim} × max(option_values)=${maxOpt} == meta.max_raw_per_dimension (${c.meta?.max_raw_per_dimension})`,
+    questions.every((q) => q.option_count === q.zh?.options?.length),
+    'option_count == zh.options 长度(每题)',
+  );
+  chk(
+    questions.every((q) => q.zh?.options?.length === q.en?.options?.length),
+    '每题两语言选项数一致',
+  );
+  chk(
+    questions.every((q) => q.option_count >= 2),
+    'option_count >= 2(归一化分母 option_count-1 不能为 0)',
   );
 
-  // 每维 3 个子模块下标各一道 + 1 道 maturity
+  /**
+   * v3:每维 3 个子模块下标 0/1/2 各一道,没有 maturity 题(submodule_index 全非 null)。
+   */
   for (const d of dims) {
     const mine = questions.filter((q) => q.dimension === d.key);
-    const sub = mine.filter((q) => q.submodule_index !== null).map((q) => q.submodule_index).sort();
-    const mat = mine.filter((q) => q.submodule_index === null);
+    const sub = mine.map((q) => q.submodule_index).sort((a, b) => a - b);
+    const expected = d.submodules_zh.map((_, i) => i);
     chk(
-      sub.length === d.submodules_zh.length &&
-        sub.every((v, i) => v === i) &&
-        mat.length === 1 &&
-        mat[0].type === 'maturity',
-      `${d.key}: 子模块下标 0..${d.submodules_zh.length - 1} 各一道 + 1 道 maturity`,
+      JSON.stringify(sub) === JSON.stringify(expected) && mine.every((q) => q.submodule_index !== null),
+      `${d.key}: 子模块下标 [${expected.join(',')}] 各一道,无 maturity`,
     );
     chk(d.submodules_zh.length === d.submodules_en.length, `${d.key}: 两语言子模块数一致`);
   }
 
+  // v3 不变量:题数 == 所有维度 submodules 长度之和(15 个三级项一一对应)
+  const submoduleTotal = dims.reduce((n, d) => n + d.submodules_zh.length, 0);
   chk(
-    questions.every(
-      (q) => q.zh?.options?.length === maxOpt + 1 && q.en?.options?.length === maxOpt + 1,
-    ),
-    `每题两语言各 ${maxOpt + 1} 个选项`,
+    questions.length === submoduleTotal,
+    `题数 == 所有维度 submodules 长度之和 (${questions.length} vs ${submoduleTotal})`,
   );
+
   const qids = questions.map((q) => q.id);
   chk(new Set(qids).size === qids.length, '题 id 唯一');
 

@@ -1,16 +1,18 @@
 /**
- * Deno 侧再导出 —— 与 _shared/phone.ts / quizFlow.ts 同一个做法,实现只有一份。
+ * Deno 侧再导出 —— 实现只有一份,在 src/lib/scoring.ts。
  *
- * Stage 7 的计分 Edge Function 在答完后调 computeResult:把每维 raw_sum 算成
- * 分数 / 总分 / 档位 / 最弱两维,写进 assessment_results。分数一律服务端算,
- * 不信客户端传来的值。
+ * v3:计分 = 每题按 option_count 归一化 → 维度内平均。assessment-score 的 finalize
+ * 调 computeResult,徽章渲染(Stage 8)用 badgeForScore。分数一律服务端算。
  */
 export {
+  badgeForScore,
   computeResult,
-  dimensionScore,
+  perQuestionScore,
   round1,
   tierForScore,
+  type BadgeState,
   type DimensionConfig,
+  type QuestionInput,
   type ScoreResult,
   type TierConfig,
 } from '../../../src/lib/scoring.ts';

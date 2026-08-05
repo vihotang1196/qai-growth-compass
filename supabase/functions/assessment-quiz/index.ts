@@ -8,7 +8,7 @@
  *
  * 【分数一律服务端算,不收客户端传来的 score】那是唯一能改自己成绩的入口。
  * 这份报告最终要拿去做 offer 分流 —— 有人把自己刷成高分档,我们就把他从名单里漏掉了。
- * 客户端只能传 option_index,分数由服务端按 config.scoring.option_values 查表得出。
+ * 客户端只能传 option_index,分数由服务端在 finalize 时按 option_count 归一化算(见 assessment-score)。
  *
  * 【每次请求都重新查 access_revoked_at,不只在登录时查】cookie 有 30 天,
  * 而 Stage 4 的 token 校验只在换 cookie 那一刻发生。中途被 revoke 的人如果还能答题,
@@ -17,7 +17,7 @@
 import { serviceClient } from '../_shared/supa.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
-import { isComplete, scoreForOption } from '../_shared/quizFlow.ts';
+import { isComplete } from '../_shared/quizFlow.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -29,9 +29,8 @@ function json(body: unknown, status = 200): Response {
 /**
  * 【服务端也读同一份配置文件】题目、选项数、分数标度全部以它为准。
  * 前端各一份的话,改题库时必然有一侧漏改,而漏改的那侧不会报错 ——
- * 它会照旧接受一个已经不存在的 question_id,或者按旧标度算分。
+ * 它会照旧接受一个已经不存在的 question_id。
  */
-const OPTION_VALUES = config.scoring.option_values;
 const QUESTIONS = new Map(config.questions.map((q) => [q.id, q]));
 const PROFILE = new Map(config.profile_questions.map((p) => [p.id, p]));
 const PROFILE_IDS = config.profile_questions.map((p) => p.id);
@@ -143,22 +142,23 @@ Deno.serve(async (req: Request) => {
         if (!question) return json({ error: 'unknown_question', id: questionId }, 400);
 
         if (typeof optionIndex !== 'number') return json({ error: 'invalid_option_index' }, 400);
-        // 先按题目的实际选项数卡一次,再交给 scoreForOption ——
-        // 两者长度理论上相等(有测试锁),但这里不假设它
-        if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= question.zh.options.length) {
+        // 按题目的实际选项数卡范围。option_count 与 options 长度一致由 config 测试锁
+        if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= question.option_count) {
           return json({ error: 'option_out_of_range', id: questionId }, 400);
         }
 
-        const score = scoreForOption(optionIndex, OPTION_VALUES);
-        if (score === null) return json({ error: 'option_out_of_range', id: questionId }, 400);
-
-        // unique (session_id, question_id) 支撑改答案:同一题再答就是更新
+        /**
+         * 【v3 只存 option_index,不存 score】
+         * v2 这里存过一个按 option_values 查表得出的 score。v3 计分改为按 option_count
+         * 归一化(小数),而 score 列是 int 存不下;更重要的是,分数在 finalize 时以
+         * option_index 为准重算(option_index 是不受标度影响的事实,score 只是缓存)。
+         * 所以这里不再写 score —— 迁移已把 score 列改成可空。
+         */
         const { error } = await supa.from('assessment_answers').upsert(
           {
             session_id: session.id,
             question_id: questionId,
             option_index: optionIndex,
-            score,
             answered_at: new Date().toISOString(),
           },
           { onConflict: 'session_id,question_id' },

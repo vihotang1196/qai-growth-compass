@@ -77,27 +77,3 @@ export const STEP_CASES: StepCase[] = [
     expected: { phase: 'questions', index: 5 },
   },
 ];
-
-export interface ScoreCase {
-  optionIndex: number;
-  optionValues: number[];
-  expected: number | null;
-  why: string;
-}
-
-export const SCORE_CASES: ScoreCase[] = [
-  { optionIndex: 0, optionValues: [0, 1, 2, 3], expected: 0, why: 'first option' },
-  { optionIndex: 3, optionValues: [0, 1, 2, 3], expected: 3, why: 'last option' },
-  { optionIndex: 4, optionValues: [0, 1, 2, 3], expected: null, why: 'out of range → null, caller returns 400' },
-  { optionIndex: -1, optionValues: [0, 1, 2, 3], expected: null, why: 'negative index' },
-  { optionIndex: 1.5, optionValues: [0, 1, 2, 3], expected: null, why: 'non-integer' },
-  { optionIndex: NaN, optionValues: [0, 1, 2, 3], expected: null, why: 'NaN' },
-  {
-    // 这一条是「查表而不是直接用下标」的证据:如果实现写成 return optionIndex,
-    // 上面几条全过,只有这条会红
-    optionIndex: 2,
-    optionValues: [0, 1, 3, 5],
-    expected: 3,
-    why: 'non-linear scale — using the index directly gives 2, the table gives 3',
-  },
-];

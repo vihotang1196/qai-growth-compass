@@ -2,7 +2,7 @@
  * 选项下标 → 语义值 的统一映射。
  *
  * 【为什么合成一个】这个形状在 config 里出现了四次，长得不一样但语义相同：
- *   questions          option_index → scoring.option_values[i]   (分数 0–3)
+ *   questions          option_index → 归一化分(v3 在 scoring.perQuestionScore,不走这里)
  *   survey S1          option_index → option_to_dimension[i]     (维度 key)
  *   survey S7          option_index → option_to_value[i]         (asap/later/self/no)
  *   profile P2 / P3    option_index → value_map[i]               (数值:询盘量 / 客单价)
@@ -13,8 +13,7 @@
  * 那个 undefined 会一路流进算分、流进成本估算、流进 GHL 写回。
  *
  * 【越界返回 null 而不是抛】越界只可能来自客户端传来的脏数据，那是 400 不是 500。
- * 让调用方决定怎么回。这与 quizFlow.scoreForOption 的约定一致 ——
- * 事实上那个函数现在就是这个的一个特例。
+ * 让调用方决定怎么回。
  */
 
 /**

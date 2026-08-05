@@ -10,8 +10,6 @@
  * 扩过去只增成本不增信号。两侧各自的测试套件已经够。
  */
 
-import { mapOption } from './optionMap.ts';
-
 export type QuizStep =
   | { phase: 'profile'; index: number }
   | { phase: 'questions'; index: number }
@@ -75,21 +73,6 @@ export function progress(
   return { done, total, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
 }
 
-/**
- * 选项下标 → 分数。
- *
- * 【查表而不是直接用下标】当前 `option_values` 是 `[0,1,2,3]`,等于恒等映射,
- * 直接 `return optionIndex` 今天也对。但那样一旦标度改成 `[0,1,3,5]`
- * 之类的非线性,这里会静默继续用下标 —— 分数全错而没有任何报错。
- *
- * 【实现委托给 mapOption】「下标 → 语义值」这个形状在 config 里出现了五次
- * (题目分数、S1 维度、S7 意向值、P2/P3/S2 数值)。越界检查、非整数检查各写一遍的话,
- * 任何一处漏掉都会让脏下标静默变成 undefined。所以只有一份实现,这里是它的一个特例。
- * 越界返回 null(400 不是 500)的约定也由那一份统一定义。
- */
-export function scoreForOption(
-  optionIndex: number,
-  optionValues: readonly number[],
-): number | null {
-  return mapOption(optionIndex, optionValues);
-}
+// v3 移除了 scoreForOption:计分不再用「option_index 查 option_values 表」,
+// 改为每题按 option_count 归一化(见 scoring.ts 的 perQuestionScore)。
+// 「下标 → 语义值」的通用形状仍在 optionMap.mapOption,问卷的 S1/S7 映射用它。
