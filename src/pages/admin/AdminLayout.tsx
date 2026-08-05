@@ -18,23 +18,23 @@ import Roster from './Roster';
  * 从而在后端放松检查。薄反而更诚实:任何人看这个文件三十秒就知道它不负责安全。
  */
 /**
- * 清掉 magic link 回调留下的 fragment。
+ * 清掉回调 URL 上残留的 fragment。
  *
- * 【auth-js 自己清了,但用的机制不好】它走 implicit flow 时用
- * `window.location.hash = ''` 把 token 抹掉。那是一次 fragment 导航 ——
- * 它【新增一条历史记录】,而带 access_token 的那条留在后面。
- * 结果是:地址栏干净了(只剩一个裸 `#`),但按后退键能回到含 token 的 URL。
+ * 【走 PKCE 之后这里平时不会触发】token 已经不进 URL 了,回调只带 `?code=`,
+ * 而 auth-js 对 code 用的是 replaceState —— 干净。见 lib/supabase.ts。
  *
- * 管理员凭证泄露比学员链接更严重,所以这里用 replaceState 把当前这条记录
- * 换成干净 URL —— 与客户端魔法链接用 `navigate(..., { replace: true })` 同一个理由。
+ * 【那为什么还留着】**换 flow 之前已经发出去的 magic link 还躺在收件箱里**,
+ * 那些链接仍然是 hash 形式。auth-js 按 URL 的实际形态决定走哪条路径,
+ * 所以点开一条旧链接仍会走 implicit —— 而它清 hash 用的是
+ * `window.location.hash = ''`,那是一次 fragment 导航:新增一条历史记录,
+ * 带 token 的那条留在后面,地址栏只剩一个裸 `#`。
+ *
+ * 这四行把当前那条换成干净 URL。它不能删掉更早那条(History API 没有删除条目的
+ * 能力)—— 所以它是旧链接的兜底,不是防线;真正的防线是 PKCE。
+ * 等收件箱里的旧链接都过期(Supabase 默认 1 小时)之后这段就可以删。
  *
  * 【判断条件不能用 location.hash】auth-js 清完之后它返回 '',而 URL 上那个裸 `#`
- * 还在。要看 href 里有没有 `#`。
- *
- * ⚠️ **这只能清掉当前那一条。** 更早那条含 token 的历史记录删不掉 ——
- * History API 没有删除条目的能力。要让 token 从头到尾不出现在 URL 里,
- * 只能换 PKCE flow(token 不进 hash,只有一个 code 进 query,
- * 且 auth-js 对它用的就是 replaceState)。代价见 PROGRESS.md Stage 5。
+ * 还在,用它判断永远为假。要看 href 里有没有 `#`。
  */
 function stripUrlFragment(): void {
   const { pathname, search, href } = window.location;

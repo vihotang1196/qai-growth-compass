@@ -22,7 +22,30 @@ export function supabaseAuth(): SupabaseClient {
     throw new Error('missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
   }
   client = createClient(url, anonKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      /**
+       * 【PKCE,不用默认的 implicit】auth-js 的默认值是 `implicit` ——
+       * 那会把 access_token 放进回调 URL 的 hash。它自己会清,但用的是
+       * `window.location.hash = ''`,那是一次 fragment 导航:**新增一条历史记录,
+       * 而带 token 的那条留在后面**,按后退键就能翻出来。而 replaceState 只能改
+       * 当前那一条,更早的删不掉 —— History API 没有删除条目的能力。
+       *
+       * PKCE 下 token 完全不进 URL,回调只带一个 `?code=`,auth-js 用它换 session
+       * 之后用 replaceState 清掉。管理员凭证是整个系统权限最高的东西,
+       * 让它一次都不出现在地址栏比事后清理可靠。
+       *
+       * 【代价,已确认接受】code verifier 存在**发起登录的那个浏览器**里,
+       * 所以 magic link 必须在同一个浏览器打开 —— 在手机上点开电脑上申请的邮件
+       * 会失败(code verifier not found)。后台只有一个人,这个约束不构成负担。
+       *
+       * Supabase Auth 后台的 Redirect URLs **不用改**:redirectTo 取的还是
+       * options.emailRedirectTo,路径没变,变的只是回调参数的形式。
+       */
+      flowType: 'pkce',
+    },
   });
   return client;
 }

@@ -1662,17 +1662,25 @@ window.location.hash = '';
 
 `AdminLayout` 里加了 `stripUrlFragment()`,用 `replaceState` 把当前这条换成干净 URL。判断条件用 `href.includes('#')` 而不是 `location.hash` —— 后者在 auth-js 清完之后返回 `''`,永远为假。
 
-### ⚠️ 这只是缓解,不是根治
+### 已换成 PKCE
 
-**更早那条含 token 的历史记录删不掉** —— History API 没有删除条目的能力,`replaceState` 只能改当前这一条。要让 token 从头到尾不出现在 URL 里,只有换 PKCE:
+`replaceState` 只能改当前那一条,**更早那条含 token 的历史记录删不掉** —— History API 没有删除条目的能力。所以那只是缓解。管理员凭证是整个系统权限最高的东西,让它一次都不出现在地址栏比事后清理可靠,已换:
 
 ```ts
 createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 ```
 
-那样 magic link 回调带的是 `?code=`,token 完全不进 URL,而 auth-js 对 `code` 用的就是 `replaceState`。
+查了 auth-js 源码确认三件事:
 
-**代价是真实的,所以没有擅自改**:PKCE 的 code verifier 存在发起登录的那个浏览器里,**magic link 必须在同一个浏览器打开**。在手机上点开电脑上申请的登录邮件会失败(`code verifier not found`)。后台只有一两个人,这个约束大概能接受,但那是产品决定不是技术决定 —— 要换说一声。
+| | |
+|---|---|
+| `signInWithOtp` 邮箱路径支持 PKCE | 支持 —— `if (this.flowType === 'pkce')` 就在邮箱分支里,生成 code challenge。默认值是 `implicit` |
+| Supabase Auth 的 Redirect URLs 要不要改 | **不用**。`redirectTo` 取的还是 `options.emailRedirectTo`,路径不变,只是回调参数从 `#access_token=` 变成 `?code=` |
+| 客户端 `?t=` 魔法链接受不受影响 | 不受。`@/lib/supabase` 只被三个文件 import,全是 admin —— 客户端路径上 Supabase 客户端**根本不会被实例化**。这比「两个参数名碰巧不撞」强:那段代码在客户端页面上压根不运行 |
+
+**代价(已确认接受)**:code verifier 存在发起登录的那个浏览器里,magic link 必须在同一个浏览器打开。手机上点开电脑上申请的邮件会失败(`code verifier not found`)。
+
+`stripUrlFragment()` 留着,但理由变了:**换 flow 之前已经发出去的 magic link 还躺在收件箱里**,那些仍是 hash 形式,点开仍走 implicit。它是旧链接的兜底,不是防线。旧链接过期(Supabase 默认 1 小时)之后可以删。
 
 ## 待你操作
 
