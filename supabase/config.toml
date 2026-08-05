@@ -47,3 +47,8 @@ import_map = "./functions/deno.json"
 [functions.assessment-admin]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+# 答题过程的读写。cookie 鉴权(compass_session),分数一律服务端按配置查表算。
+[functions.assessment-quiz]
+verify_jwt = false
+import_map = "./functions/deno.json"

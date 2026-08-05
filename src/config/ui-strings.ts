@@ -66,6 +66,20 @@ export const UI_STRINGS = {
     en: 'This page is not built yet — it lands in the stage shown above.',
   },
 
+  // ── Quiz ────────────────────────────────────────────────
+  'quiz.profileSection': { zh: '先了解一下你的情况', en: 'A bit about you' },
+  'quiz.questionSection': { zh: '增长罗盘测评', en: 'Growth Compass' },
+  'quiz.saving': { zh: '正在保存…', en: 'Saving…' },
+  'quiz.saveFailed': {
+    zh: '这一题没保存成功,所以停在这里 —— 点重试,别往下走,否则这一题会缺。',
+    en: "This answer didn't save, so we stopped here. Retry — skipping would leave a gap.",
+  },
+  'quiz.loadFailed': { zh: '载入答题进度失败。', en: 'Could not load your progress.' },
+  'quiz.autosaveNote': {
+    zh: '每答一题即自动保存。中途关掉,下次点链接回来会从这一题继续。',
+    en: 'Saved after every answer. Close it and your link brings you back to this question.',
+  },
+
   // ── Admin ───────────────────────────────────────────────
   'admin.title': { zh: '学员名单', en: 'Roster' },
   'admin.login.title': { zh: '后台登录', en: 'Admin sign-in' },

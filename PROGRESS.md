@@ -1682,6 +1682,13 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 
 `stripUrlFragment()` 留着,但理由变了:**换 flow 之前已经发出去的 magic link 还躺在收件箱里**,那些仍是 hash 形式,点开仍走 implicit。它是旧链接的兜底,不是防线。旧链接过期(Supabase 默认 1 小时)之后可以删。
 
+## 待办(Stage 5 验收时记下的)
+
+| | |
+|---|---|
+| **上线前必做:换掉内置 SMTP** | Supabase 内置邮件服务**只能发给 project 成员**,而且有限流(验收时触发了 `EMAIL RATE LIMIT EXCEEDED`)。只影响后台登录邮件 —— 学员链接走 GHL,不受影响。上线前接自己的 SMTP(Resend 之类) |
+| EXPORT CSV 未实测 | 验收时库里只有一行记录。等有真实数据了一起验。公式注入与 BOM 都有单元测试覆盖,没验的是「点下去真的下载了一个 Excel 能打开的文件」 |
+
 ## 待你操作
 
 | | |
@@ -1689,6 +1696,61 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 | `admin_users` insert | `insert into public.admin_users (email, name) values ('jianan1196@gmail.com', '<名字>');` —— **邮箱必须小写**,函数侧会 `trim().toLowerCase()` 再比,大小写不一致会永远 403 而看起来像「我明明插了记录」 |
 | Supabase Auth 配置 | Site URL + Redirect URLs,见下 |
 | Vercel 环境变量 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`(**带** `VITE_` 前缀,前端登录要用) |
+
+---
+
+# Stage 6 — 答题引擎
+
+分支 `stage-6-quiz`。
+
+## 断点续答:取「第一个未答」,不是「最后已答之后」
+
+没有空洞时两者相同,有空洞时不同。而空洞会出现:回头改答案时保存失败、后退键跳答、以后加「允许跳过」。
+
+按「最后已答之后」续,空洞会被**永久跳过**。那道题的答案缺失一路走到算分,而 `(raw_sum / 12) * 100` 的**分母写死 12** → 那一维静默低估 → 最弱维度可能指错 → **offer_routing 分流到错误的产品**。
+
+一个答题页的续答逻辑写错,最终表现是销售话术指向错误的产品,而中间每一步看起来都正常。所以逻辑在 `src/lib/quizFlow.ts`,纯函数,4 条空洞用例。
+
+## 「我在哪」这个问题从不由客户端回答
+
+每次作答**等服务端确认**,然后用返回的**完整快照**重算下一题。不用本地计数器 —— 本地计数器是漂移的来源。
+
+代价是每题一次往返;换来刷新、断线、后退全都自动正确。保存失败时**停在原地并给出重试**,不前进 —— 前进会让这一题永久缺失而客户不知道。
+
+响应回全量(27 个短字符串)而不是增量:一次响应丢失(移动网络常见)在增量模型下会让客户端与库不一致,而那种不一致的表现正是「跳过了一题」。
+
+## 分数一律服务端算
+
+客户端只传 `option_index`,分数由服务端按 `config.scoring.option_values` **查表**得出。那是唯一能改自己成绩的入口,而这份报告要拿去做 offer 分流 —— 有人把自己刷成高分档,我们就把他从名单里漏掉了。
+
+**Edge Function 读同一份 `assessment-config.json`**(Deno 的 `with { type: 'json' }`)。前后端各一份的话,改题库时必然有一侧漏改,而漏改那侧不会报错 —— 它会照旧接受一个已不存在的 question_id,或者按旧标度算分。
+
+**每次请求都重查 `access_revoked_at`。** cookie 有 30 天,而 Stage 4 的 token 校验只在换 cookie 那一刻发生。中途被 revoke 的人如果还能答题,那个「停用」就只停了入口没停人。
+
+## 锁住的配置不变量
+
+计分公式的分母 12 写死在配置里,前提是「每维 4 题 × 每题满分 3」—— 这是个**隐含契约**。改题库的人不会同时想到那个分母。现在这些改动会当场变红:
+
+| 断言 | 拦住的 |
+|---|---|
+| 24 题 / 6 维 / 每维恰好 4 题 | 增删题 |
+| `4 × max(option_values) === 12` | 改标度而忘了分母 |
+| dimensions 的 key 集合 **等于** questions 里出现的 dimension 集合 | **一道题挂错维度** —— 正向断言全过,那道题只是消失在统计外 |
+| 每维 3 个子模块下标 0/1/2 各一道 + 1 道 `type:'maturity'` | 下标重复(某子模块徽章取空) |
+| 「有 type」与「submodule_index 为 null」是同一批题 | 两个字段分叉,两处代码判断依据不同 |
+| `value_map` 长度 = 选项数 | P2 某选项映射到 undefined,流进成本估算 |
+
+发现配置的真实结构比原先假设的更规整:**每维 = 3 道子模块题(下标 0/1/2)+ 1 道 `type: "maturity"` 题(下标 `null`)**,「有 type」与「下标 null」恰好是同一批 6 道(G4/T4/C4/V4/M4/D4)。
+
+## 没做的两件,以及为什么
+
+**不扩 `check:cross` 到 quizFlow。** phone 需要跨运行时逐字比对是因为 libphonenumber 可能行为不同;quizFlow 只有数组索引和整数比较,两个运行时不可能不一致。守卫要按「这里真的可能出分歧吗」来加,不是按「别的地方有所以这里也要有」。
+
+**没有浏览器渲染验证。** 预览工具解析的是本会话的主工作目录,够不到这个项目的 `launch.json`,而不用 Bash 起 dev server。页面过了 tsc 与单元测试,但**没有看到它渲染出来** —— 部署后点真实链接是更强的信号(dev server 连 `/api` 都到不了)。
+
+## 部署前要做
+
+`supabase secrets` 里 `assessment-quiz` 用到的是已有的 `SESSION_SECRET`,**没有新变量**。要 `npm run deploy:functions`(新增了一个函数)。
 
 ---
 
