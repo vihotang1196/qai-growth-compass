@@ -5,6 +5,7 @@ import Landing from '@/pages/Landing';
 import Quiz from '@/pages/Quiz';
 import Survey from '@/pages/Survey';
 import Showcase from '@/pages/Showcase';
+import LanguageToggle from '@/components/LanguageToggle';
 import StagePlaceholder from '@/pages/StagePlaceholder';
 
 /**
@@ -18,6 +19,9 @@ import StagePlaceholder from '@/pages/StagePlaceholder';
 export default function App() {
   return (
     <BrowserRouter>
+      {/* 右上角常驻语言切换。在 Routes 之外,一处渲染,浮在所有页面上;
+          自身在 /admin 与 /_showcase 隐藏(见组件) */}
+      <LanguageToggle />
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/expired" element={<Expired />} />

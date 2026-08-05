@@ -28,6 +28,7 @@ export const UI_STRINGS = {
   'common.search': { zh: '搜索', en: 'Search' },
   'common.export': { zh: '导出 CSV', en: 'Export CSV' },
   'common.lang': { zh: 'EN', en: '中文' },
+  'common.langSwitch': { zh: '切换语言', en: 'Switch language' },
 
   // ── 进度 ────────────────────────────────────────────────
   'progress.of': { zh: '第 {current} / {total} 题', en: 'Question {current} of {total}' },
