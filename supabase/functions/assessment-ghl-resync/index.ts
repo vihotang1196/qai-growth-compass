@@ -28,6 +28,7 @@ interface Candidate {
   total: number;
   tier: string;
   weakest: string[];
+  ghl_last_error: string | null;
   session: { entitlement: { ghl_contact_id: string } | null } | null;
 }
 
@@ -47,12 +48,11 @@ Deno.serve(async (req: Request) => {
   const nowIso = new Date().toISOString();
 
   try {
-    // 待重试:未同步 + (从没排过重试 或 重试时间已到)。CONFIG 类失败不设 next_retry_at,
-    // 所以那些 ghl_last_error 以 CONFIG: 开头的行不会被这里捞到 —— 重试同样的 payload 无意义
+    // 待重试:未同步 + (从没排过重试 或 重试时间已到)。
     const { data, error } = await supa
       .from('assessment_results')
       .select(
-        `session_id, total, tier, weakest,
+        `session_id, total, tier, weakest, ghl_last_error,
          session:assessment_sessions(entitlement:assessment_entitlements(ghl_contact_id))`,
       )
       .eq('ghl_synced', false)
@@ -60,7 +60,17 @@ Deno.serve(async (req: Request) => {
       .limit(BATCH_CAP + 1);
     if (error) throw error;
 
-    const rows = (data ?? []) as unknown as Candidate[];
+    /**
+     * 【跳过 CONFIG / AUTH 行】这两类失败把 ghl_next_retry_at 置成了 null,而「从没试过 /
+     * 手动重置」的行同样是 null —— 两者用 ghl_last_error 的前缀区分。CONFIG/AUTH 重试同样的
+     * 请求无意义(字段没建、token 失效),靠前缀在这里排除掉,不靠 next_retry_at 那个歧义信号。
+     */
+    const allRows = (data ?? []) as unknown as Candidate[];
+    const rows = allRows.filter(
+      (r) => !r.ghl_last_error || !/^(CONFIG|AUTH):/.test(r.ghl_last_error),
+    );
+    const skippedPermanent = allRows.length - rows.length;
+    if (skippedPermanent > 0) console.log(`resync: skipped ${skippedPermanent} CONFIG/AUTH rows (no auto-retry)`);
     const capped = rows.length > BATCH_CAP;
     const batch = rows.slice(0, BATCH_CAP);
 

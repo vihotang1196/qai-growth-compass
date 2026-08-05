@@ -1973,6 +1973,50 @@ synced=true。**注释承认了风险,代码没照做** —— 跟「打印一�
 
 ---
 
+# GHL 写回判据:验响应体,不信 200(D8 + D9 落地)
+
+## 实测确认:响应体可区分「写进去」与「被丢弃」
+
+字段建好后重跑,contact 更新的响应回显整个 contact 的 customFields 数组,8 条新字段都在、值全对。上一轮字段不存在时那些条目【根本不出现】—— 所以「200 之外的成功信号」确实存在,不必额外回读 contact。跟当初真假 Inbound Webhook trigger 的 id 同一类方法:先看响应体差异,再下判据。
+
+**坑**:响应回显的是 UUID 不是我们的 key。所以判据依赖 D8 的 key→id 映射。
+
+## D8 — 字段映射(app_settings.ghl_field_map)
+
+`_shared/ghlFieldMap.ts`:内存缓存(10 分钟 TTL)→ app_settings → 回源 `GET /locations/{id}/customFields` → upsert 回表。回源那次把**原始响应完整记日志**(字段定义,不含 PII)——`GET /locations/{id}/customFields` 的形状我没实测过,按 GHL v2 文档假设 `{customFields:[{id,fieldKey}]}`、fieldKey 带 `contact.` 前缀,第一次回源就能确认或暴露。
+
+## D9 — 判据 + 三类错误
+
+`syncToGhl` 改成:PUT 200 后用映射把 key 翻成 id,在响应 customFields 里逐个核对「id 在、值相符」,**全部命中才标 ghl_synced=true**;有缺失记 CONFIG 并**列出具体缺哪些 key**(D9:错误具体到字段名,不报「部分失败」)。
+
+三类错误分流:CONFIG(值域不符 / 字段没建 / 值不符)与 AUTH(401/403)置 `ghl_next_retry_at=null` 不自动重试;TRANSIENT(网络 / 5xx / 429 / 拿不到映射)进指数退避。**拿不到映射一律 TRANSIENT,绝不因无法验证就标 synced** —— 那会退回原来的静默失败。
+
+自愈:若某 key 不在映射里(可能是刚在 GHL 加的字段、缓存旧了),强制刷新映射一次再验,再缺才判 CONFIG。
+
+sweep 跳过 CONFIG/AUTH 行:那两类把 next_retry_at 置 null,而「从没试过 / 手动重置」也是 null —— 用 ghl_last_error 的 `CONFIG:`/`AUTH:` 前缀区分,靠前缀排除,不靠那个歧义的 null。
+
+## PII:日志收敛
+
+判据定下来了,成功路径不再 dump 整个 contact(含姓名 / 手机 / 邮箱 / 全部 tags),只记我们写的 key 列表 + 缺失的 key。字段映射回源的日志保留全量(那是字段定义,无 PII)。上线前清单里那条「trim 全量响应日志」由此关闭。
+
+## 纯逻辑单独测
+
+parseFieldMap / verifyWrittenFields / classifyGhlError 抽到 `src/lib/ghlVerify.ts`,两侧共用用例。含关键一条:total=0.6 无论以 number 还是 string 回来都判匹配(发出去是 number)。
+
+## 待部署
+
+`npm run deploy:functions`(assessment-ghl-resync 改了、assessment-score 经共享模块改了、新增 _shared 若干)。无新迁移、无新环境变量。GHL token 需有 `locations/customFields.readonly` scope(客户已加)。
+
+## 还没做(teed up)
+
+- **tags**(tags_always + tags_conditional,含 assessment_mismatch)—— priority=convert 而 weakest=goal/value,mismatch 条件这次已成立。标签独立于字段写入(D9:字段炸了标签照打)。
+- **Vercel Cron 定时** wiring(api/cron/ghl-retry.ts + vercel.json)—— sweep 目前靠手动 curl。
+- **Admin「刷新字段映射」按钮** —— 目前靠自愈 force-refresh 覆盖常见场景。
+
+Node 146 / Deno 117 / 跨运行时一致。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

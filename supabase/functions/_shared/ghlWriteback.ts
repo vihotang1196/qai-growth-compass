@@ -1,19 +1,23 @@
 /**
  * GHL 写回 —— finalize(assessment-score)与重试 sweep(assessment-ghl-resync)共用的一份。
  *
- * 【为什么抽出来】两个地方都要:组装 payload → 按 domain 校验 → PUT 给 GHL → 判成败、
- * 记 ghl_synced / ghl_sync_attempts / ghl_next_retry_at。各写一份的话,以后改 payload
- * 字段或改判据只改一处就成了静默的半修 —— 而这正是我们在追的那类静默失败。
+ * 【为什么抽出来】两个地方都要:组装 payload → 按 domain 校验 → PUT → 用响应体判成败 →
+ * 记 ghl_synced / attempts / next_retry_at。各写一份的话改一处就是静默的半修。
  *
- * ⚠️【成功判据待定,故意留在这一轮之外】当前仍是「HTTP 200 → ghl_synced=true」。
- * 已经证实这是错的:上一轮字段在 GHL 里还不存在时,PUT 也返回了 200,我们照样标了
- * synced=true。200 不证明字段被接受。但「改成什么判据」取决于 GHL 在字段【存在】时
- * 返回什么 —— 那是这次重跑要采集的数据。所以这里把响应体【完整】记下来(不截断),
- * 先看信号,再决定判据(响应体里的 accepted/skipped 字段,还是写回后回读 contact)。
- * 这与当初区分真假 Inbound Webhook trigger 是同一个方法:先看响应体差异,再下判据。
+ * 【成功判据:不信 200,验响应体】实证发现 GHL 的 contact 更新会回显整个 contact 的
+ * customFields 数组,写进去的字段【会出现】、被静默丢弃的【不出现】—— 上一轮字段还不存在时
+ * 返回 200 但数组里没有那些条目,我们却标了 synced=true。所以现在:PUT 之后用字段映射
+ * (D8,key→id)在响应里逐个核对我们写的字段确实在、且值相符,全部命中才标 synced=true。
+ * 响应回显的是 UUID,所以必须先有 key→id 映射 —— 见 ghlFieldMap。
+ *
+ * 【错误三分类(D9)】CONFIG(字段没建 / 值不符)不自动重试;AUTH(401/403)不重试;
+ * TRANSIENT(网络 / 5xx / 429 / 拿不到映射)进指数退避。ghl_last_error 带前缀,sweep 据此
+ * 跳过 CONFIG/AUTH 行。
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { checkFields, type FieldSpec } from './ghlDomain.ts';
+import { classifyGhlError, verifyWrittenFields, type GhlErrorClass } from './ghlVerify.ts';
+import { getFieldMap } from './ghlFieldMap.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 export interface WritebackResult {
@@ -54,11 +58,6 @@ export function buildWritebackPayload(
   return payload;
 }
 
-/**
- * 校验并写回。写 ghl_synced / 失败计数由这里负责,调用方拿返回值决定日志。
- *
- * @param logTag 调用来源标记(finalize / resync),让日志能区分是哪条路触发的
- */
 export async function syncToGhl(
   supa: SupabaseClient,
   sessionId: string,
@@ -66,16 +65,12 @@ export async function syncToGhl(
   payload: Record<string, unknown>,
   logTag: string,
 ): Promise<WritebackOutcome> {
+  // 写回前按 domain 校验(值域)。不在域内是 CONFIG —— 同样的 payload 重试无意义
   const specs = config.ghl_writeback.custom_fields as unknown as FieldSpec[];
-  const failures = checkFields(payload, specs);
-  if (failures.length) {
-    const detail = failures.map((f) => `${f.key}: ${f.reason}`).join('; ');
-    // CONFIG 类错误不排重试 —— 同样的 payload 重试一百次还是同样的结果
-    console.error(`CONFIG: [${logTag}] payload rejected for session ${sessionId}: ${detail}`);
-    await supa
-      .from('assessment_results')
-      .update({ ghl_last_error: `CONFIG: ${detail}`.slice(0, 1000) })
-      .eq('session_id', sessionId);
+  const domainFailures = checkFields(payload, specs);
+  if (domainFailures.length) {
+    const detail = domainFailures.map((f) => `${f.key}: ${f.reason}`).join('; ');
+    await recordFailure(supa, sessionId, 'CONFIG', `domain check failed — ${detail}`, logTag);
     return { attempted: false, ok: false, detail };
   }
 
@@ -85,16 +80,18 @@ export async function syncToGhl(
   };
   const missing = Object.entries(ghlEnv).filter(([, v]) => !v).map(([k]) => k);
   if (missing.length) {
-    console.error(`CONFIG: [${logTag}] GHL credentials missing (${missing.join(', ')}) for session ${sessionId}`);
-    await markSyncFailure(supa, sessionId, `CONFIG: missing ${missing.join(', ')}`);
+    // 缺凭证是配置问题,但重发 token 后重试有意义 —— 归 TRANSIENT,别永久放弃
+    await recordFailure(supa, sessionId, 'TRANSIENT', `GHL credentials missing (${missing.join(', ')})`, logTag);
     return { attempted: false, ok: false, detail: `missing ${missing.join(', ')}` };
   }
 
   const url = `https://services.leadconnectorhq.com/contacts/${ghlContactId}`;
   const customFields = Object.entries(payload).map(([key, value]) => ({ key, field_value: value }));
 
+  let res: Response;
+  let text: string;
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${ghlEnv.GHL_PRIVATE_TOKEN}`,
@@ -103,64 +100,100 @@ export async function syncToGhl(
       },
       body: JSON.stringify({ customFields }),
     });
-    const text = await res.text().catch(() => '');
-
-    if (!res.ok) {
-      const detail = `GHL ${res.status}: ${text.slice(0, 800)}`;
-      console.error(`[${logTag}] GHL writeback failed for session ${sessionId}: ${detail}`);
-      await markSyncFailure(supa, sessionId, detail);
-      return { attempted: true, ok: false, detail };
-    }
-
-    /**
-     * 【响应体完整记下来 —— 这是判据的原材料】上一轮截断在 400 字,可能切掉信号。
-     * 这次要看:字段【存在】时 GHL 返回的 contact 对象里,customFields 有没有出现我们写的
-     * 那几个 key/值;有没有 skipped/rejected 之类的字段级反馈。对比上一轮字段不存在时的响应,
-     * 就知道 200 之外有没有可用的成功信号。
-     */
-    console.log(
-      `[${logTag}] GHL 200 for contact ${ghlContactId}, session ${sessionId}. ` +
-        `Wrote keys: ${Object.keys(payload).join(',')}.\n` +
-        `FULL RESPONSE BODY (判据待定,200 不证明字段被接受):\n${text.slice(0, 4000)}`,
-    );
-    // ⚠️ 仍按 200 标 synced —— 判据待这次响应体出来再改,见文件头注释
-    const { error } = await supa
-      .from('assessment_results')
-      .update({ ghl_synced: true, ghl_last_error: null })
-      .eq('session_id', sessionId);
-    if (error) console.error(`[${logTag}] failed to mark ghl_synced for ${sessionId}: ${error.message}`);
-    return { attempted: true, ok: true };
+    text = await res.text().catch(() => '');
   } catch (err) {
+    // 网络层失败 —— TRANSIENT
     const detail = err instanceof Error ? err.message : String(err);
-    console.error(`[${logTag}] GHL writeback threw for session ${sessionId}: ${detail}`);
-    await markSyncFailure(supa, sessionId, detail);
+    await recordFailure(supa, sessionId, 'TRANSIENT', `fetch threw — ${detail}`, logTag);
     return { attempted: true, ok: false, detail };
   }
+
+  if (!res.ok) {
+    const klass = classifyGhlError(res.status);
+    // 错误响应体是 GHL 的报错文本,PII 风险低,但仍截断
+    await recordFailure(supa, sessionId, klass, `HTTP ${res.status} — ${text.slice(0, 300)}`, logTag);
+    return { attempted: true, ok: false, detail: `${klass} ${res.status}` };
+  }
+
+  // ── 200:不信状态码,验响应体 ──
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    await recordFailure(supa, sessionId, 'TRANSIENT', 'contact update returned non-JSON', logTag);
+    return { attempted: true, ok: false, detail: 'non-JSON response' };
+  }
+  const responseFields = (body as { contact?: { customFields?: unknown } })?.contact?.customFields ??
+    (body as { customFields?: unknown })?.customFields;
+
+  // 拿字段映射验证。拿不到(网络/凭证)→ 无法判定,归 TRANSIENT,绝不因此标 synced
+  let fieldMap;
+  try {
+    fieldMap = await getFieldMap(supa);
+  } catch (err) {
+    await recordFailure(supa, sessionId, 'TRANSIENT', `field map fetch failed — ${err instanceof Error ? err.message : String(err)}`, logTag);
+    return { attempted: true, ok: false, detail: 'field map unavailable' };
+  }
+
+  let verdict = verifyWrittenFields(payload, fieldMap, responseFields);
+  // 自愈:若有 key 不在映射里(可能是刚在 GHL 加的字段、缓存旧了),强制刷新一次再验
+  if (!verdict.ok && verdict.missing.some((m) => m.reason.includes('field map'))) {
+    try {
+      fieldMap = await getFieldMap(supa, { force: true });
+      verdict = verifyWrittenFields(payload, fieldMap, responseFields);
+    } catch (err) {
+      await recordFailure(supa, sessionId, 'TRANSIENT', `field map refresh failed — ${err instanceof Error ? err.message : String(err)}`, logTag);
+      return { attempted: true, ok: false, detail: 'field map refresh failed' };
+    }
+  }
+
+  if (!verdict.ok) {
+    // 字段没被接受 —— CONFIG,列出具体缺哪些 key(D9:错误具体到字段名,不报「部分失败」)
+    const detail = verdict.missing.map((m) => `${m.key} (${m.reason})`).join('; ');
+    await recordFailure(supa, sessionId, 'CONFIG', `fields not accepted by GHL — ${detail}`, logTag);
+    return { attempted: true, ok: false, detail };
+  }
+
+  // 全部命中才标 synced。日志只记我们的 key,不再 dump 整个 contact(含 PII)
+  console.log(`[${logTag}] GHL writeback verified for session ${sessionId}: ${Object.keys(payload).join(',')}`);
+  const { error } = await supa
+    .from('assessment_results')
+    .update({ ghl_synced: true, ghl_last_error: null, ghl_next_retry_at: null })
+    .eq('session_id', sessionId);
+  if (error) console.error(`[${logTag}] failed to mark ghl_synced for ${sessionId}: ${error.message}`);
+  return { attempted: true, ok: true };
 }
 
 /**
- * 记一次写回失败并推进重试计数(D2)。退避 2^attempts 分钟,上限 6 小时。
- * sweep 只挑 ghl_synced=false 且 ghl_next_retry_at 已过(或为 null)的行。
+ * 记一次写回失败,按 D9 的三分类决定要不要排重试。
+ *   TRANSIENT → 设 ghl_next_retry_at(指数退避 2^attempts 分钟,上限 6 小时),sweep 会重试
+ *   CONFIG / AUTH → ghl_next_retry_at 置 null,不自动重试;sweep 靠 ghl_last_error 的前缀跳过
+ * ghl_last_error 以 `TRANSIENT: ` / `CONFIG: ` / `AUTH: ` 开头,Admin 据此分组过滤。
  */
-export async function markSyncFailure(
+async function recordFailure(
   supa: SupabaseClient,
   sessionId: string,
+  klass: GhlErrorClass,
   detail: string,
+  logTag: string,
 ): Promise<void> {
+  console.error(`${klass}: [${logTag}] session ${sessionId}: ${detail}`);
   const { data } = await supa
     .from('assessment_results')
     .select('ghl_sync_attempts')
     .eq('session_id', sessionId)
     .maybeSingle();
   const attempts = ((data?.ghl_sync_attempts as number) ?? 0) + 1;
-  const backoffMin = Math.min(2 ** attempts, 360);
-  const { error } = await supa
-    .from('assessment_results')
-    .update({
-      ghl_sync_attempts: attempts,
-      ghl_last_error: detail.slice(0, 1000),
-      ghl_next_retry_at: new Date(Date.now() + backoffMin * 60_000).toISOString(),
-    })
-    .eq('session_id', sessionId);
+
+  const patch: Record<string, unknown> = {
+    ghl_sync_attempts: attempts,
+    ghl_last_error: `${klass}: ${detail}`.slice(0, 1000),
+    // CONFIG / AUTH 不排重试;只有 TRANSIENT 设下次重试时间
+    ghl_next_retry_at:
+      klass === 'TRANSIENT'
+        ? new Date(Date.now() + Math.min(2 ** attempts, 360) * 60_000).toISOString()
+        : null,
+  };
+  const { error } = await supa.from('assessment_results').update(patch).eq('session_id', sessionId);
   if (error) console.error(`failed to record sync failure for ${sessionId}: ${error.message}`);
 }
