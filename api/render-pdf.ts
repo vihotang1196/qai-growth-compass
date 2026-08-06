@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
+import { existsSync, readdirSync } from 'node:fs';
 import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
 
@@ -113,11 +114,41 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
    */
   await chromium.font(`${env('CDN_FONT_BASE').replace(/\/$/, '')}/NotoSansSC-Regular.otf`);
 
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    executablePath: await chromium.executablePath(),
-    headless: true,
-  });
+  /**
+   * 【launch 失败时把环境事实一起报出来,不要只报一句 launch failed】
+   *
+   * libnss3.so 那类错误的成因有好几种(基础镜像变了、.so 压缩包没进产物、
+   * LD_LIBRARY_PATH 没设上),光看「起不来」无法区分,只能靠猜版本试 —— 而猜版本试
+   * 正是这个项目一路在避免的。这里把 executablePath() 实际做了什么摊开:
+   * 二进制在不在、库目录在不在、LD_LIBRARY_PATH 设没设、Node 版本是多少。
+   * 下一次失败就是数据,不是又一轮猜。
+   */
+  const execPath = await chromium.executablePath();
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath: execPath,
+      headless: true,
+    });
+  } catch (err) {
+    const facts = {
+      node: process.version,
+      execPath,
+      execExists: existsSync(execPath),
+      ldLibraryPath: process.env.LD_LIBRARY_PATH ?? '(unset)',
+      // executablePath() 应该把 .so 解压到 /tmp 下的某个目录并加进 LD_LIBRARY_PATH
+      tmpEntries: existsSync('/tmp') ? readdirSync('/tmp').slice(0, 40) : [],
+      libDirs: (process.env.LD_LIBRARY_PATH ?? '')
+        .split(':')
+        .filter(Boolean)
+        .map((d) => ({ dir: d, exists: existsSync(d), files: existsSync(d) ? readdirSync(d).length : 0 })),
+    };
+    console.error(`chromium launch failed. facts=${JSON.stringify(facts)}`);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} || diagnostics=${JSON.stringify(facts)}`,
+    );
+  }
 
   try {
     const page = await browser.newPage();
