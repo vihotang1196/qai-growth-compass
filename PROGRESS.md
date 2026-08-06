@@ -2605,6 +2605,48 @@ Node 206 / Deno 117,七道门全绿。
 
 ---
 
+# 我引入的回归:提前创建 /tmp/fonts 让整个字体子系统失效
+
+上一轮修完,探针从「第 2 块空白」变成**四块全空** —— 连拉丁字母和 ASCII 标题都没了。
+**是我引入的,比修之前严重得多。**
+
+## 根因:`mkdirSync` 抢跑,不是清缓存
+
+`lambdafs.inflate()` 解压 `fonts.tar.br` 的第一件事:
+
+```js
+if (existsSync(output) === true) return resolve(output);   // 目录已存在 ⇒ 整个跳过
+```
+
+而 `fonts.tar.br` 里装着 **`fonts.conf` 本身** 以及 **Open_Sans 那套拉丁字形**。
+
+上一版在 `chromium.font()` 阶段就 `mkdirSync('/tmp/fonts')`,而那**早于**
+`executablePath()` 的解压 ⇒ `fonts.conf` 永远不落地 ⇒ `FONTCONFIG_PATH` 指向一个没有配置
+文件的目录 ⇒ **fontconfig 一个字体目录都没有** ⇒ 所有文本(含拉丁)全空。
+
+客户怀疑是清缓存那步 —— **不是**,`rmSync` 只是次要风险面;主因是顺序。
+
+## 这次回归印证了客户的一条观察
+
+第 1、3 块原来的正常渲染**确实依赖 fontconfig**(Open_Sans 提供实际字形),不只是 CSS
+webfont。之前我们以为第 1 块只走页面 HTTP 加载的 subset woff2 —— 那个理解不完整。
+
+## 修法(三处)
+
+1. **顺序**:字体安装移到 `chromium.executablePath()` **之后**。两个调用点(render-pdf 与
+   font-probe)都改。
+2. **前提断言**:`installFallbackFont()` 一进来就检查 `/tmp/fonts/fonts.conf` 是否存在,
+   不存在直接抛并说明「本函数被提前调用了」。与其静默弄坏整个字体子系统,不如在这里失败。
+3. **不再清 fontconfig 缓存**:不需要 —— fontconfig 发现目录 mtime 变化会自己重建索引;
+   删 cachedir 只增加一个「重建失败就全盘降级」的风险面。**少做一件事。**
+
+顺带:日志现在打出 `/tmp/fonts` 在动它**之前和之后**的目录内容(客户要求的那两个时刻),
+下次异常一眼能看出是「fonts.conf 在不在」还是「otf 复制成不成功」。
+
+Node 206 / Deno 117,七道门全绿。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

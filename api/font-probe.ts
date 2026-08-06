@@ -164,13 +164,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // 系统级中文兜底:fontconfig 认 otf / ttf,不认 woff2
     assertChromiumEnvReady();
-    // 与 render-pdf 共用一份:下载 + 复制进 fontconfig 真的会扫的目录 + 校验落地
+
+    /**
+     * 顺序要紧:先 executablePath()(它解压 fonts.tar.br → /tmp/fonts,里面有 fonts.conf
+     * 与 Open_Sans),再装中文兜底字体。提前创建 /tmp/fonts 会让 lambdafs 跳过解压,
+     * fontconfig 就一个字体都没有。见 api/_lib/lambdaEnv.ts。
+     */
+    const execPath = await chromium.executablePath();
     const font = await installFallbackFont((u) => chromium.font(u), `${cdnBase()}NotoSansSC-Regular.otf`);
-    console.log(`CJK fallback font ready: ${font.path} (${font.bytes} bytes)`);
+    console.log(
+      `CJK fallback font ready: ${font.path} (${font.bytes} bytes). ` +
+        `/tmp/fonts before=${JSON.stringify(font.dirBefore)} after=${JSON.stringify(font.dirAfter)}`,
+    );
 
     browser = await puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
+      executablePath: execPath,
       headless: true,
     });
 

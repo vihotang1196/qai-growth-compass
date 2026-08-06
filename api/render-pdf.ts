@@ -154,11 +154,6 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
    * 残留文件(它见到 existsSync 就直接 resolve,不校验大小)都会让兜底层静默失效。
    * 实测症状:生僻字渲染成【纯空白】—— 容器里没有任何字体覆盖那些码位。
    */
-  const font = await installFallbackFont(
-    (u) => chromium.font(u),
-    `${env('CDN_FONT_BASE').replace(/\/$/, '')}/NotoSansSC-Regular.otf`,
-  );
-  console.log(`CJK fallback font ready: ${font.path} (${font.bytes} bytes)`);
 
   /**
    * 【开浏览器之前先直接问一次 API —— 把两件事分开】
@@ -204,7 +199,22 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
    */
   assertChromiumEnvReady();
 
+  /**
+   * 【顺序:先 executablePath(),再装字体】executablePath() 会解压 fonts.tar.br 到
+   * /tmp/fonts —— 里面装着 fonts.conf 本身与 Open_Sans。而 lambdafs 见到 /tmp/fonts
+   * 已存在就整个跳过解压,所以任何提前创建那个目录的动作都会让 fontconfig 一个字体都没有
+   * (实测:四块全空,连拉丁字母都没了)。installFallbackFont 会断言 fonts.conf 已存在。
+   */
   const execPath = await chromium.executablePath();
+
+  const font = await installFallbackFont(
+    (u) => chromium.font(u),
+    `${env('CDN_FONT_BASE').replace(/\/$/, '')}/NotoSansSC-Regular.otf`,
+  );
+  console.log(
+    `CJK fallback font ready: ${font.path} (${font.bytes} bytes). ` +
+      `/tmp/fonts before=${JSON.stringify(font.dirBefore)} after=${JSON.stringify(font.dirAfter)}`,
+  );
   let browser;
   try {
     browser = await puppeteer.launch({
