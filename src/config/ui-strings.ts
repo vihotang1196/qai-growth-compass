@@ -168,6 +168,10 @@ export const UI_STRINGS = {
   'report.evidence.unanswered': { zh: '未作答', en: 'Not answered' },
   'report.badge.priority': { zh: '优先', en: 'Priority' },
   'report.baseline.n': { zh: '{n} 份样本', en: '{n} samples' },
+  'report.baseline.none': {
+    zh: '本期样本只有你自己,暂无对比基准 —— 等同批次答满 10 份后这里会出现基准线。',
+    en: 'You are the only sample so far, so there is no comparison line yet — it appears once 10 people in your cohort finish.',
+  },
   'report.difficulty': { zh: '难度', en: 'Difficulty' },
   'report.impact': { zh: '影响', en: 'Impact' },
 

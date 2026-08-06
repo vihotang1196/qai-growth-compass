@@ -134,6 +134,8 @@ export default function Report() {
           scale={SCALE}
           selfLabel={tk('report.you')}
           baselineLabel={`${tk(baseline.source === 'cohort' ? 'report.baseline.cohort' : 'report.baseline.global')} · ${tk('report.baseline.n').replace('{n}', String(baseline.n))}`}
+          baselineN={baseline.n}
+          noBaselineLabel={tk('report.baseline.none')}
         />
       </Section>
 

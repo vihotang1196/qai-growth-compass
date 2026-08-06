@@ -71,12 +71,24 @@ export default function RadarPentagon({
   scale,
   selfLabel,
   baselineLabel,
+  baselineN,
+  noBaselineLabel,
 }: {
   axes: RadarAxis[];
   scale: number;
   selfLabel: string;
   baselineLabel: string;
+  /** 基准的样本数。< 2 时基准就是本人,画出来只会误导 —— 不画 */
+  baselineN: number;
+  /** 不画基准时的说明 */
+  noBaselineLabel: string;
 }) {
+  /**
+   * 【n < 2 不画基准线】样本只有本人时,基准均值【定义上】等于本人分数,两条线完全重合。
+   * 画出来不但零信息,还会让人以为「有对比」;而一旦它与旁边的网格环混淆,
+   * 人会把满格网格读成基准,得出「基准比我高很多」的错误结论 —— 实测就发生了这一次。
+   */
+  const showBaseline = baselineN >= 2;
   const n = axes.length;
   const rings = Array.from({ length: scale }, (_, k) => k + 1); // 1..scale 同心五边形
 
@@ -90,8 +102,13 @@ export default function RadarPentagon({
             points={axes.map((_, i) => point(i, n, (ring / scale) * R).join(',')).join(' ')}
             fill="none"
             stroke="var(--line, #1a1a1a)"
-            strokeOpacity={ring === scale ? 0.9 : 0.15}
-            strokeWidth={ring === scale ? 2 : 1}
+            /**
+             * 【网格一律淡,包括最外圈】原来最外圈是 opacity 0.9 / 2px 的深墨满格五边形,
+             * 与基准虚线(同为深墨)在视觉上难以区分 —— 实测中它被当成了基准线,
+             * 而真正的基准恰好与本人重合、压在黄边下看不见。网格是背景,不能与数据竞争。
+             */
+            strokeOpacity={ring === scale ? 0.3 : 0.12}
+            strokeWidth={1}
           />
         ))}
         {/* 轴线 */}
@@ -100,14 +117,16 @@ export default function RadarPentagon({
           return <line key={i} x1={CX} y1={CY} x2={x} y2={y} stroke="var(--line, #1a1a1a)" strokeOpacity={0.2} />;
         })}
 
-        {/* 基准线:墨色虚线,无填充 */}
-        <polygon
-          points={polygonPoints(axes.map((a) => a.baseline), scale)}
-          fill="none"
-          stroke="var(--ink, #1a1a1a)"
-          strokeWidth={2}
-          strokeDasharray="5 4"
-        />
+        {/* 基准线:墨色虚线,无填充。样本 < 2 时不画(见 showBaseline) */}
+        {showBaseline && (
+          <polygon
+            points={polygonPoints(axes.map((a) => a.baseline), scale)}
+            fill="none"
+            stroke="var(--ink, #1a1a1a)"
+            strokeWidth={2.5}
+            strokeDasharray="6 4"
+          />
+        )}
         {/* 本人:黄底半透明 + 墨边 */}
         <polygon
           points={polygonPoints(axes.map((a) => a.value), scale)}
@@ -138,9 +157,13 @@ export default function RadarPentagon({
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2 w-5 bg-accent" aria-hidden /> {selfLabel}
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-0 w-5 border-t-2 border-dashed border-line" aria-hidden /> {baselineLabel}
-        </span>
+        {showBaseline ? (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-0 w-5 border-t-2 border-dashed border-line" aria-hidden /> {baselineLabel}
+          </span>
+        ) : (
+          <span>{noBaselineLabel}</span>
+        )}
       </figcaption>
     </figure>
   );
