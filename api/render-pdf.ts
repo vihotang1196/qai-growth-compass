@@ -140,7 +140,8 @@ interface RenderOutcome {
  */
 async function renderReport(sessionId: string): Promise<RenderOutcome> {
   const appBase = env('APP_BASE_URL').replace(/\/$/, '');
-  const rt = await signRenderToken(sessionId, env('INTERNAL_FN_SECRET'), Date.now());
+  const signedAtMs = Date.now();
+  const rt = await signRenderToken(sessionId, env('INTERNAL_FN_SECRET'), signedAtMs);
 
   /**
    * 中文字体不打包进函数(8.3MB 会顶爆体积上限),运行时从 CDN 装进 fontconfig。
@@ -168,6 +169,34 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
     );
   }
   console.log(`CJK fallback font ready: ${fontPath} (${fontStat.size} bytes)`);
+
+  /**
+   * 【开浏览器之前先直接问一次 API —— 把两件事分开】
+   *
+   * 页面跳到 /expired 只说明「取数被拒」,但拒在哪一层看不出来:令牌本身不被接受?
+   * 还是页面没把 rt 传对、走进了 cookie 分支?一次服务端直连就能定性 ——
+   * 用【同一个令牌】、同一条 URL,没有浏览器参与。
+   *
+   * 这比再加一轮页面侧日志有效:它把「令牌对不对」变成一个独立可判的事实。
+   * 失败时直接抛,并把状态码与响应体带出来 —— 那才是能照着行动的信息,
+   * 而不是「30000ms exceeded」。
+   */
+  const apiUrl = `${appBase}/api/assessment-report?rt=${encodeURIComponent(rt)}`;
+  const preflight = await fetch(apiUrl, { method: 'GET' }).catch((e) => e as Error);
+  if (preflight instanceof Error) {
+    throw new Error(`preflight fetch to ${apiUrl} threw: ${preflight.message}`);
+  }
+  if (!preflight.ok) {
+    const body = await preflight.text().catch(() => '');
+    throw new Error(
+      `render token rejected by the report API: HTTP ${preflight.status} — ${body.slice(0, 300)}. ` +
+        `这是【端点层】的拒绝,与页面无关(没有浏览器参与)。` +
+        `401 ⇒ 令牌验签失败或过期:核对 Vercel 与 Supabase 两侧的 INTERNAL_FN_SECRET 是否同值。` +
+        `403 ⇒ 该 entitlement 已停用。409 ⇒ session 不存在。` +
+        `token age at request: ${Math.round((Date.now() - signedAtMs) / 1000)}s(TTL 180s)。`,
+    );
+  }
+  console.log(`preflight ok: report API accepted the render token (HTTP ${preflight.status})`);
 
   /**
    * 【launch 失败时把环境事实一起报出来,不要只报一句 launch failed】
@@ -251,8 +280,34 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
      * 等报告自己说画完了 —— 不用 sleep,也不只靠 networkidle0(那不保证渲染完成)。
      * PentagonLoader 那个动画【不参与】这个信号,否则会截到动画中间的帧。
      */
+    /**
+     * 【同时盯「页面离开了报告路由」—— 不要等满 30 秒】
+     *
+     * 实测:渲染令牌被拒时页面在几秒内就跳到 /expired,而 waitForFunction 还在等一个
+     * 【不可能发生】的事件,等满 30 秒才报「30000ms exceeded」——那句话本身零信息量,
+     * 而且把一个明确的鉴权失败伪装成了超时。
+     *
+     * 所以两个条件竞速:信号置位 → 成功;URL 离开 /report → 立刻失败并报出实际落点。
+     */
+    const leftReport = page
+      .waitForFunction("!location.pathname.startsWith('/report')", { timeout: 30_000 })
+      .then(() => 'left' as const);
+    const becameReady = page
+      .waitForFunction('window.__REPORT_READY__ === true', { timeout: 30_000 })
+      .then(() => 'ready' as const);
+
     try {
-      await page.waitForFunction('window.__REPORT_READY__ === true', { timeout: 30_000 });
+      const outcome = await Promise.race([becameReady, leftReport]);
+      if (outcome === 'left') {
+        const where = await page.evaluate(() => ({
+          url: location.href,
+          bodyText: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 200),
+        }));
+        throw new Error(
+          `report page navigated away to ${where.url} —— 报告页只在鉴权失败时跳走` +
+            `(401/403 → /expired)。这不是超时,是渲染令牌没被接受。page=${JSON.stringify({ where, consoleLines, failedRequests })}`,
+        );
+      }
     } catch (err) {
       // 超时那一刻页面到底是什么状态 —— 这些才是能定位问题的东西
       const pageState = await page

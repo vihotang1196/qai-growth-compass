@@ -64,7 +64,19 @@ Deno.serve(async (req: Request) => {
   const verified = renderSessionId
     ? null
     : await verifySession(readSessionCookie(req), env.SESSION_SECRET!, Date.now());
-  if (!renderSessionId && !verified) return json({ error: 'unauthorized' }, 401);
+  if (!renderSessionId && !verified) {
+    /**
+     * 【401 要说清是哪一种,但不泄露任何值】
+     * 「有令牌但验不过」与「压根没凭证」的排查方向完全不同:前者查两侧 secret 是否同值、
+     * 是否过期;后者查 rt 有没有真的传到这一层(比如代理丢了 query、页面没透传)。
+     * 只回类别,不回令牌内容、不回期望值 —— 那些对排查没用,对攻击者有用。
+     */
+    const reason = rt
+      ? 'render token present but failed verification (wrong INTERNAL_FN_SECRET on one side, or expired)'
+      : 'no render token and no valid session cookie';
+    console.warn(`report unauthorized: ${reason}`);
+    return json({ error: 'unauthorized', reason }, 401);
+  }
 
   try {
     // 渲染令牌直接指定 session;cookie 那条要先由 entitlement 找 session
