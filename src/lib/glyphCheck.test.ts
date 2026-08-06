@@ -15,7 +15,7 @@ const RARE_A = cp(0x4dae); // U+4DAE —— subset 里故意排除的生僻字
 const RARE_B = cp(0x9f98); // U+9F98
 
 function scan(over: Partial<GlyphScan> = {}): GlyphScan {
-  return { commonMissing: [], otherMissing: [], scanned: 500, ...over };
+  return { commonMissing: [], otherTofu: [], otherBlank: [], scanned: 500, ...over };
 }
 
 describe('classifyGlyphReport — graded by cause, not by count', () => {
@@ -33,12 +33,12 @@ describe('classifyGlyphReport — graded by cause, not by count', () => {
 
   it('critical wins even when other characters are also missing', () => {
     // 常用字都缺时,其余缺失只是同一个原因的副产品 —— 报最严重的那个成因
-    const v = classifyGlyphReport(scan({ commonMissing: [YING], otherMissing: [RARE_A, RARE_B] }));
+    const v = classifyGlyphReport(scan({ commonMissing: [YING], otherTofu: [RARE_A, RARE_B] }));
     expect(v.severity).toBe('critical');
   });
 
   it('only rare characters missing → partial (fallback gap, report still usable)', () => {
-    const v = classifyGlyphReport(scan({ otherMissing: [RARE_A] }));
+    const v = classifyGlyphReport(scan({ otherTofu: [RARE_A] }));
     expect(v.severity).toBe('partial');
     expect(v.message).toContain('GLYPH_PARTIAL');
   });
@@ -46,18 +46,42 @@ describe('classifyGlyphReport — graded by cause, not by count', () => {
   it('a single rare character and fifty rare characters are both partial', () => {
     // 刻意不按数量分级:数量阈值是任意的,而且不指向任何动作。
     // 一个生僻姓名和五十个,要做的事都是「补字体」
-    const one = classifyGlyphReport(scan({ otherMissing: [RARE_A] }));
-    const many = classifyGlyphReport(scan({ otherMissing: Array.from({ length: 50 }, (_, i) => String(i)) }));
+    const one = classifyGlyphReport(scan({ otherTofu: [RARE_A] }));
+    const many = classifyGlyphReport(scan({ otherTofu: Array.from({ length: 50 }, (_, i) => String(i)) }));
     expect(one.severity).toBe('partial');
     expect(many.severity).toBe('partial');
   });
 
   it('long missing lists are truncated in the message but the count is exact', () => {
     const chars = Array.from({ length: 40 }, (_, i) => String.fromCharCode(0x4e00 + i));
-    const v = classifyGlyphReport(scan({ otherMissing: chars }));
+    const v = classifyGlyphReport(scan({ otherTofu: chars }));
     expect(v.message).toContain('40 character(s)');
     // 讯息进 pdf_last_error(有长度上限),不能把 40 个字全塞进去
     expect(v.message!.length).toBeLessThan(300);
+  });
+
+  it('blank glyphs are critical, not partial — the fallback layer is dead', () => {
+    /**
+     * 实测暴露的那一类:兜底层没生效时容器里没有任何字体覆盖那些码位,浏览器连 .notdef
+     * 都画不出来,渲染是纯空白。而空白的位图与 U+FFFF 不同,只比 .notdef 会判成 ok ——
+     * 「字全没显示但检查说没问题」。空白按系统性失败处理:它影响所有客户的所有生僻字。
+     */
+    const v = classifyGlyphReport(scan({ otherBlank: [RARE_A, RARE_B] }));
+    expect(v.severity).toBe('critical');
+    expect(v.severity).not.toBe('ok');
+    expect(v.message).toContain('blank');
+  });
+
+  it('blank outranks tofu — a blank present makes it critical even with tofu around', () => {
+    const v = classifyGlyphReport(scan({ otherTofu: [RARE_A], otherBlank: [RARE_B] }));
+    expect(v.severity).toBe('critical');
+  });
+
+  it('common characters missing still outranks blank', () => {
+    // 常用字都渲染不出是更早的失败:字体压根没加载
+    const v = classifyGlyphReport(scan({ commonMissing: [YING], otherBlank: [RARE_A] }));
+    expect(v.severity).toBe('critical');
+    expect(v.message).toContain('common characters');
   });
 
   it('scanning nothing is inconclusive, never ok', () => {

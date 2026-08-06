@@ -24,10 +24,22 @@
 
 /** 浏览器内测出来的原始结果:哪些字符渲染成了 .notdef(方块) */
 export interface GlyphScan {
-  /** 探测串(常用字)里渲染失败的字符 */
+  /** 探测串(常用字)里渲染失败的字符 —— 方块或空白都算 */
   commonMissing: string[];
-  /** 页面其余文本里渲染失败的字符(去重) */
-  otherMissing: string[];
+  /** 页面其余文本里渲染成【方块】(.notdef)的字符,去重 */
+  otherTofu: string[];
+  /**
+   * 页面其余文本里渲染成【空白】(零墨迹)的字符,去重。
+   *
+   * 【为什么空白要与方块分开,而且更严重】原来只比对「和 U+FFFF 的 .notdef 一样」。
+   * 实测发现字体兜底层没生效时,Lambda 容器里没有任何字体覆盖那些码位,浏览器连 .notdef
+   * 都画不出来,渲染结果是**纯空白** —— 位图与 U+FFFF 不同,于是被判成 ok。
+   * 一个「字全没显示但检查说没问题」的自检,正是我们最怕的那种永远绿的检查。
+   *
+   * 语义上:方块 = 字体匹配上了但缺这个字(逐字问题);空白 = 没有字体覆盖它
+   * (兜底层整体失效,影响所有客户的所有生僻字)。所以空白按系统性失败处理。
+   */
+  otherBlank: string[];
   /** 扫过的不重复字符总数,用于判断扫描本身是否有效 */
   scanned: number;
 }
@@ -62,20 +74,33 @@ export function classifyGlyphReport(scan: GlyphScan): GlyphVerdict {
       message: 'GLYPH_INCONCLUSIVE: the glyph scan saw no characters — the check itself did not run',
     };
   }
+  // 常用字都渲染不出 ⇒ 字体压根没加载,这个 deploy 出的每份 PDF 都废
   if (scan.commonMissing.length > 0) {
     return {
       severity: 'critical',
       message:
-        `GLYPH_CRITICAL: common characters rendered as tofu (${scan.commonMissing.join('')}) — ` +
+        `GLYPH_CRITICAL: common characters did not render (${scan.commonMissing.join('')}) — ` +
         'the CJK font almost certainly failed to load; every PDF from this deploy is affected',
     };
   }
-  if (scan.otherMissing.length > 0) {
+  // 空白 ⇒ 没有任何字体覆盖那些码位,兜底层整体失效(不是逐字缺字)
+  if (scan.otherBlank.length > 0) {
+    return {
+      severity: 'critical',
+      message:
+        `GLYPH_CRITICAL: ${scan.otherBlank.length} character(s) rendered as blank, no ink at all ` +
+        `(${scan.otherBlank.slice(0, 20).join('')}) — blank is worse than tofu: tofu means the font ` +
+        'matched but lacks the glyph, blank means no font covered it at all, i.e. the fontconfig ' +
+        'fallback layer is not in effect. Every rare character for every customer is invisible.',
+    };
+  }
+  // 只有方块 ⇒ 兜底层在,只是缺这几个字(多半生僻姓名)
+  if (scan.otherTofu.length > 0) {
     return {
       severity: 'partial',
       message:
-        `GLYPH_PARTIAL: ${scan.otherMissing.length} character(s) rendered as tofu ` +
-        `(${scan.otherMissing.slice(0, 20).join('')}) — fontconfig fallback does not cover them`,
+        `GLYPH_PARTIAL: ${scan.otherTofu.length} character(s) rendered as tofu ` +
+        `(${scan.otherTofu.slice(0, 20).join('')}) — fontconfig fallback does not cover them`,
     };
   }
   return { severity: 'ok', message: null };
