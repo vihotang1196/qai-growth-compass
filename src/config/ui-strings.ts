@@ -158,6 +158,17 @@ export const UI_STRINGS = {
   'report.pdf.pending': { zh: 'PDF 正在生成,稍后回到这个链接即可下载。', en: 'Your PDF is being generated — come back to this link shortly to download.' },
   'report.pdf.print': { zh: '用浏览器打印 / 存 PDF', en: 'Print / save as PDF' },
 
+  'report.section.evidence': { zh: '每一维为什么是这个分', en: 'Why each score is what it is' },
+  'report.evidence.youChose': { zh: '你选的是', en: 'You chose' },
+  'report.evidence.now': { zh: '现在', en: 'Now' },
+  'report.evidence.target': { zh: '目标', en: 'Target' },
+  'report.evidence.atTarget': { zh: '已经到顶格', en: 'Already at the top' },
+  'report.evidence.unanswered': { zh: '未作答', en: 'Not answered' },
+  'report.badge.priority': { zh: '优先', en: 'Priority' },
+  'report.baseline.n': { zh: '{n} 份样本', en: '{n} samples' },
+  'report.difficulty': { zh: '难度', en: 'Difficulty' },
+  'report.impact': { zh: '影响', en: 'Impact' },
+
   // ── Admin ───────────────────────────────────────────────
   'admin.title': { zh: '学员名单', en: 'Roster' },
   'admin.login.title': { zh: '后台登录', en: 'Admin sign-in' },

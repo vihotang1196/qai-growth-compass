@@ -4,11 +4,13 @@ import config from '@/config/assessment-config.json';
 import { Button, Card, CardBody, CardHeader, CardTitle } from '@/components/brutalist';
 import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleMark';
 import RadarPentagon, { type RadarAxis } from '@/components/RadarPentagon';
+import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
 import { computeCosts, rootCauseLevel, selectActions, type ActionLibrary } from '@/lib/reportContent';
+import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
 
 declare global {
   interface Window {
@@ -24,6 +26,8 @@ const SCALE = config.meta.score_scale;
 const DIM_REFS = config.dimensions.map((d) => ({ key: d.key, order: d.order }));
 // action_library 含 _note(string),用 unknown 断到 ActionLibrary
 const ACTION_LIB = config.action_library as unknown as ActionLibrary;
+const QUESTIONS = config.questions as unknown as QuestionLike[];
+const Q_BY_ID = new Map(QUESTIONS.map((q) => [q.id, q]));
 
 /** badgeForScore 的 'full'|'partial'|'missing' → SubmoduleMark 的 'full'|'half'|'empty' */
 const MARK: Record<string, MarkState> = { full: 'full', partial: 'half', missing: 'empty' };
@@ -83,11 +87,18 @@ export default function Report() {
     [data],
   );
 
-  if (state === 'loading') return <Shell><p className="font-body">{tk('report.loading')}</p></Shell>;
+  if (state === 'loading')
+    return (
+      <Shell>
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <PentagonLoader label={tk('report.loading')} />
+        </div>
+      </Shell>
+    );
   if (state === 'notReady') return <Shell><Notice>{tk('report.notReady')}</Notice></Shell>;
   if (state === 'error' || !data) return <Shell><Notice tone="accent">{tk('report.loadFailed')}</Notice></Shell>;
 
-  const { result, submodules, baseline, cohort, survey } = data;
+  const { result, submodules, evidence, answersByQuestion, baseline, cohort, survey } = data;
   const dimLabel = (key: string) => {
     const d = DIM_BY_KEY.get(key);
     return d ? L(d.zh, d.en) : key;
@@ -109,6 +120,7 @@ export default function Report() {
     baseline: baseline.means[d.key] ?? 0,
   }));
 
+  const weakSet = new Set(result.weakest);
   const tier = TIER_BY_KEY.get(result.tier);
   const priority = typeof survey.priority_dimension === 'string' ? survey.priority_dimension : null;
   const mismatch = priority !== null && priority !== result.weakest[0];
@@ -125,8 +137,58 @@ export default function Report() {
           axes={radarAxes}
           scale={SCALE}
           selfLabel={tk('report.you')}
-          baselineLabel={tk(baseline.source === 'cohort' ? 'report.baseline.cohort' : 'report.baseline.global')}
+          baselineLabel={`${tk(baseline.source === 'cohort' ? 'report.baseline.cohort' : 'report.baseline.global')} · ${tk('report.baseline.n').replace('{n}', String(baseline.n))}`}
         />
+      </Section>
+
+      {/* 1.5 每一维为什么是这个分 —— 依据是客户自己选的那三个选项,不是我们判的 */}
+      <Section title={tk('report.section.evidence')}>
+        <div className="space-y-4">
+          {DIMENSIONS.map((d) => {
+            const subLabels = L(d.submodules_zh, d.submodules_en);
+            return (
+              <div key={d.key}>
+                <div className="mb-1 flex items-center gap-2 font-head text-sm font-bold">
+                  <span className="h-3 w-3 border-brutal border-line" style={{ backgroundColor: d.color }} aria-hidden />
+                  {L(d.zh, d.en)}
+                  <span className="ml-auto">{(result.dimensions[d.key] ?? 0).toFixed(1)}</span>
+                </div>
+                <div className="space-y-1">
+                  {subLabels.map((label, i) => {
+                    const sc = submodules[d.key]?.[i];
+                    const badge = sc === null || sc === undefined ? 'missing' : badgeForScore(sc, SCALE);
+                    const ev = evidence[d.key]?.[i];
+                    const pair = evidencePair(ev ? Q_BY_ID.get(ev.questionId) : undefined, ev?.optionIndex, locale);
+                    return (
+                      <div key={i} className="border-brutal border-line p-2 font-body text-sm">
+                        <div className="flex items-center gap-2">
+                          <SubmoduleMark state={MARK[badge]} label={badgeLabel(badge)} />
+                          <span className="font-bold">{label}</span>
+                        </div>
+                        {pair ? (
+                          <div className="mt-1 pl-6">
+                            <div>
+                              <span className="opacity-50">{tk('report.evidence.now')}:</span> {pair.current}
+                            </div>
+                            {/* 已顶格就不摆「目标」,那会像在说他还没做到 */}
+                            {!pair.atTarget && (
+                              <div className="mt-0.5">
+                                <span className="opacity-50">{tk('report.evidence.target')}:</span>{' '}
+                                <span className="bg-accent px-1">{pair.target}</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-1 pl-6 opacity-50">{tk('report.evidence.unanswered')}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </Section>
 
       {/* 2. 分档 */}
@@ -225,10 +287,28 @@ export default function Report() {
                 {L(d.submodules_zh, d.submodules_en).map((label, i) => {
                   const s = submodules[d.key]?.[i];
                   const badge = s === null || s === undefined ? 'missing' : badgeForScore(s, SCALE);
+                  /**
+                   * 缺失项红框(alert token,语义唯一:红 = 缺失/优先)。
+                   * 但只有【最弱两维】的缺失额外标「优先」—— 分数低的人否则会看到一整片红,
+                   * 报告读起来像判决书。标了优先的那几格,正好对应第 7 板块的动作,两块因此连起来。
+                   */
+                  const isMissing = badge === 'missing';
+                  const isPriority = isMissing && weakSet.has(d.key);
                   return (
-                    <div key={i} className="flex items-center gap-2 border-brutal border-line p-2 font-body text-sm">
+                    <div
+                      key={i}
+                      className={[
+                        'flex items-center gap-2 border-brutal p-2 font-body text-sm',
+                        isMissing ? 'qai-alert-border' : 'border-line',
+                      ].join(' ')}
+                    >
                       <SubmoduleMark state={MARK[badge]} label={badgeLabel(badge)} />
                       <span className="truncate">{label}</span>
+                      {isPriority && (
+                        <span className="ml-auto shrink-0 qai-alert-fill px-1.5 py-0.5 font-head text-xs font-bold">
+                          {tk('report.badge.priority')}
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -241,19 +321,40 @@ export default function Report() {
       {/* 7. 30 天行动清单 */}
       <Section title={tk('report.section.actions')}>
         <ol className="space-y-3">
-          {actions.map((a, i) => (
-            <li key={a.id} className="flex gap-3 border-brutal border-line p-3">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-ink font-head font-bold text-paper">{i + 1}</span>
-              <div className="space-y-1 font-body">
-                <p className="leading-snug">{L(a.zh, a.en)}</p>
-                <div className="flex gap-3 text-xs opacity-60">
-                  <span>{tk('report.action.difficulty')}: {level(a.difficulty)}</span>
-                  <span>{tk('report.action.impact')}: {level(a.impact)}</span>
-                  <span>{dimLabel(a.dimension)}</span>
+          {actions.map((a, i) => {
+            // 前后对比复用「你自己的作答」:related_question 为 null 就不显示这一行,
+            // 不为了统一而编一个对比
+            const pair = actionEvidence(
+              (a as { related_question?: string | null }).related_question,
+              QUESTIONS,
+              answersByQuestion,
+              locale,
+            );
+            return (
+              <li key={a.id} className="flex gap-3 border-brutal border-line p-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-ink font-head font-bold text-paper">{i + 1}</span>
+                <div className="min-w-0 flex-1 space-y-2 font-body">
+                  <p className="leading-snug">{L(a.zh, a.en)}</p>
+                  {pair && !pair.atTarget && (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="border-brutal border-line bg-paper px-2 py-1">
+                        <span className="opacity-50">{tk('report.evidence.now')}: </span>{pair.current}
+                      </span>
+                      <span aria-hidden className="font-head font-bold">→</span>
+                      <span className="border-brutal border-line bg-accent px-2 py-1">
+                        <span className="opacity-60">{tk('report.evidence.target')}: </span>{pair.target}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <LevelTag kind="difficulty" value={a.difficulty} label={`${tk('report.difficulty')} ${level(a.difficulty)}`} />
+                    <LevelTag kind="impact" value={a.impact} label={`${tk('report.impact')} ${level(a.impact)}`} />
+                    <span className="opacity-60">{dimLabel(a.dimension)}</span>
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       </Section>
 
@@ -308,6 +409,29 @@ function NextStep({
       )}
     </Section>
   );
+}
+
+/**
+ * 难度 / 影响的 tag。
+ * 【为什么不用红色表示「难度高」】红色已经专属「缺失 / 优先」。同一份报告里红色一会儿是
+ * 「你缺这个」一会儿是「这件事难」,读者要在两套语义间切换。改用两个不同的视觉维度:
+ *   难度 = 墨色深浅(阻力)  低 白底 / 中 浅灰 / 高 墨底白字
+ *   影响 = 黄色深浅(收益)  低 白底 / 中 浅黄 / 高 满黄
+ * 于是「高影响低难度」= 满黄 + 白底,一眼就是该先做的那条 —— 颜色本身在排序。
+ */
+function LevelTag({ kind, value, label }: { kind: 'difficulty' | 'impact'; value: string; label: string }) {
+  const difficulty: Record<string, string> = {
+    low: 'bg-paper text-ink',
+    medium: 'bg-muted text-ink',
+    high: 'bg-ink text-paper',
+  };
+  const impact: Record<string, string> = {
+    low: 'bg-paper text-ink',
+    medium: 'bg-accent/40 text-ink',
+    high: 'bg-accent text-accent-fg',
+  };
+  const tone = (kind === 'difficulty' ? difficulty : impact)[value] ?? 'bg-paper text-ink';
+  return <span className={`border-brutal border-line px-2 py-0.5 font-head font-bold ${tone}`}>{label}</span>;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

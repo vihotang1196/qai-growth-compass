@@ -33,7 +33,11 @@ function point(i: number, n: number, radius: number): [number, number] {
   return [CX + radius * Math.cos(a), CY + radius * Math.sin(a)];
 }
 
-function polygon(values: number[], scale: number): string {
+/**
+ * 值数组 → SVG points 字符串。导出是为了能单独测:
+ * 「n=1 时本人与基准两个多边形必须逐点相等」那条不变量要在这里断言。
+ */
+export function polygonPoints(values: number[], scale: number): string {
   return values
     .map((v, i) => point(i, values.length, (Math.max(0, Math.min(scale, v)) / scale) * R).join(','))
     .join(' ');
@@ -75,7 +79,7 @@ export default function RadarPentagon({
 
         {/* 基准线:墨色虚线,无填充 */}
         <polygon
-          points={polygon(axes.map((a) => a.baseline), scale)}
+          points={polygonPoints(axes.map((a) => a.baseline), scale)}
           fill="none"
           stroke="var(--ink, #1a1a1a)"
           strokeWidth={2}
@@ -83,7 +87,7 @@ export default function RadarPentagon({
         />
         {/* 本人:黄底半透明 + 墨边 */}
         <polygon
-          points={polygon(axes.map((a) => a.value), scale)}
+          points={polygonPoints(axes.map((a) => a.value), scale)}
           fill="var(--accent, #f2c200)"
           fillOpacity={0.35}
           stroke="var(--ink, #1a1a1a)"

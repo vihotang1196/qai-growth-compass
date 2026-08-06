@@ -62,7 +62,9 @@ describe('assessment-config structural assumptions', () => {
   it('15 scored questions across 5 dimensions', () => {
     expect(questions).toHaveLength(15);
     expect(dimensions).toHaveLength(5);
-    expect(config.meta.version).toBe('3.0.0');
+    // 钉主版本而不是精确版本:结构由下面那些断言各自守着,精确版本会让每次内容改动
+    // (如 v3.1.0 给 action 加 related_question)都误报。主版本变了才意味着结构可能变
+    expect(config.meta.version.split('.')[0]).toBe('3');
   });
 
   it('the measure dimension is fully gone', () => {

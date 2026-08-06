@@ -105,6 +105,12 @@ export default function Quiz() {
     cardRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
+  /** 还有答案在后台保存 */
+  const saving = Object.values(saveState).some((st) => st === 'saving');
+  /** 全部答完且全部落库才允许提交 —— 与按钮的视觉承诺一致 */
+  const canSubmit =
+    !saving && [...PROFILE_IDS, ...QUESTION_IDS].every((id) => id in answers && saveState[id] !== 'error');
+
   function submit() {
     const all = [...PROFILE_IDS, ...QUESTION_IDS];
     // 1. 有没有没答的
@@ -206,8 +212,13 @@ export default function Quiz() {
           <div className="border-brutal border-line bg-accent p-3 font-body text-sm">{submitNote}</div>
         )}
         <p className="font-body text-xs opacity-50">{tk('quiz.autosaveNote')}</p>
-        <Button variant="primary" block onClick={submit}>
-          {tk('quiz.submit')}
+        {/**
+          * 【按钮状态就是承诺,不能用文字去纠正】亮着的按钮 + 一行「还有答案在保存」的字,
+          * 是在用文字纠正一个视觉承诺,而人先看颜色再读字。所以:没答完或还在保存时
+          * 直接置灰禁用,全部落库才变黄可点。
+          */}
+        <Button variant="primary" block onClick={submit} disabled={!canSubmit}>
+          {saving ? tk('quiz.savingOne') : tk('quiz.submit')}
         </Button>
       </div>
     </Shell>

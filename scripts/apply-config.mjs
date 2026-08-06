@@ -163,6 +163,21 @@ function validate(c) {
     'action_library 每维都有动作 + low/mid/high 三档 root_cause',
   );
 
+  // related_question 必须指向真实题目(或 null)——指向不存在的题会让报告的「现在→目标」
+  // 对比行取不到选项文案,静默渲染成空
+  const qidSet = new Set(questions.map((q) => q.id));
+  const badRel = [];
+  for (const [dim, block] of Object.entries(c.action_library ?? {})) {
+    if (dim === '_note') continue;
+    for (const a of block.actions ?? []) {
+      if (!('related_question' in a)) badRel.push(`${a.id}: 缺 related_question`);
+      else if (a.related_question !== null && !qidSet.has(a.related_question)) {
+        badRel.push(`${a.id} → ${a.related_question}`);
+      }
+    }
+  }
+  chk(badRel.length === 0, `action_library 的 related_question 都指向真实题目或 null${badRel.length ? ' 问题:' + badRel.join(', ') : ''}`);
+
   return { errors, okList };
 }
 

@@ -88,14 +88,30 @@ Deno.serve(async (req: Request) => {
     if (aErr) throw aErr;
     const answers = new Map((answerRows ?? []).map((r) => [r.question_id as string, r.option_index as number]));
 
+    /**
+     * 每个子模块位(维度 × submodule_index)带上:归一化分 + 题号 + 客户选的下标。
+     *
+     * 【为什么要带题号和下标】报告要给「为什么是这个分」的依据 —— 展示客户【自己选的】
+     * 那个选项,以及顶格那一档,做成「现在 → 目标」。选项文案在 config 里,前端按题号取,
+     * 所以这里只回 id 与 index,不回文案(省带宽,也避免文案在两处各存一份)。
+     * 依据是他自己填的,比任何解释性文案都有说服力。
+     */
     const submodules: Record<string, (number | null)[]> = {};
-    for (const k of DIM_KEYS) submodules[k] = [null, null, null];
+    const evidence: Record<string, ({ questionId: string; optionIndex: number } | null)[]> = {};
+    for (const k of DIM_KEYS) {
+      submodules[k] = [null, null, null];
+      evidence[k] = [null, null, null];
+    }
     for (const q of QUESTIONS) {
       const idx = answers.get(q.id);
       if (idx === undefined) continue;
       const s = perQuestionScore(idx, q.option_count, SCALE);
       if (s !== null) submodules[q.dimension][q.submodule_index] = s;
+      evidence[q.dimension][q.submodule_index] = { questionId: q.id, optionIndex: idx };
     }
+    /** 题号 → 客户选的下标。行动清单的「现在 → 目标」按 related_question 查这张表 */
+    const answersByQuestion: Record<string, number> = {};
+    for (const [qid, idx] of answers) answersByQuestion[qid] = idx;
 
     // ── 问卷(mismatch 高亮、goal_90d 展示要用)──
     const { data: surveyRow } = await supa
@@ -106,9 +122,17 @@ Deno.serve(async (req: Request) => {
     const survey = (surveyRow?.responses ?? {}) as Record<string, unknown>;
 
     // ── 基准线 / 分位:同批次 + 全库结果 ──
+    /**
+     * 【必须用 !inner】PostgREST 对嵌套资源的过滤【不会过滤父行】—— 不加 !inner 的话
+     * .eq('session.status','completed') 只作用于嵌套那一层,父行照样全都回来
+     * (只是 session 变 null)。那会让基准线把未完成的结果也算进均值 ——
+     * 症状是「库里只有我一条,基准线却和我不重合」,而没有任何报错。
+     */
     const { data: allRows, error: allErr } = await supa
       .from('assessment_results')
-      .select('dim_scores, total, tier, session:assessment_sessions(status, entitlement:assessment_entitlements(cohort_id))')
+      .select(
+        'dim_scores, total, tier, session:assessment_sessions!inner(status, entitlement:assessment_entitlements!inner(cohort_id))',
+      )
       .eq('session.status', 'completed');
     if (allErr) throw allErr;
 
@@ -149,6 +173,8 @@ Deno.serve(async (req: Request) => {
         strongest: result.strongest,
       },
       submodules,
+      evidence,
+      answersByQuestion,
       leadsPerMonth: fromValueMap(profile, 'P2', P2?.value_map),
       dealValue: fromValueMap(profile, 'P3', P3?.value_map),
       survey,

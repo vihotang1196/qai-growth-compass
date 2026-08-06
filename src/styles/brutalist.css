@@ -217,3 +217,62 @@ h1, h2, h3, h4, h5, h6 {
     transition: none;
   }
 }
+
+/* ── alert token ────────────────────────────────────────────
+   红色专属「缺失 / 优先处理」,语义唯一 —— 不进维度色白名单,
+   所以 check:dim 不受影响(那条守卫只管维度色不许当线色/文字色)。
+   难度用墨色深浅、影响用黄色深浅,都不碰红,避免同一份报告里红色有两套语义。 */
+:root {
+  --alert: #c94f4f;
+}
+.qai-alert-border {
+  border-color: var(--alert) !important;
+}
+.qai-alert-text {
+  color: var(--alert);
+}
+.qai-alert-fill {
+  background-color: var(--alert);
+  color: #fff;
+}
+
+/* ── 生成中动画:五边形五条边依次描出 ─────────────────────
+   纯装饰。绝不参与 window.__REPORT_READY__ —— 那个信号只由数据到达 + 渲染完成决定,
+   否则 Stage 9 的 PDF 会截到动画中间的帧。 */
+@keyframes qai-draw-edge {
+  0%,
+  100% {
+    stroke-dashoffset: var(--qai-dash, 100);
+  }
+  35%,
+  85% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes qai-pop-vertex {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  40%,
+  85% {
+    opacity: 1;
+  }
+}
+.qai-pentagon-edge {
+  stroke-dashoffset: 100;
+  animation: qai-draw-edge 2.2s ease-in-out infinite;
+}
+.qai-pentagon-vertex {
+  opacity: 0.15;
+  animation: qai-pop-vertex 2.2s ease-in-out infinite;
+}
+/* 尊重系统的减少动效设置:直接显示完成态,不闪 */
+@media (prefers-reduced-motion: reduce) {
+  .qai-pentagon-edge,
+  .qai-pentagon-vertex {
+    animation: none;
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
