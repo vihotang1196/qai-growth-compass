@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import config from '@/config/assessment-config.json';
 import { Button, Card, CardBody, CardHeader, CardTitle } from '@/components/brutalist';
 import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleMark';
-import RadarPentagon, { type RadarAxis } from '@/components/RadarPentagon';
+import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
-import { computeCosts, rootCauseLevel, selectActions, type ActionLibrary } from '@/lib/reportContent';
+import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
 import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
 
 declare global {
@@ -103,7 +103,8 @@ export default function Report() {
     const d = DIM_BY_KEY.get(key);
     return d ? L(d.zh, d.en) : key;
   };
-  const fmtMoney = (n: number) => `RM ${Math.round(n).toLocaleString('en-US')}`;
+  // 取整到 2 位有效数字 —— 精确到个位是一个我们给不出的承诺(见 reportContent.roundToSignificant)
+  const fmtMoney = (n: number) => `RM ${roundToSignificant(n).toLocaleString('en-US')}`;
   const level = (v: string) => tk(`report.level.${v}` as Parameters<typeof tk>[0]);
   // 徽章无障碍标签:从 config 的 submodule_badge_legend 取(已具备 / 部分具备 / 缺失)
   const badgeLabel = (badge: 'full' | 'partial' | 'missing') => {
@@ -112,13 +113,8 @@ export default function Report() {
     return legend[char] ?? badge;
   };
 
-  const radarAxes: RadarAxis[] = DIMENSIONS.map((d) => ({
-    key: d.key,
-    label: L(d.zh, d.en),
-    color: d.color,
-    value: result.dimensions[d.key] ?? 0,
-    baseline: baseline.means[d.key] ?? 0,
-  }));
+  // 轴构造只有一份实现(RadarPentagon.buildRadarAxes),测试调的是同一个函数
+  const radarAxes = buildRadarAxes(DIMENSIONS, result.dimensions, baseline.means, dimLabel);
 
   const weakSet = new Set(result.weakest);
   const tier = TIER_BY_KEY.get(result.tier);
@@ -256,12 +252,19 @@ export default function Report() {
                     <div className="border-brutal border-line bg-muted p-3">
                       <span className="font-head text-xs font-bold uppercase opacity-50">{tk('report.weakness.cost')}</span>
                       <p className="mt-1 font-body">
+                        <span className="opacity-60">{tk('report.cost.approx')} </span>
                         <span className="font-head text-xl font-bold">{fmtMoney(cost.amount)}</span>
                         <span className="opacity-60"> {tk('report.cost.perMonth')}</span>
                         <span className="ml-2 font-body text-sm">{L(cost.zh_label, cost.en_label)}</span>
                       </p>
-                      {/* 每条假设 + 总 disclaimer,一个确定数字会毁掉信任 */}
-                      <p className="mt-1 font-body text-xs opacity-60">{cost.zh_note}</p>
+                      {/**
+                        * 【假设与数字同级,不做浅灰小字】一个大号加粗的金额配一行浅灰小字,
+                        * 视觉上像确定的事实,而它建立在两层假设上。客户拿去对真实账目一次对不上,
+                        * 整份报告的信任就没了 —— 而报告其余部分的说服力全靠「数据是他自己填的」。
+                        */}
+                      <p className="mt-2 border-t-2 border-line pt-2 font-body text-sm">
+                        <span className="font-bold">{tk('report.cost.assumption')}:</span> {cost.zh_note}
+                      </p>
                     </div>
                   )}
                 </CardBody>

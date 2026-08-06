@@ -18,6 +18,29 @@ export interface RadarAxis {
   baseline: number;
 }
 
+/**
+ * 从「本人分数 + 基准均值 + 维度表」构造轴数组 —— **唯一一份实现**。
+ *
+ * 【为什么必须导出而不是在页面里内联】上一轮的不变量断言在测试里【重写】了一份同样的
+ * 构造逻辑,于是它守的是自己那份副本,不是生产路径:两份今天恰好等价,断言绿着,
+ * 而线上仍然出错。一条绿着的断言守着一个正在出错的行为,比没有断言更危险 ——
+ * 它让下一个人以为这块验过了。所以现在只有这一份,页面和测试都调它。
+ */
+export function buildRadarAxes(
+  dimensions: readonly { key: string; color: string }[],
+  mine: Record<string, number>,
+  baselineMeans: Record<string, number>,
+  labelOf: (key: string) => string,
+): RadarAxis[] {
+  return dimensions.map((d) => ({
+    key: d.key,
+    label: labelOf(d.key),
+    color: d.color,
+    value: mine[d.key] ?? 0,
+    baseline: baselineMeans[d.key] ?? 0,
+  }));
+}
+
 const SIZE = 320;
 const CX = SIZE / 2;
 const CY = SIZE / 2;

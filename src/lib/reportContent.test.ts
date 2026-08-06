@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import config from '@/config/assessment-config.json';
 import {
   computeCosts,
+  roundToSignificant,
   evalCostFormula,
   rankByWeakness,
   rootCauseLevel,
@@ -157,5 +158,20 @@ describe('real config cost formulas are all safe products', () => {
   it('every cost rule dimension exists in dimensions', () => {
     const keys = new Set(config.dimensions.map((d) => d.key));
     for (const rule of config.cost_model.rules) expect(keys.has(rule.dimension), rule.dimension).toBe(true);
+  });
+});
+
+describe('roundToSignificant — kills false precision in cost figures', () => {
+  it('rounds to 2 significant figures', () => {
+    expect(roundToSignificant(33750)).toBe(34000);
+    expect(roundToSignificant(24000)).toBe(24000);
+    expect(roundToSignificant(1234)).toBe(1200);
+    expect(roundToSignificant(987)).toBe(990);
+  });
+
+  it('handles zero and small values without blowing up', () => {
+    expect(roundToSignificant(0)).toBe(0);
+    expect(roundToSignificant(7)).toBe(7);
+    expect(roundToSignificant(NaN)).toBe(0);
   });
 });

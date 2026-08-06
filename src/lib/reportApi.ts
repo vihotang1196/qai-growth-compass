@@ -28,6 +28,8 @@ export interface ReportPayload {
     standing: { band: 'top25' | 'q25_50' | 'q50_75' | 'bottom25'; percentile: number; sameTierOthers: number };
     diffs: Record<string, number>;
   } | null;
+  /** 诊断:本人是否在基准样本池里 + 本人 session 的实际状态 */
+  diagnostics?: { baselineIncludesSelf: boolean; sessionStatus: string };
   pdfStatus: string;
 }
 

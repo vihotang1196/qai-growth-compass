@@ -149,6 +149,8 @@ export const UI_STRINGS = {
   'report.weakness.cost': { zh: '不补的代价', en: 'The cost of leaving it' },
   'report.weakness.rootCause': { zh: '根因', en: 'Root cause' },
   'report.cost.perMonth': { zh: '/ 月', en: '/ month' },
+  'report.cost.approx': { zh: '约', en: 'approx.' },
+  'report.cost.assumption': { zh: '这个估算基于', en: 'This estimate assumes' },
   'report.action.difficulty': { zh: '难度', en: 'Difficulty' },
   'report.action.impact': { zh: '预计影响', en: 'Expected impact' },
   'report.level.low': { zh: '低', en: 'Low' },

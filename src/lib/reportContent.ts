@@ -178,3 +178,21 @@ export function computeCosts(
   }
   return lines;
 }
+
+/**
+ * 取整到 n 位有效数字 —— 代价金额用。
+ *
+ * 【为什么不显示 RM 33,750】那个数字精确到个位,视觉上像一个确定的事实,而它建立在两层
+ * 假设上(询盘流失率 + 成交率基线)。精确到个位是一个我们给不出的承诺;客户拿去对自己
+ * 真实账目一次对不上,整份报告的信任就没了 —— 而报告其余部分的说服力全靠「数据是他自己填的」。
+ *
+ * 取整到 2 位有效数字(33750 → 34000)+ 文案上的「约」,把估算的性质还原。
+ * 【没有改成区间】区间需要一个带宽,而 config 里只有单点系数,没有上界 ——
+ * 编一个 ±30% 正是这条要防的毛病。要区间就需要每条规则的上界系数。
+ */
+export function roundToSignificant(value: number, digits = 2): number {
+  if (!Number.isFinite(value) || value === 0) return 0;
+  const mag = Math.floor(Math.log10(Math.abs(value)));
+  const factor = 10 ** (mag - digits + 1);
+  return Math.round(value / factor) * factor;
+}

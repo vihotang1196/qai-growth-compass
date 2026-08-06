@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import config from '@/config/assessment-config.json';
-import { polygonPoints } from '@/components/RadarPentagon';
+import { buildRadarAxes, polygonPoints } from '@/components/RadarPentagon';
 import { selectBaseline, type ResultRow } from './reportStats';
 
 /**
@@ -16,15 +16,16 @@ import { selectBaseline, type ResultRow } from './reportStats';
 const SCALE = config.meta.score_scale;
 const DIM_KEYS = config.dimensions.map((d) => d.key);
 
-/** 与 Report.tsx 里 radarAxes 完全相同的构造方式 */
+/**
+ * 【调生产那一份,不再重写副本】上一版这里自己写了一遍轴构造,于是断言守的是副本、
+ * 不是渲染路径 —— 绿着而线上错。现在直接调 Report.tsx 用的同一个 buildRadarAxes。
+ */
 function buildAxisValues(
   mine: Record<string, number>,
   baselineMeans: Record<string, number>,
 ): { values: number[]; baselines: number[] } {
-  return {
-    values: config.dimensions.map((d) => mine[d.key] ?? 0),
-    baselines: config.dimensions.map((d) => baselineMeans[d.key] ?? 0),
-  };
+  const axes = buildRadarAxes(config.dimensions, mine, baselineMeans, (k) => k);
+  return { values: axes.map((a) => a.value), baselines: axes.map((a) => a.baseline) };
 }
 
 describe('radar invariant: with a single sample, self and baseline polygons coincide', () => {

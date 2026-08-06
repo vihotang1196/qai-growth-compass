@@ -131,7 +131,7 @@ Deno.serve(async (req: Request) => {
     const { data: allRows, error: allErr } = await supa
       .from('assessment_results')
       .select(
-        'dim_scores, total, tier, session:assessment_sessions!inner(status, entitlement:assessment_entitlements!inner(cohort_id))',
+        'dim_scores, total, tier, session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id))',
       )
       .eq('session.status', 'completed');
     if (allErr) throw allErr;
@@ -151,6 +151,17 @@ Deno.serve(async (req: Request) => {
       .map(norm);
 
     const baseline = selectBaseline(cohortRows, globalRows, DIM_KEYS, MIN_N);
+
+    /**
+     * 【诊断:基准池里到底有没有本人】n=1 却与本人分数不符,唯一的解释是那 1 条不是本人 ——
+     * 而这只可能因为本人的 session 不是 'completed'(被 !inner 过滤掉了)。
+     * finalize 里把 status 标 completed 那步失败时【只记日志不失败】,所以它是会发生的。
+     * 与其让人从「n=1 但不重合」去反推,不如让端点直说。
+     */
+    const selfInPool = (allRows ?? []).some((r) => {
+      // deno-lint-ignore no-explicit-any
+      return (r as any).session?.id === session.id;
+    });
 
     const myDims = (result.dim_scores ?? {}) as Record<string, number>;
     // cohort_rank 板块:样本够才给;不足则 null,前端整块隐藏(跨期分位没意义,B1)
@@ -179,6 +190,8 @@ Deno.serve(async (req: Request) => {
       dealValue: fromValueMap(profile, 'P3', P3?.value_map),
       survey,
       baseline,
+      // 诊断:本人是否在基准池里、本人 session 的实际状态
+      diagnostics: { baselineIncludesSelf: selfInPool, sessionStatus: session.status },
       cohort,
       pdfStatus: result.pdf_status,
     });
