@@ -1,4 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+/**
+ * ⚠️ 【这一行必须排在 `@sparticuz/chromium` 之前,顺序有意义】
+ * 那个包在【模块顶层】就做环境探测并解压 NSS 库;lambdaEnv 的副作用要先于它执行,
+ * 否则探测拿到的是未注入的环境,libnss3.so 不会被解压(实测就是这个)。
+ * ESM 按 import 出现的顺序求值被导入模块,所以「写在上面」就是「先执行」。
+ * scripts/check-api-imports.mjs 有一条规则守这个顺序 —— 它验证过会红。
+ */
+import { assertChromiumEnvReady } from './_lib/lambdaEnv.js';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
@@ -123,6 +131,13 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
    * 二进制在不在、库目录在不在、LD_LIBRARY_PATH 设没设、Node 版本是多少。
    * 下一次失败就是数据,不是又一轮猜。
    */
+  /**
+   * 事后校验:chromium 顶层探测是否真的生效(LD_LIBRARY_PATH 里应有 /tmp 的 lib 目录)。
+   * 放在 executablePath() 之前 —— 与其让 launch 抛一句 libnss3.so,不如在这里直接说清
+   * 是「注入没赶上」还是「探测逻辑变了」。
+   */
+  assertChromiumEnvReady();
+
   const execPath = await chromium.executablePath();
   let browser;
   try {

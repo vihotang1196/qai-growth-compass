@@ -27,13 +27,40 @@ import { extname, join } from 'node:path';
 
 const PRINT = process.argv.includes('--print');
 
-/** Edge Functions 里这几个由平台注入,不需要手动配 */
-const PLATFORM_INJECTED = new Set([
-  'SUPABASE_URL',
-  'SUPABASE_ANON_KEY',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'SUPABASE_DB_URL',
+/**
+ * 由平台注入、【不该由人配置】的变量 —— 值是豁免理由,不是 true。
+ *
+ * 【为什么理由是必填的】豁免就是在守卫上开洞。一个只有名字的白名单,半年后没人知道
+ * 某一项当初为什么在里面,于是要么不敢删(洞永远在),要么随手删(守卫突然变红)。
+ * 写清理由,豁免才是可复核的决定,而不是一句「以前就这样」。
+ *
+ * 【为什么按变量判、不按平台判】上一版写死了 target.id === 'supabase',于是 Vercel 侧
+ * 同类变量(Lambda 注入的 AWS_EXECUTION_ENV)撞上「必须进 .env.example」的规则 ——
+ * 而把它写进模板反而会误导下一个人手动去设一个平台变量。盲区在「按平台判」这个前提上。
+ */
+const PLATFORM_INJECTED = new Map([
+  ['SUPABASE_URL', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
+  ['SUPABASE_ANON_KEY', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
+  ['SUPABASE_SERVICE_ROLE_KEY', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
+  ['SUPABASE_DB_URL', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
+  [
+    'AWS_EXECUTION_ENV',
+    {
+      on: ['vercel'],
+      why:
+        'AWS Lambda 运行时注入;api/_lib/lambdaEnv.ts 只在它【缺失】时补一个值,' +
+        '因为 Vercel 不按 AWS 格式声明它(见那个文件的说明)。人不该去配它。',
+    },
+  ],
 ]);
+
+/**
+ * 【豁免必须限定平台】同名变量在不同平台的性质可能相反:SUPABASE_URL 在 Edge Functions
+ * 里是平台注入的,在 Vercel 上却要人手动配。第一版只按变量名豁免,结果把 Vercel 侧那三个
+ * Supabase 变量也标成「平台注入」、不再要求进 .env.example —— 我把守卫改松了。
+ * 是「验证它对该报的东西仍然会报」时发现的。
+ */
+const isPlatformInjected = (name, targetId) => PLATFORM_INJECTED.get(name)?.on.includes(targetId) ?? false;
 
 /**
  * 静态扫不到的读取方式 —— 出现即失败。
@@ -250,12 +277,12 @@ for (const target of TARGETS) {
   for (const name of [...found.keys()].sort()) {
     const entry = found.get(name);
     const users = [...entry.files].sort();
-    const injected = target.id === 'supabase' && PLATFORM_INJECTED.has(name);
+    const injected = isPlatformInjected(name, target.id);
     const tag = injected ? '平台注入' : entry.allDefaulted ? '可选(有默认)' : '必须配置';
     lines.push(`    ${tag.padEnd(12)} ${name.padEnd(26)} ← ${users.join(', ')}`);
 
     // 有默认值的不强制进 .env.example —— 它不配也能跑
-    if (target.requireInEnvExample && !entry.allDefaulted && documented && !documented.has(name)) {
+    if (target.requireInEnvExample && !injected && !entry.allDefaulted && documented && !documented.has(name)) {
       errors.push(
         `${name}(${target.label})被 ${users.join(', ')} 读取,但 .env.example 里没有它。` +
           `.env.example 是给人抄的模板,漏一个就等于让下一个人踩同样的坑。`,

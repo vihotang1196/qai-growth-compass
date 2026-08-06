@@ -49,9 +49,42 @@ function specifiersOf(src) {
 const errors = [];
 const checked = [];
 
+/**
+ * 顺序规则:导入 `@sparticuz/chromium` 的文件,必须【更早】导入 `_lib/lambdaEnv`。
+ *
+ * 那个包在模块顶层就做环境探测并解压 NSS 库(libnss3.so)。Vercel 不按 AWS 的格式声明
+ * AWS_EXECUTION_ENV,所以我们要在它之前注入 —— 见 api/_lib/lambdaEnv.ts 的完整说明。
+ * ESM 按 import 出现顺序求值被导入模块的副作用,所以「写在上面」就是「先执行」;
+ * 有人重排 import 就会静默失效:函数照样部署,只在运行时报一句 libnss3.so 找不到,
+ * 而那条错误完全看不出与 import 顺序有关(我们为此烧了两轮)。
+ */
+const CHROMIUM_PKG = '@sparticuz/chromium';
+const LAMBDA_ENV = '_lib/lambdaEnv';
+
 for (const file of walk(API_DIR)) {
   const rel = relative(ROOT, file);
   const src = readFileSync(file, 'utf8');
+
+  // 顺序规则先判(它看的是整份文件里两个 import 的相对位置)
+  // 只认【真实的 import 语句】——第一版用 src.includes(包名),把注释里提到包名的文件
+  // 也算成导入者,误报了 lambdaEnv.ts 自己。守卫误报会让人开始忽略它,和漏报一样坏。
+  const chromiumAt = src.search(new RegExp(`from\\s*['"]${CHROMIUM_PKG.replace('/', '\\/')}['"]`));
+  if (chromiumAt !== -1) {
+    const envAt = src.search(new RegExp(`from\\s*['"][^'"]*${LAMBDA_ENV}[^'"]*['"]`));
+    if (envAt === -1) {
+      errors.push(
+        `${rel}: 导入了 ${CHROMIUM_PKG} 但没有导入 ${LAMBDA_ENV} —— ` +
+          `Vercel 不声明 AWS_EXECUTION_ENV,那个包顶层的探测会失败,libnss3.so 不会被解压。` +
+          `见 api/_lib/lambdaEnv.ts。`,
+      );
+    } else if (chromiumAt !== -1 && envAt > chromiumAt) {
+      errors.push(
+        `${rel}: ${LAMBDA_ENV} 的 import 排在 ${CHROMIUM_PKG} 【之后】—— 顺序反了。` +
+          `那个包在模块顶层就探测环境,注入必须先执行。ESM 按 import 出现顺序求值,` +
+          `把 lambdaEnv 那行移到 chromium 之前。`,
+      );
+    }
+  }
 
   for (const spec of specifiersOf(src)) {
     // 路径别名:Vercel 明确不支持 Path Mappings

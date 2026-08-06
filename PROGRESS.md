@@ -2385,6 +2385,81 @@ Node 203 / Deno 117,七道门全绿。
 
 ---
 
+# libnss3 真因:环境探测失败,不是版本不兼容
+
+## 把包拆开查实(不停在「版本不兼容」这个最省事的解释)
+
+`node_modules/@sparticuz/chromium@131/bin/` 里有 5 个文件,**`libnss3.so` 确实在包里**:
+
+| 压缩包 | 内容 | 解压条件 |
+|---|---|---|
+| `swiftshader.tar.br` | libEGL / libGLESv2 / libvulkan… | **无条件** |
+| `al2.tar.br` | **libnss3** / libnssutil3 / libsoftokn3… | 有条件 |
+| `al2023.tar.br` | 上面那些 + libnspr4 / libplc4 / libplds4 / libfreeblpriv3 | 有条件 |
+
+`build/index.js` **模块顶层**就做探测:
+```
+if (isRunningInAwsLambda())            setupLambdaEnvironment('/tmp/al2/lib');
+else if (isRunningInAwsLambdaNode20()) setupLambdaEnvironment('/tmp/al2023/lib');
+```
+两个函数只读 `AWS_EXECUTION_ENV` / `AWS_LAMBDA_JS_RUNTIME`,匹配 `AWS_Lambda_nodejs` 与
+`20.x` / `22.x`。**Vercel 不按 AWS 格式声明这些** ⇒ 两个 if 都不进 ⇒ NSS 不解压、
+`LD_LIBRARY_PATH` 不加 `/tmp`。
+
+用实测 facts 反推完全吻合:图形库(无条件)在、NSS(有条件)不在、`LD_LIBRARY_PATH`
+是 Lambda 原始默认值一个 `/tmp` 都没有。**库压根不在,不是符号对不上。**
+
+推论:**A(钉 Node 22)的成败不由我们决定** —— 取决于 Vercel 在 Node 22 下给的
+`AWS_EXECUTION_ENV` 长什么样,而那是个我们看不见的值。注入才是能自己确定结果的做法。
+
+## 注入(`api/_lib/lambdaEnv.ts`)
+
+在 `import chromium` 之前,若 `AWS_EXECUTION_ENV` 缺失则补 `AWS_Lambda_nodejs22.x`。
+选这个值有依据:含 `22.x` ⇒ 走 `isRunningInAwsLambdaNode20` ⇒ 解压 **al2023**
+(Node 24 的 Lambda 基础镜像就是 AL2023,且这个包的库更全);同时它让
+`isRunningInAwsLambda` 的两个 `!includes` 为 false,两支互斥不打架。
+
+**这不是绕过 bug,是补上平台没提供的事实** —— 我们确实在 Lambda 上。
+
+文件头写清三件(客户要求):对应包里哪个函数、为什么 Vercel 不提供、**升级 chromium 时
+必须重新确认**(149 声明支持 Node 24 很可能正是改了探测逻辑,那时这段注入可能变成没必要
+或**有害**)。
+
+## font-probe 也要注入 —— 门抓出来的
+
+新加的顺序规则第一次跑就报了 `font-probe.ts`:它同样起 Chromium、同样缺 NSS。
+**只修 render-pdf 的话它会继续 500,而它恰好是我们判断环境好坏的那把尺。**
+
+## 三道门,每道都验证过会红
+
+1. **顺序规则**(`check:api-imports` 新增):导入 chromium 的文件必须更早导入 lambdaEnv。
+   验了两形态:顺序反了、完全没导入。
+   第一版用 `src.includes(包名)` 误报了 lambdaEnv.ts 自己 —— **守卫误报会让人开始忽略它,
+   和漏报一样坏**,改成只认真实 import 语句。
+2. **运行时事后校验** `assertChromiumEnvReady()`:导入后检查 `LD_LIBRARY_PATH` 含 `/tmp`,
+   不含就抛,并指明是「注入没赶上」还是「探测逻辑变了」。
+3. **`check:env` 的平台注入豁免**(见下)。
+
+## check:env 的一个真实盲区(顺带修好)
+
+`AWS_EXECUTION_ENV` 是平台注入的,**不该由人配置**,写进 `.env.example` 反而误导下一个人
+手动去设。但守卫只区分「读了 / 在不在模板里」,不区分「人配的」和「平台给的」。
+
+脚本里本来就有「平台注入」这个概念,但写死了 `target.id === 'supabase'` ——
+**盲区在「按平台判」这个前提上**。
+
+改成按变量判 + **豁免必须带理由**(Map 的值是理由字符串,不是 `true`)——
+一个只有名字的白名单,半年后没人知道某项当初为什么在里面,于是要么不敢删、要么随手删。
+
+**但第一版我改松了**:只按变量名豁免,把 **Vercel 侧**那三个 Supabase 变量也标成「平台注入」
+—— 而它们在 Vercel 上是要人手动配的。同名变量在不同平台性质可能相反。
+改成 `{ on: ['vercel'|'supabase'], why }` 限定平台。
+**这是在「验证它对该报的东西仍然会报」时发现的** —— 删掉 Vercel 侧 `SUPABASE_URL` 必须红。
+
+Node 203 / Deno 117,七道门全绿。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

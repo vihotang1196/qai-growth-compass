@@ -1,5 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, timingSafeEqual } from 'node:crypto';
+/**
+ * ⚠️ 必须排在 @sparticuz/chromium 之前 —— 见 api/_lib/lambdaEnv.ts。
+ * font-probe 与 render-pdf 起的是同一个 Chromium,缺 NSS 的问题一模一样;
+ * 只修 render-pdf 的话,这个探针会继续 500,而它恰好是我们用来判断环境好坏的那把尺。
+ */
+import { assertChromiumEnvReady } from './_lib/lambdaEnv.js';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
@@ -157,6 +163,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let browser;
   try {
     // 系统级中文兜底:fontconfig 认 otf / ttf,不认 woff2
+    assertChromiumEnvReady();
     await chromium.font(`${cdnBase()}NotoSansSC-Regular.otf`);
 
     browser = await puppeteer.launch({
