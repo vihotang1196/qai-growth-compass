@@ -4,17 +4,43 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "functions": {
-    "api/font-probe.ts": { "maxDuration": 60, "memory": 1769 }
+    "api/font-probe.ts": {
+      "maxDuration": 60,
+      "memory": 1769
+    },
+    "api/render-pdf.ts": {
+      "maxDuration": 60,
+      "memory": 1769
+    }
   },
-  "crons": [{ "path": "/api/cron/retention", "schedule": "17 3 * * *" }],
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }],
+  "crons": [
+    {
+      "path": "/api/cron/retention",
+      "schedule": "17 3 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
       ]
     }
   ]

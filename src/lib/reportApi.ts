@@ -41,7 +41,13 @@ export class ReportNotReadyError extends Error {
 }
 
 export async function fetchReport(): Promise<ReportPayload> {
-  const res = await fetch('/api/assessment-report', {
+  /**
+   * PDF 渲染器打开报告页时带 ?rt=<渲染令牌>(它没有 cookie)。原样透传给 API ——
+   * 令牌用另一个密钥、只活几分钟,不能当登录态用,见 lib/renderToken.ts。
+   */
+  const rt = new URLSearchParams(window.location.search).get('rt');
+  const url = rt ? `/api/assessment-report?rt=${encodeURIComponent(rt)}` : '/api/assessment-report';
+  const res = await fetch(url, {
     method: 'GET',
     credentials: 'same-origin',
   });

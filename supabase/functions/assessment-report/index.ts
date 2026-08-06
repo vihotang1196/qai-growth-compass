@@ -10,6 +10,7 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
+import { verifyRenderToken } from '../_shared/renderToken.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { perQuestionScore } from '../_shared/scoring.ts';
 import {
@@ -42,34 +43,53 @@ Deno.serve(async (req: Request) => {
   // 报告是只读,GET;cookie 鉴权(render token / admin JWT 留给 Stage 9 / 后台)
   if (req.method !== 'GET') return json({ error: 'method_not_allowed', expected: 'GET' }, 405);
 
-  const env = { SESSION_SECRET: Deno.env.get('SESSION_SECRET') };
+  const env = {
+    SESSION_SECRET: Deno.env.get('SESSION_SECRET'),
+    INTERNAL_FN_SECRET: Deno.env.get('INTERNAL_FN_SECRET'),
+  };
   const missing = missingKeys(env);
   if (missing.length) {
     console.error(`server_misconfigured: missing ${missing.join(', ')}`);
     return json({ error: 'server_misconfigured' }, 500);
   }
 
-  const verified = await verifySession(readSessionCookie(req), env.SESSION_SECRET!, Date.now());
-  if (!verified) return json({ error: 'unauthorized' }, 401);
-
   const supa = serviceClient();
 
+  /**
+   * 两条入口:客户的 session cookie,或 PDF 渲染器的渲染令牌(?rt=)。
+   * 渲染令牌用【另一个密钥】且只活几分钟 —— 它不能当登录态用,见 _shared/renderToken.ts。
+   */
+  const rt = new URL(req.url).searchParams.get('rt');
+  const renderSessionId = rt ? await verifyRenderToken(rt, env.INTERNAL_FN_SECRET!, Date.now()) : null;
+  const verified = renderSessionId
+    ? null
+    : await verifySession(readSessionCookie(req), env.SESSION_SECRET!, Date.now());
+  if (!renderSessionId && !verified) return json({ error: 'unauthorized' }, 401);
+
   try {
+    // 渲染令牌直接指定 session;cookie 那条要先由 entitlement 找 session
+    const { data: session, error: sErr } = renderSessionId
+      ? await supa
+          .from('assessment_sessions')
+          .select('id, locale, profile, status, entitlement_id')
+          .eq('id', renderSessionId)
+          .maybeSingle()
+      : await supa
+          .from('assessment_sessions')
+          .select('id, locale, profile, status, entitlement_id')
+          .eq('entitlement_id', verified!.entitlementId)
+          .maybeSingle();
+    if (sErr) throw sErr;
+    if (!session) return json({ error: 'no_session' }, 409);
+
     const { data: ent, error: entErr } = await supa
       .from('assessment_entitlements')
       .select('id, cohort_id, access_revoked_at')
-      .eq('id', verified.entitlementId)
+      .eq('id', session.entitlement_id)
       .maybeSingle();
     if (entErr) throw entErr;
+    // 渲染令牌也要过这一关 —— 被停用的人不该还能被渲出报告
     if (!ent || ent.access_revoked_at) return json({ error: 'revoked' }, 403);
-
-    const { data: session, error: sErr } = await supa
-      .from('assessment_sessions')
-      .select('id, locale, profile, status')
-      .eq('entitlement_id', ent.id)
-      .maybeSingle();
-    if (sErr) throw sErr;
-    if (!session) return json({ error: 'no_session' }, 409);
 
     const { data: result, error: rErr } = await supa
       .from('assessment_results')
