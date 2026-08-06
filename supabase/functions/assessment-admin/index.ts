@@ -42,8 +42,15 @@ interface RosterRow {
   access_revoked_at: string | null;
   cohort: { id: string; name: string } | null;
   session: {
+    id: string;
     status: string;
-    result: { total: number; tier: string; weakest: string[] } | null;
+    result: {
+      total: number;
+      tier: string;
+      weakest: string[];
+      pdf_status: string;
+      pdf_last_error: string | null;
+    } | null;
   } | null;
 }
 
@@ -170,6 +177,48 @@ Deno.serve(async (req: Request) => {
         return json({ ok: outcome.ok, queued: outcome.ok ? outcome.queued : false, outcome });
       }
 
+      case 'render_pdf': {
+        /**
+         * 【对任何非 ready 状态都可用,不只 failed_permanent】
+         * finalize 那次异步触发是尽力而为的(EdgeRuntime.waitUntil 拿不到时可能丢),
+         * 丢了的话状态会一直停在 pending —— 只允许重置 failed_permanent 的话,
+         * 那种「卡住的 pending」就没有任何出路。这个按钮是那条路的兜底。
+         *
+         * 【不加确认框】重置只是重渲一次,代价是几十秒和一次 Chromium 冷启动,
+         * 误点成本很低。加确认框反而让人形成「点确认」的肌肉记忆,
+         * 而那个习惯会在真正危险的操作上害人。
+         */
+        const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
+        if (!sessionId) return json({ error: 'missing session_id' }, 400);
+
+        // 先把计数与错误清掉,否则 render-pdf 会因为 attempts >= 3 直接拒
+        const { error: resetErr } = await supa
+          .from('assessment_results')
+          .update({ pdf_status: 'pending', pdf_attempts: 0, pdf_last_error: null })
+          .eq('session_id', sessionId);
+        if (resetErr) throw resetErr;
+
+        const base = Deno.env.get('APP_BASE_URL');
+        const secret = Deno.env.get('INTERNAL_FN_SECRET');
+        if (!base || !secret) {
+          console.error('CONFIG: cannot trigger PDF render: missing APP_BASE_URL or INTERNAL_FN_SECRET');
+          return json({ error: 'server_misconfigured' }, 500);
+        }
+
+        // Admin 是人在等,所以这里【等】渲染结果 —— 与 finalize 不同:
+        // 那边客户在等分数,不该被 PDF 拖住;这边人主动点了「重新生成」,要的就是结果
+        const res = await fetch(`${base.replace(/\/$/, '')}/api/render-pdf`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': secret },
+          body: JSON.stringify({ session_id: sessionId }),
+        }).catch((e) => e as Error);
+
+        if (res instanceof Error) return json({ ok: false, detail: res.message }, 502);
+        const text = await res.text().catch(() => '');
+        console.log(`admin ${verdict.email} re-rendered PDF for session ${sessionId}: ${res.status}`);
+        return json({ ok: res.ok, status: res.status, detail: text.slice(0, 300) });
+      }
+
       case 'revoke': {
         const id = typeof body.entitlement_id === 'string' ? body.entitlement_id : '';
         if (!id) return json({ error: 'missing entitlement_id' }, 400);
@@ -208,8 +257,9 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
        first_login_at, completed_at, link_sent_at, access_revoked_at,
        cohort:assessment_cohorts(id, name),
        session:assessment_sessions(
+         id,
          status,
-         result:assessment_results(total, tier, weakest)
+         result:assessment_results(total, tier, weakest, pdf_status, pdf_last_error)
        )`,
     )
     .order('created_at', { ascending: false });
@@ -236,7 +286,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
 
 function rosterCsv(rows: RosterRow[]): string {
   return toCsv(
-    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用'],
+    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', 'PDF 状态', 'PDF 最后错误'],
     rows.map((r) => [
       r.name,
       r.phone_e164,
@@ -251,6 +301,8 @@ function rosterCsv(rows: RosterRow[]): string {
       r.session?.result?.tier ?? null,
       r.session?.result?.weakest?.join(' / ') ?? null,
       r.access_revoked_at ? 'yes' : null,
+      r.session?.result?.pdf_status ?? null,
+      r.session?.result?.pdf_last_error ?? null,
     ]),
   );
 }

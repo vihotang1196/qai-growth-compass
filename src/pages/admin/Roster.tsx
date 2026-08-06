@@ -27,7 +27,17 @@ interface RosterRow {
   completed_at: string | null;
   access_revoked_at: string | null;
   cohort: { id: string; name: string } | null;
-  session: { status: string; result: { total: number; tier: string; weakest: string[] } | null } | null;
+  session: {
+    id: string;
+    status: string;
+    result: {
+      total: number;
+      tier: string;
+      weakest: string[];
+      pdf_status: string;
+      pdf_last_error: string | null;
+    } | null;
+  } | null;
 }
 
 interface RosterResponse {
@@ -97,6 +107,32 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
       return true;
     });
   }, [data, cohort, status, minScore, maxScore, badPhoneOnly]);
+
+  /**
+   * 重新生成 PDF —— 不加确认框(重置只是重渲一次,误点成本很低;确认框会让人形成
+   * 「点确认」的肌肉记忆,而那个习惯会在真正危险的操作上害人)。
+   * Admin 这边【等】结果,与 finalize 那边异步不同:那边客户在等分数不该被拖住,
+   * 这边是人主动点的,要的就是结果。
+   */
+  async function renderPdf(row: RosterRow) {
+    const sessionId = row.session?.id;
+    if (!sessionId || busyId === row.id) return;
+    setBusyId(row.id);
+    setNotice(null);
+    try {
+      const res = await adminPost<{ ok: boolean; detail?: string }>('render_pdf', { session_id: sessionId });
+      if (!res.ok) setNotice(res.detail ?? 'render failed');
+      await load();
+    } catch (err) {
+      if (err instanceof Error && (err.message === 'unauthorized' || err.message === 'forbidden')) {
+        onAuthLost(err.message === 'forbidden');
+        return;
+      }
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function act(action: 'resend' | 'rotate' | 'revoke', row: RosterRow) {
     if (action === 'rotate' && !window.confirm(tk('admin.confirmRotate'))) return;
@@ -246,6 +282,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                   'admin.col.total',
                   'admin.col.tier',
                   'admin.col.weakest',
+                  'admin.col.pdf',
                   'admin.col.actions',
                 ].map((k) => (
                   <Th key={k}>{tk(k as Parameters<typeof tk>[0])}</Th>
@@ -280,6 +317,23 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                   <Td>{r.session?.result?.tier ?? '—'}</Td>
                   <Td>{r.session?.result?.weakest?.join(' / ') ?? '—'}</Td>
                   <Td>
+                    {r.session?.result ? (
+                      <div className="flex flex-col gap-1">
+                        <Badge tone={r.session.result.pdf_status === 'ready' ? 'ink' : 'muted'}>
+                          {r.session.result.pdf_status}
+                        </Badge>
+                        {/* 失败原因原样展示 —— 「生成失败」那种话没法照着行动 */}
+                        {r.session.result.pdf_last_error && (
+                          <span className="max-w-[16rem] break-words text-xs opacity-60">
+                            {r.session.result.pdf_last_error}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      '—'
+                    )}
+                  </Td>
+                  <Td>
                     <div className="flex gap-1">
                       {/* 查看报告要等 Stage 8 —— 现在禁用而不是隐藏,让人知道它会有 */}
                       <Button size="sm" variant="ghost" disabled title="Stage 8">
@@ -309,6 +363,18 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                       >
                         {tk('admin.action.revoke')}
                       </Button>
+                      {/* 对任何非 ready 状态都给 —— finalize 那次触发可能丢,卡住的 pending
+                          否则没有出路(见 assessment-admin 的 render_pdf) */}
+                      {r.session?.result && r.session.result.pdf_status !== 'ready' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busyId === r.id}
+                          onClick={() => void renderPdf(r)}
+                        >
+                          {busyId === r.id ? tk('admin.pdf.rendering') : tk('admin.action.renderPdf')}
+                        </Button>
+                      )}
                     </div>
                   </Td>
                 </Tr>

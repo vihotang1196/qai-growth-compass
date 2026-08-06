@@ -31,6 +31,8 @@ export interface ReportPayload {
   /** 诊断:本人是否在基准样本池里 + 本人 session 的实际状态 */
   diagnostics?: { baselineIncludesSelf: boolean; sessionStatus: string };
   pdfStatus: string;
+  /** ready 时服务端现签的 signed URL(1 小时);其余为 null */
+  pdfUrl: string | null;
 }
 
 /** 报告还没算出来(还没走完 finalize)—— 与鉴权失败区分开 */
@@ -66,4 +68,13 @@ export async function fetchReport(): Promise<ReportPayload> {
     throw new Error((parsed as { error?: string } | null)?.error ?? `report failed (${res.status})`);
   }
   return parsed as ReportPayload;
+}
+
+/**
+ * 只取 PDF 状态与新签的 URL —— 轮询用,不重复搬整份报告数据。
+ * 走同一个端点(它每次都现签),所以「URL 过期」这件事不存在:点击那一刻才取。
+ */
+export async function fetchPdfState(): Promise<{ pdfStatus: string; pdfUrl: string | null }> {
+  const d = await fetchReport();
+  return { pdfStatus: d.pdfStatus, pdfUrl: d.pdfUrl };
 }

@@ -39,6 +39,22 @@ function fromValueMap(profile: Record<string, unknown>, id: string, map: number[
   return map[idx];
 }
 
+/** ready 且有路径时现签一条 signed URL;其余情况回 null(前端据此显示静态兜底文案) */
+async function signedPdfUrl(
+  supa: ReturnType<typeof serviceClient>,
+  status: string,
+  path: string | null,
+): Promise<string | null> {
+  if (status !== 'ready' || !path) return null;
+  const { data, error } = await supa.storage.from('reports').createSignedUrl(path, 3600);
+  if (error) {
+    // 签不出来不该让整份报告失败 —— 报告本身能看,只是少一个下载按钮
+    console.error(`failed to sign pdf url for ${path}: ${error.message}`);
+    return null;
+  }
+  return data?.signedUrl ?? null;
+}
+
 Deno.serve(async (req: Request) => {
   // 报告是只读,GET;cookie 鉴权(render token / admin JWT 留给 Stage 9 / 后台)
   if (req.method !== 'GET') return json({ error: 'method_not_allowed', expected: 'GET' }, 405);
@@ -105,7 +121,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: result, error: rErr } = await supa
       .from('assessment_results')
-      .select('dim_scores, total, tier, weakest, strongest, pdf_status')
+      .select('dim_scores, total, tier, weakest, strongest, pdf_status, pdf_path')
       .eq('session_id', session.id)
       .maybeSingle();
     if (rErr) throw rErr;
@@ -226,6 +242,15 @@ Deno.serve(async (req: Request) => {
       diagnostics: { baselineIncludesSelf: selfInPool, sessionStatus: session.status },
       cohort,
       pdfStatus: result.pdf_status,
+      /**
+       * 【每次请求现签,不缓存】ready 时签一条 1 小时有效的 signed URL。
+       *
+       * 客户问「过期后再点会怎样」—— 答案是:**不会遇到过期**。前端在【点击那一刻】重新
+       * 取一次报告数据、拿一条新签的 URL 再打开,而不是把页面加载时那条存着用。
+       * 那样把「URL 会过期」这件事从错误处理变成了不存在的问题;否则页面开着超过一小时
+       * 再点,拿到的是 Storage 的 403,而那对客户完全无法解释。
+       */
+      pdfUrl: await signedPdfUrl(supa, result.pdf_status as string, result.pdf_path as string | null),
     });
   } catch (err) {
     console.error(`report failed: ${err instanceof Error ? err.message : String(err)}`);

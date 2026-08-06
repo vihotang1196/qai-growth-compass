@@ -159,6 +159,13 @@ export const UI_STRINGS = {
   'report.mismatch': { zh: '你最想先动手的是「{want}」,而数据显示最该先补的是「{need}」—— 这个落差本身值得聊一次。', en: 'You want to fix "{want}" first, but the data points to "{need}". That gap is worth a conversation.' },
   'report.pdf.pending': { zh: 'PDF 正在生成,稍后回到这个链接即可下载。', en: 'Your PDF is being generated — come back to this link shortly to download.' },
   'report.pdf.print': { zh: '用浏览器打印 / 存 PDF', en: 'Print / save as PDF' },
+  'report.pdf.rendering': { zh: 'PDF 正在生成…', en: 'Generating your PDF…' },
+  'report.pdf.download': { zh: '下载 PDF 报告', en: 'Download the PDF report' },
+  'report.pdf.opening': { zh: '正在打开…', en: 'Opening…' },
+  'report.pdf.failed': {
+    zh: 'PDF 自动生成没成功。用下面的浏览器打印同样能存成 PDF。',
+    en: 'Automatic PDF generation did not succeed — the browser print option below works just as well.',
+  },
 
   'report.section.evidence': { zh: '每一维为什么是这个分', en: 'Why each score is what it is' },
   'report.evidence.youChose': { zh: '你选的是', en: 'You chose' },
@@ -216,6 +223,9 @@ export const UI_STRINGS = {
   'admin.col.tier': { zh: '档位', en: 'Tier' },
   'admin.col.weakest': { zh: '最弱维度', en: 'Weakest' },
   'admin.col.actions': { zh: '操作', en: 'Actions' },
+  'admin.col.pdf': { zh: 'PDF', en: 'PDF' },
+  'admin.action.renderPdf': { zh: '重新生成 PDF', en: 'Re-generate PDF' },
+  'admin.pdf.rendering': { zh: '生成中', en: 'Rendering' },
   'admin.action.resend': { zh: '重发链接', en: 'Resend link' },
   'admin.action.rotate': { zh: '换新链接', en: 'New link' },
   'admin.action.revoke': { zh: '停用', en: 'Revoke' },

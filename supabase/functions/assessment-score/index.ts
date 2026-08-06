@@ -285,5 +285,63 @@ async function finalize(
   const payload = buildWritebackPayload(result, survey);
   const writeback = await syncToGhl(supa, session.id, ghlContactId, payload, 'finalize');
 
-  return json({ ok: true, result, writeback });
+  // ── PDF 渲染:异步触发,不阻塞返回 ──
+  const pdfTriggered = triggerPdfRender(session.id);
+
+  return json({ ok: true, result, writeback, pdfTriggered });
+}
+
+
+/**
+ * 异步触发 PDF 渲染 —— **刻意不 await、失败不影响 finalize 的返回值**。
+ *
+ * 【为什么异步】同步会把附属品的失败绑到主交付上:分数已经算好、报告页本来就能看,
+ * 用一次 PDF 渲染失败(字体 / 超时 / Chromium 起不来)去毁掉「客户拿到分数」这件事,
+ * 方向错了。异步之后 PDF 是**增量**:轮询到就多一个下载按钮,渲染失败也只是少个按钮 +
+ * Admin 看得见。这与「有方块的报告好过没有报告」是同一个取向 —— 主交付不受附属品拖累。
+ *
+ * 【为什么用 EdgeRuntime.waitUntil】Edge Function 在响应返回后可能立刻终止,
+ * 裸 fetch 不 await 会被取消 —— 那样触发是「有时成功」,而那种不确定比同步等待更糟。
+ * waitUntil 让运行时把这个 promise 保留到完成。拿不到那个 API 时退回 fire-and-forget
+ * 并记日志:退化路径下触发可能丢,而**兜底是 Admin 的「重新生成」按钮**
+ * (它对任何非 ready 状态都可用,正是为了接住这种丢失)。
+ *
+ * 【渲染耗时约 16 秒,远超响应时间】所以这里只发出请求,不等结果;
+ * pdf_status 由 render-pdf 自己写(rendering → ready / failed)。
+ */
+function triggerPdfRender(sessionId: string): boolean {
+  const base = Deno.env.get('APP_BASE_URL');
+  const secret = Deno.env.get('INTERNAL_FN_SECRET');
+  if (!base || !secret) {
+    console.error(`CONFIG: cannot trigger PDF render for ${sessionId}: missing APP_BASE_URL or INTERNAL_FN_SECRET`);
+    return false;
+  }
+
+  const task = fetch(`${base.replace(/\/$/, '')}/api/render-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': secret },
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`PDF render trigger for ${sessionId} returned ${res.status}: ${body.slice(0, 300)}`);
+      } else {
+        console.log(`PDF render finished for ${sessionId}`);
+      }
+    })
+    .catch((err) => {
+      console.error(`PDF render trigger for ${sessionId} threw: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (typeof runtime?.waitUntil === 'function') {
+    runtime.waitUntil(task);
+    return true;
+  }
+  console.warn(
+    `EdgeRuntime.waitUntil unavailable — PDF render trigger for ${sessionId} is fire-and-forget ` +
+      'and may be cancelled when this function returns. 兜底:Admin 名单页的「重新生成 PDF」。',
+  );
+  return false;
 }

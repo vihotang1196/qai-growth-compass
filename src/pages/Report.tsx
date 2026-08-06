@@ -7,7 +7,7 @@ import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
 import { QuizAuthError } from '@/lib/quizApi';
-import { fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
+import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
 import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
 import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
@@ -47,6 +47,10 @@ export default function Report() {
   const navigate = useNavigate();
   const [data, setData] = useState<ReportPayload | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'notReady' | 'error'>('loading');
+  /** PDF 状态与新签 URL —— 由轮询更新;pollDone 表示已放弃轮询(见下) */
+  const [pdf, setPdf] = useState<{ status: string; url: string | null }>({ status: 'pending', url: null });
+  const [pollDone, setPollDone] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const onAuthLost = useCallback(() => navigate(`/expired?lang=${locale}`, { replace: true }), [navigate, locale]);
   /** 按当前语言取 config 字段(zh/en);config 是允许出现中文的源 */
@@ -58,6 +62,7 @@ export default function Report() {
       .then((d) => {
         if (!alive) return;
         setData(d);
+        setPdf({ status: d.pdfStatus, url: d.pdfUrl });
         setState('ready');
       })
       .catch((err) => {
@@ -78,6 +83,62 @@ export default function Report() {
       window.__REPORT_READY__ = false;
     };
   }, [state]);
+
+  /**
+   * 轮询 pdf_status —— **有上限**。
+   *
+   * 渲染约 16 秒,但失败时可能一直停在 pending。所以轮到上限就停下来,让第 9 板块回到
+   * 那句静态文案(「稍后回到这个链接」)—— 那句本来就是兜底,轮询只是让它在成功时
+   * 自动变成按钮。无限转圈会让客户以为页面坏了,而实际是渲染失败了。
+   *
+   * 3 秒一次 × 20 次 = 60 秒:比渲染耗时(16s)留了三倍余量,又不至于让人干等太久。
+   */
+  useEffect(() => {
+    if (state !== 'ready') return;
+    if (pdf.status === 'ready' || pdf.status === 'failed_permanent') return;
+
+    let attempts = 0;
+    let alive = true;
+    const timer = setInterval(() => {
+      if (!alive) return;
+      attempts += 1;
+      if (attempts > 20) {
+        setPollDone(true);
+        clearInterval(timer);
+        return;
+      }
+      void fetchPdfState()
+        .then((st) => {
+          if (!alive) return;
+          setPdf({ status: st.pdfStatus, url: st.pdfUrl });
+          if (st.pdfStatus === 'ready' || st.pdfStatus === 'failed_permanent') clearInterval(timer);
+        })
+        .catch(() => {
+          // 轮询失败不打扰客户 —— 报告本身已经在看了,PDF 只是增量
+        });
+    }, 3000);
+
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [state, pdf.status]);
+
+  /**
+   * 【点击那一刻才取 URL,不用页面加载时那条】signed URL 有效期 1 小时。
+   * 页面开着超过一小时再点,存下来的那条会拿到 Storage 的 403 —— 那对客户无法解释。
+   * 每次点击现取一条新的,「URL 会过期」这件事就不存在,而不是变成一个要处理的错误。
+   */
+  async function openPdf() {
+    setOpening(true);
+    try {
+      const st = await fetchPdfState();
+      setPdf({ status: st.pdfStatus, url: st.pdfUrl });
+      if (st.pdfUrl) window.open(st.pdfUrl, '_blank', 'noopener');
+    } finally {
+      setOpening(false);
+    }
+  }
 
   const costs = useMemo(() => {
     if (!data || data.leadsPerMonth === null || data.dealValue === null) return [];
@@ -347,11 +408,25 @@ export default function Report() {
 
       {/* 8. PDF / 打印 */}
       <Section title={tk('report.section.share')}>
-        <p className="font-body text-sm opacity-70">{tk('report.pdf.pending')}</p>
-        {/* 打印保底(print.css)—— Stage 9 接自动 PDF,这里先给浏览器打印 */}
-        <Button className="mt-3 no-print" variant="outline" onClick={() => window.print()}>
-          {tk('report.pdf.print')}
-        </Button>
+        {pdf.status === 'ready' ? (
+          <Button variant="primary" onClick={() => void openPdf()} disabled={opening}>
+            {opening ? tk('report.pdf.opening') : tk('report.pdf.download')}
+          </Button>
+        ) : pdf.status === 'failed' || pdf.status === 'failed_permanent' ? (
+          // 渲染失败只是少一个按钮 —— 报告本身能看,打印那条路仍然通
+          <p className="font-body text-sm">{tk('report.pdf.failed')}</p>
+        ) : pollDone ? (
+          // 轮到上限还没好 —— 回到静态兜底文案,不无限转圈
+          <p className="font-body text-sm opacity-70">{tk('report.pdf.pending')}</p>
+        ) : (
+          <p className="font-body text-sm opacity-70">{tk('report.pdf.rendering')}</p>
+        )}
+        {/* 打印保底(print.css)—— 自动 PDF 失败时这条路仍然可用,所以永远保留 */}
+        <div className="mt-3">
+          <Button className="no-print" variant="outline" onClick={() => window.print()}>
+            {tk('report.pdf.print')}
+          </Button>
+        </div>
       </Section>
     </Shell>
   );
