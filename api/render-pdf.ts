@@ -6,11 +6,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  * ESM 按 import 出现的顺序求值被导入模块,所以「写在上面」就是「先执行」。
  * scripts/check-api-imports.mjs 有一条规则守这个顺序 —— 它验证过会红。
  */
-import { assertChromiumEnvReady } from './_lib/lambdaEnv.js';
+import { assertChromiumEnvReady, installFallbackFont } from './_lib/lambdaEnv.js';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
 
@@ -154,21 +154,11 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
    * 残留文件(它见到 existsSync 就直接 resolve,不校验大小)都会让兜底层静默失效。
    * 实测症状:生僻字渲染成【纯空白】—— 容器里没有任何字体覆盖那些码位。
    */
-  const fontFile = 'NotoSansSC-Regular.otf';
-  await chromium.font(`${env('CDN_FONT_BASE').replace(/\/$/, '')}/${fontFile}`);
-  const fontPath = `${process.env.HOME ?? '/tmp'}/.fonts/${fontFile}`;
-  const fontStat = existsSync(fontPath) ? statSync(fontPath) : null;
-  if (!fontStat || fontStat.size < 1_000_000) {
-    // 这个 otf 是 8.3MB;明显偏小说明下载被截断或写了个空文件
-    throw new Error(
-      `CJK fallback font not usable at ${fontPath}: ` +
-        `${fontStat ? `size ${fontStat.size} bytes (expected ~8.3MB)` : 'file does not exist'}. ` +
-        `FONTCONFIG_PATH=${process.env.FONTCONFIG_PATH ?? '(unset)'}, HOME=${process.env.HOME ?? '(unset)'}, ` +
-        `CDN=${env('CDN_FONT_BASE')}. 兜底层不可用时生僻字会渲染成纯空白 —— 宁可在这里失败,` +
-        `也不要出一份姓名看不见的报告。`,
-    );
-  }
-  console.log(`CJK fallback font ready: ${fontPath} (${fontStat.size} bytes)`);
+  const font = await installFallbackFont(
+    (u) => chromium.font(u),
+    `${env('CDN_FONT_BASE').replace(/\/$/, '')}/NotoSansSC-Regular.otf`,
+  );
+  console.log(`CJK fallback font ready: ${font.path} (${font.bytes} bytes)`);
 
   /**
    * 【开浏览器之前先直接问一次 API —— 把两件事分开】

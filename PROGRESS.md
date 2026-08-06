@@ -2555,6 +2555,56 @@ Node 206 / Deno 117,七道门全绿。
 
 ---
 
+# 探针空白的根因:fontconfig 不扫 chromium.font() 的落点
+
+## 运维备注(客户实测,三轮的代价)
+
+**`supabase secrets set` 成功 ≠ 函数拿到新值。** Edge Function 不会自动重载 secret,
+必须 `supabase functions deploy` 之后才生效。
+
+症状是**「两边明明一样却验不过」** —— 而那正是最容易陷进去反复核对值的场景。
+**以后任何 secret 轮换之后,都要重新部署受影响的函数。**
+
+## 根因:两个目录
+
+`chromium.font()` 写到 **`$HOME/.fonts/`**(HOME 默认 `/tmp` ⇒ `/tmp/.fonts`)。
+而这个包自带的 `fonts.conf`(`bin/fonts.tar.br` → `/tmp/fonts/fonts.conf`)只列四个目录:
+
+```
+/var/task/.fonts   /var/task/fonts   /opt/fonts   /tmp/fonts
+```
+
+**没有 `/tmp/.fonts`。** 所以字体**下载成功、落地了、体积校验通过**,而 fontconfig
+**从来没扫过它所在的目录**。
+
+这解释了实测的全部现象:
+- 探针第 2 块(生僻字,走 fontconfig 兜底)**纯空白** —— 容器里没有任何字体覆盖那些码位
+- 探针第 1 块(常用字)正常 —— 那是页面 HTTP 加载的 subset woff2,**不走 fontconfig**
+- 报告页 `fontsStatus: "loaded"` —— 同上,那是 CSS webfont,与兜底层无关
+- `/tmp` 下同时有 `.fonts` 与 `fonts` 两个目录 —— 正是这两条路各自的落点
+
+`> 1MB` 那个校验**跑到了并且通过了**(它在 preflight 之前,而 preflight 通了)——
+所以它证明的是「文件在」,不是「fontconfig 用得上」。**校验的位置对,但校验的对象不够。**
+
+## 修法
+
+把字体**复制**进 `/tmp/fonts`(fonts.conf 里唯一可写的 `/tmp` 目录),并清掉
+`/tmp/fonts-cache`(目录内容变了,旧索引要作废)。复制而不是符号链接:fontconfig 扫目录时
+对 symlink 的处理依实现而异,复制没有歧义。
+
+抽成 `installFallbackFont()`,**render-pdf 与 font-probe 共用一份** —— 两者走同一条路径,
+而 font-probe 正是我们判断兜底层好坏的那把尺,两份实现迟早只改一处。
+
+## glyph: ok 这次有分量
+
+`scanned: 393`,全部有墨迹。但**这次没验到兜底层** —— 报告页那 393 个字符全在 subset
+覆盖范围内,走不到 fontconfig。真实学员姓名出现 subset 外的字时才会走那条路。
+所以兜底层要靠 font-probe 第 2 块来验,而不是靠报告页的 `glyph: ok`。
+
+Node 206 / Deno 117,七道门全绿。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

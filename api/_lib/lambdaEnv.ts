@@ -75,3 +75,56 @@ export function assertChromiumEnvReady(): void {
     );
   }
 }
+
+/**
+ * 把中文兜底字体装进 **fontconfig 真的会扫的目录**,并校验落地。
+ *
+ * 【为什么不能只调 chromium.font()】它写到 `$HOME/.fonts/`(HOME 默认 `/tmp`),
+ * 而这个包自带的 `fonts.conf`(bin/fonts.tar.br → /tmp/fonts/fonts.conf)只列:
+ *     /var/task/.fonts  /var/task/fonts  /opt/fonts  /tmp/fonts
+ * **没有 /tmp/.fonts。** 所以字体会「下载成功但从未被 fontconfig 索引」——
+ * 实测症状:生僻字渲染成纯空白(不是方块),而常用字正常(那走的是页面 HTTP 加载的
+ * subset woff2,与 fontconfig 无关)。空白比方块更难发现:它看起来只是排版稀疏一点。
+ *
+ * 【为什么两个函数共用这一份】font-probe 与 render-pdf 走同一条路径,而 font-probe
+ * 正是我们判断兜底层好坏的那把尺 —— 两份实现迟早只改一处。
+ *
+ * @param fontUrl CDN 上的完整 otf URL
+ * @param minBytes 最小可接受体积(那个 otf 是 8.3MB;明显偏小说明下载被截断或写了空文件)
+ */
+export async function installFallbackFont(
+  chromiumFont: (url: string) => Promise<unknown>,
+  fontUrl: string,
+  minBytes = 1_000_000,
+): Promise<{ path: string; bytes: number }> {
+  const { copyFileSync, existsSync, mkdirSync, statSync, rmSync } = await import('node:fs');
+
+  await chromiumFont(fontUrl);
+
+  const fileName = fontUrl.split('/').pop() ?? 'fallback.otf';
+  const downloadedAt = `${process.env.HOME ?? '/tmp'}/.fonts/${fileName}`;
+  const fontDir = '/tmp/fonts'; // fonts.conf 里唯一可写的 /tmp 目录
+  const fontPath = `${fontDir}/${fileName}`;
+
+  if (existsSync(downloadedAt) && !existsSync(fontPath)) {
+    mkdirSync(fontDir, { recursive: true });
+    // 复制而不是符号链接:fontconfig 扫目录时对 symlink 的处理依实现而异,复制没有歧义
+    copyFileSync(downloadedAt, fontPath);
+    // 目录内容变了,缓存要作废,否则可能沿用旧索引
+    rmSync('/tmp/fonts-cache', { recursive: true, force: true });
+  }
+
+  const stat = existsSync(fontPath) ? statSync(fontPath) : null;
+  if (!stat || stat.size < minBytes) {
+    throw new Error(
+      `CJK fallback font not usable at ${fontPath}: ` +
+        `${stat ? `size ${stat.size} bytes (expected >= ${minBytes})` : 'file does not exist'}. ` +
+        `downloadedAt=${downloadedAt}(exists=${existsSync(downloadedAt)}), ` +
+        `FONTCONFIG_PATH=${process.env.FONTCONFIG_PATH ?? '(unset)'}, HOME=${process.env.HOME ?? '(unset)'}, ` +
+        `url=${fontUrl}。fonts.conf 只扫 /var/task/.fonts、/var/task/fonts、/opt/fonts、/tmp/fonts —— ` +
+        `不含 chromium.font() 的落点 /tmp/.fonts,所以必须复制过去。` +
+        `兜底层不可用时生僻字会渲染成纯空白,宁可在这里失败,也不要出一份姓名看不见的报告。`,
+    );
+  }
+  return { path: fontPath, bytes: stat.size };
+}

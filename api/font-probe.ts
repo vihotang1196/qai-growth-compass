@@ -5,7 +5,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
  * font-probe 与 render-pdf 起的是同一个 Chromium,缺 NSS 的问题一模一样;
  * 只修 render-pdf 的话,这个探针会继续 500,而它恰好是我们用来判断环境好坏的那把尺。
  */
-import { assertChromiumEnvReady } from './_lib/lambdaEnv.js';
+import { assertChromiumEnvReady, installFallbackFont } from './_lib/lambdaEnv.js';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
@@ -164,7 +164,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // 系统级中文兜底:fontconfig 认 otf / ttf,不认 woff2
     assertChromiumEnvReady();
-    await chromium.font(`${cdnBase()}NotoSansSC-Regular.otf`);
+    // 与 render-pdf 共用一份:下载 + 复制进 fontconfig 真的会扫的目录 + 校验落地
+    const font = await installFallbackFont((u) => chromium.font(u), `${cdnBase()}NotoSansSC-Regular.otf`);
+    console.log(`CJK fallback font ready: ${font.path} (${font.bytes} bytes)`);
 
     browser = await puppeteer.launch({
       args: chromium.args,
