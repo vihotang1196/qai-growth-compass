@@ -208,6 +208,19 @@ describe('assessment-config structural assumptions', () => {
     }
   });
 
+  it('report_sections has no stale submodule_table and does have dimension_evidence', () => {
+    /**
+     * v3.2.0:submodule_table 并入 dimension_evidence(后者逐项列出同样 15 个子模块并附
+     * 「你选的是什么 / 目标是什么」,信息量严格更大;同一组数据出现两次会消耗读者的注意力)。
+     * 这条锁住 config 与页面不分叉 —— 否则以后看 config 的人会以为少了一个板块,
+     * 或者反过来:删了页面板块却忘了删 config 那条。
+     */
+    const keys = config.report_sections.map((x) => x.key);
+    expect(keys).not.toContain('submodule_table');
+    expect(keys).toContain('dimension_evidence');
+    expect(new Set(keys).size, 'report_sections keys are unique').toBe(keys.length);
+  });
+
   it('action_library: 5 actions per dimension + low/mid/high root_cause', () => {
     for (const d of dimensions) {
       const a = (config.action_library as unknown as Record<string, { actions: unknown[]; root_cause: Record<string, string> }>)[d.key];

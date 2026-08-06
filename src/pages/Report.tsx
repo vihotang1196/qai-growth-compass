@@ -33,7 +33,10 @@ const Q_BY_ID = new Map(QUESTIONS.map((q) => [q.id, q]));
 const MARK: Record<string, MarkState> = { full: 'full', partial: 'half', missing: 'empty' };
 
 /**
- * 报告页 —— 九个板块。所有分数与判断在服务端定好(assessment-report),这里只渲染。
+ * 报告页 —— 九个板块。原「15 项子模块明细表」已并入「每维为什么是这个分」:
+ * 后者本就逐项列出同样 15 个子模块,且多了「你选的是什么 / 目标是什么」,信息量严格更大。
+ * 同一组数据在一份报告里出现两次,读者会以为第二次有新信息,读完发现没有 —— 那是在消耗
+ * 他的注意力预算,而后面的代价换算与 30 天清单才是要他认真读的。所有分数与判断在服务端定好(assessment-report),这里只渲染。
  *
  * 【徽章走 badgeForScore,不走 markStateFromScore】v3 计分归一化后,子模块徽章必须按
  * 归一化分判定:3 选项题的 index 2 是满分 5.0,旧的按 option_index 的逻辑会把它错标成 partial。
@@ -157,11 +160,30 @@ export default function Report() {
                     const badge = sc === null || sc === undefined ? 'missing' : badgeForScore(sc, SCALE);
                     const ev = evidence[d.key]?.[i];
                     const pair = evidencePair(ev ? Q_BY_ID.get(ev.questionId) : undefined, ev?.optionIndex, locale);
+                    /**
+                     * 红框 + 「优先」标记从原第 6 板块搬来 —— 那个板块已删(与本板块重复)。
+                     * 红色专属「缺失 / 优先」,语义唯一;但只有【最弱两维】的缺失标「优先」,
+                     * 否则低分者看到一整片红,报告读起来像判决书。标了优先的这几项,
+                     * 正好对应 30 天清单里的动作,两块因此连起来。
+                     */
+                    const isMissing = badge === 'missing';
+                    const isPriority = isMissing && weakSet.has(d.key);
                     return (
-                      <div key={i} className="border-brutal border-line p-2 font-body text-sm">
+                      <div
+                        key={i}
+                        className={[
+                          'border-brutal p-2 font-body text-sm',
+                          isMissing ? 'qai-alert-border' : 'border-line',
+                        ].join(' ')}
+                      >
                         <div className="flex items-center gap-2">
                           <SubmoduleMark state={MARK[badge]} label={badgeLabel(badge)} />
                           <span className="font-bold">{label}</span>
+                          {isPriority && (
+                            <span className="ml-auto shrink-0 qai-alert-fill px-1.5 py-0.5 font-head text-xs font-bold">
+                              {tk('report.badge.priority')}
+                            </span>
+                          )}
                         </div>
                         {pair ? (
                           <div className="mt-1 pl-6">
@@ -279,51 +301,7 @@ export default function Report() {
         </div>
       </Section>
 
-      {/* 6. 15 项子模块明细 */}
-      <Section title={tk('report.section.submodules')}>
-        <div className="space-y-3">
-          {DIMENSIONS.map((d) => (
-            <div key={d.key}>
-              <div className="mb-1 flex items-center gap-2 font-head text-sm font-bold">
-                <span className="h-3 w-3 border-brutal border-line" style={{ backgroundColor: d.color }} aria-hidden />
-                {L(d.zh, d.en)}
-              </div>
-              <div className="grid gap-1 md:grid-cols-3">
-                {L(d.submodules_zh, d.submodules_en).map((label, i) => {
-                  const s = submodules[d.key]?.[i];
-                  const badge = s === null || s === undefined ? 'missing' : badgeForScore(s, SCALE);
-                  /**
-                   * 缺失项红框(alert token,语义唯一:红 = 缺失/优先)。
-                   * 但只有【最弱两维】的缺失额外标「优先」—— 分数低的人否则会看到一整片红,
-                   * 报告读起来像判决书。标了优先的那几格,正好对应第 7 板块的动作,两块因此连起来。
-                   */
-                  const isMissing = badge === 'missing';
-                  const isPriority = isMissing && weakSet.has(d.key);
-                  return (
-                    <div
-                      key={i}
-                      className={[
-                        'flex items-center gap-2 border-brutal p-2 font-body text-sm',
-                        isMissing ? 'qai-alert-border' : 'border-line',
-                      ].join(' ')}
-                    >
-                      <SubmoduleMark state={MARK[badge]} label={badgeLabel(badge)} />
-                      <span className="truncate">{label}</span>
-                      {isPriority && (
-                        <span className="ml-auto shrink-0 qai-alert-fill px-1.5 py-0.5 font-head text-xs font-bold">
-                          {tk('report.badge.priority')}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* 7. 30 天行动清单 */}
+      {/* 6. 30 天行动清单 */}
       <Section title={tk('report.section.actions')}>
         <ol className="space-y-3">
           {actions.map((a, i) => {
@@ -363,11 +341,11 @@ export default function Report() {
         </ol>
       </Section>
 
-      {/* 8. 下一步(offer) + mismatch 高亮 */}
+      {/* 7. 下一步(offer) + mismatch 高亮 */}
       <NextStep weakest={result.weakest[0]} locale={locale} L={L} mismatch={mismatch}
         priorityLabel={priority ? dimLabel(priority) : ''} needLabel={dimLabel(result.weakest[0])} tk={tk} />
 
-      {/* 9. PDF / 打印 */}
+      {/* 8. PDF / 打印 */}
       <Section title={tk('report.section.share')}>
         <p className="font-body text-sm opacity-70">{tk('report.pdf.pending')}</p>
         {/* 打印保底(print.css)—— Stage 9 接自动 PDF,这里先给浏览器打印 */}
