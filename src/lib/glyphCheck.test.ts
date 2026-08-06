@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyGlyphReport, needsAttention, type GlyphScan } from './glyphCheck';
+import { classifyGlyphReport, needsAttention, type GlyphScan } from '../../api/_lib/glyphCheck';
 
 /**
  * 测试数据里的中日韩字符从【码位】构造,不写成字符串字面量。

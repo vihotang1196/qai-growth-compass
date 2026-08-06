@@ -2270,6 +2270,62 @@ Node 189 / Deno 117。**Stage 8 完成。**
 
 ---
 
+# ERR_MODULE_NOT_FOUND:api/ 的导入在部署产物里解析不到
+
+## 诊断先行:只有一处,不是潜伏在多处
+
+grep 全部 `api/**/*.ts` 的导入,**跨目录导入只有 `api/render-pdf.ts` 一处**(两条)。
+其余三个函数只导入 npm 包与 node 内置 —— 所以这是第一次出现,也解释了为什么以前没炸。
+
+## 查证 Vercel 的实际规则(不按假设选方案)
+
+| 已确认的规则 | 出处 |
+|---|---|
+| TS 编译作用域 = `/api` 之内 | 官方文档:"supports TypeScript files for server entrypoints and **files inside of the /api directory**" |
+| 路径别名不支持 | "Most options are supported **aside from Path Mappings**" |
+| ESM 要求显式扩展名 | `package.json` 是 `"type": "module"`,错误里 `finalizeResolution` 正是 ESM 解析器 |
+
+**`includeFiles`(选项 C)在文档里根本没有**,而且它只原样拷贝文件 —— 拷进去的还是 `.ts`,
+Node 在 ESM 下照样跑不了。**C 出局。** 复制一份(选项 A)是我们拆了八次的东西,不接受。
+
+## 选 B,但方向反过来
+
+规范实现移到 **`api/_lib/`**(Vercel 确实会编译的位置),`src/` 与 Deno 从那里导入,
+而不是反过来。单一真相源保住,且落在编译作用域内。
+
+- `api/_lib/glyphCheck.ts`、`api/_lib/renderToken.ts` —— 规范实现,文件头写明为什么在这里
+- `api/render-pdf.ts` → `./_lib/xxx.js`(显式扩展名)
+- `supabase/functions/_shared/renderToken.ts` → `../../../api/_lib/renderToken.ts`
+- vitest 测试 → `../../api/_lib/xxx`
+
+## 为什么四道门全绿 —— 根因
+
+**`tsconfig.api.json` 用 `moduleResolution: "bundler"`**,它允许省略扩展名、允许跨目录 ——
+tsc 按打包器语义解析,而运行时是纯 ESM 语义。两套语义不一致,没有任何一处在验后者。
+
+`vite build` 过是因为那个文件确实进了前端 bundle;`check:dep-sync` 管的是 npm 依赖版本;
+Vercel 部署不做静态导入分析。
+
+## 新门:`check:api-imports`(已进 build 链)
+
+对 `api/**` 的每条相对导入断言三件事,全部来自上面**已确认**的规则,不是猜测:
+1. 目标在 `api/` 内(否则不会被编译成 `.js`)
+2. 带显式扩展名(ESM 要求;`.js` 映射到同名 `.ts`)
+3. 目标文件真的存在;顺带拦 `@/` 别名(Vercel 不支持)
+
+**这道门验证过会红**:把原 bug 改回去,它精确报出两条原因(无扩展名 + 指向 api 外);
+只去掉扩展名,它报一条。**一道没见过它变红的门不值钱** —— 这条是这个项目反复吃的亏。
+
+## 顺带:坏 JSON 回 400 不是 500
+
+`JSON.parse` 抛出来会变成 `FUNCTION_INVOCATION_FAILED`(500),客户端看到的是「服务器挂了」
+而不是「你发的东西不对」,排查方向直接被带偏。Vercel 的 `req.body` 是 getter,内容畸形时
+**访问它就抛**,所以连读取一并包进 try。
+
+Node 203 / Deno 117,六道门全绿。
+
+---
+
 ## 变更日志
 
 - 2026-07-31 — rev1 初稿

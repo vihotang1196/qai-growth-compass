@@ -2,8 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
-import { classifyGlyphReport, needsAttention, type GlyphScan } from '../src/lib/glyphCheck';
-import { signRenderToken } from '../src/lib/renderToken';
+import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
+import { signRenderToken } from './_lib/renderToken.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -166,10 +166,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
-  const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body) ?? {};
+  /**
+   * 【坏 body 要回 400,不能让函数崩】JSON.parse 抛出来会变成 FUNCTION_INVOCATION_FAILED,
+   * 那是 500 —— 客户端看到的是「服务器挂了」而不是「你发的东西不对」,排查方向直接被带偏。
+   * Vercel 的 req.body 是 getter,内容畸形时【访问它】就抛,所以连读取一并包进 try。
+   */
+  let body: Record<string, unknown>;
+  try {
+    const raw = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+    if (raw !== null && raw !== undefined && (typeof raw !== 'object' || Array.isArray(raw))) {
+      return res.status(400).json({ error: 'invalid_json', detail: 'body must be a JSON object' });
+    }
+    body = (raw as Record<string, unknown>) ?? {};
+  } catch (err) {
+    return res.status(400).json({
+      error: 'invalid_json',
+      detail: err instanceof Error ? err.message : 'body is not valid JSON',
+    });
+  }
+
   const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
   const probe = body.probe === true;
-  if (!sessionId) return res.status(400).json({ error: 'missing session_id' });
+  if (!sessionId) {
+    return res.status(400).json({ error: 'missing session_id', detail: 'expected { session_id: "<uuid>" }' });
+  }
 
   const supa = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
     auth: { persistSession: false },

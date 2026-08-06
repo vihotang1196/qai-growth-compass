@@ -1,4 +1,16 @@
 /**
+ * ⚠️ 【为什么这份实现在 api/_lib 而不是 src/lib】Vercel 的 Node runtime **只编译
+ * `/api` 目录内**的 TypeScript(官方文档原话:"supports TypeScript files for server
+ * entrypoints and files inside of the /api directory")。放在 src/ 的 .ts 不会被编译成
+ * 函数可加载的 .js —— 实测就是 ERR_MODULE_NOT_FOUND,而 tsc / vite build / dep-sync
+ * 四道门全绿。所以规范实现放这里,src 与 Deno 从这里导入,而不是反过来。
+ *
+ * 同一原因:import 必须带显式扩展名(package.json 是 "type": "module")。
+ * tsconfig.api.json 用 moduleResolution: "bundler",它【允许】省略扩展名 ——
+ * 那正是 tsc 放行这个 bug 的原因。scripts/check-api-imports.mjs 现在守这条。
+ */
+
+/**
  * PDF 渲染的字形自检 —— 判定与分级的纯逻辑。
  *
  * 【为什么要这个,以及它与项目里其他验证的不同】字体探针、smoke、那五条 curl 都是

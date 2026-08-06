@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RENDER_TOKEN_TTL_SEC, signRenderToken, verifyRenderToken } from './renderToken';
+import { RENDER_TOKEN_TTL_SEC, signRenderToken, verifyRenderToken } from '../../api/_lib/renderToken';
 
 const SECRET = 'internal-fn-secret-for-tests';
 const OTHER = 'a-different-secret';
