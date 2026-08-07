@@ -13,7 +13,7 @@
 
 **必读四节,按这个顺序:**
 
-1. **[判断标准](#判断标准--这个项目反复用到的八条)** —— 八条。它们不是格言,是每一条都对应一次真实的返工。
+1. **[判断标准](#判断标准--这个项目反复用到的九条)** —— 九条。它们不是格言,是每一条都对应一次真实的返工。
    不读这节,后面很多设计会显得像洁癖。
 2. **[七道门](#七道门--每一道都是撞出来的)** —— 构建链上的七道守卫各自守什么、**因为踩了什么坑才加的**。
    没有那个背景,下一个人会以为它们可以绕过。
@@ -65,7 +65,7 @@
 | 11 | GHL 写回 + 重试(**含从 Stage 7 挂回的:tags、Vercel Cron 定时、Admin 刷新字段映射按钮**) | 部分先行(字段映射 / 判据 / sweep 已在 Stage 7 做掉) |
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
-当前分支基线:`main` = `97327b1`。测试基线:**Node 212 / Deno 124,七道门全绿**。
+当前分支基线:`main` = `08e2e65`(a 已合入)。测试基线:**Node 219 / Deno 124,七道门全绿**。
 
 ---
 
@@ -96,12 +96,32 @@
 
 ### 3. PDF 失败路径的实测(第 4 步,未做)
 
-前三步(渲染成功、下载、Admin 看到 ready)会在下次部署时顺带验掉,**第 4 步要故意制造失败**:
-把 `CDN_FONT_BASE` 改错 → Admin 点「重新生成」。
+前三步(渲染成功、下载、Admin 看到 ready)会在下次部署时顺带验掉,**第 4 步要故意制造失败**。
 
-期望:`pdf_status = failed`、`pdf_last_error` 里是**具体的**字体错误(`installFallbackFont`
-会把 `FONTCONFIG_PATH` / `HOME` / dirBefore / dirAfter / url 全带出来),
-而**报告页仍然能看**。
+**制造失败的方式:在 Bunny 上把 `NotoSansSC-Regular.otf` 改个名,不动环境变量。**
+浏览器侧加载的是 `Sora-VF.woff2` / `PlusJakartaSans-VF.woff2` /
+`NotoSansSC-Regular.subset.woff2` / `NotoSansSC-Bold.subset.woff2`(`src/styles/fonts.ts`),
+那个 `.otf` **只有 PDF 兜底层用**。所以改名的影响面恰好等于被测对象,
+而且**零次 Redeploy** —— 改 `CDN_FONT_BASE` 要来回两次构建。
+两个前提:①改名和改回来都要 purge 边缘缓存(否则边缘还在回旧对象 / 404 被负缓存);
+②挑没人答题的时段。
+
+**触发用 curl 直连,不用 Admin 按钮**:
+
+```bash
+curl -sS -X POST "$APP_BASE_URL/api/render-pdf" -H "X-Internal-Secret: $INTERNAL_FN_SECRET" -H 'Content-Type: application/json' -d '{"session_id":"<uuid>"}'
+```
+
+失败时它当场回 `{"error":"render_failed","detail":...}`,不用去 Roster 里翻。
+⚠️ **不要先跑 `update assessment_results set pdf_status='failed'`** ——
+Admin 按钮自己会重置状态,而 curl 根本不受 Roster「按钮只在非 ready 时出现」那条 UI 约束影响。
+那句 SQL 一旦漏了 `where`,会把**所有人**的 `pdf_status` 打成 failed,
+症状是「别人的报告坏了」,不是「我的测试没跑通」。
+
+期望:`pdf_status = failed`、`pdf_last_error` 里是**具体的**字体错误
+(url + `HOME` / `FONTCONFIG_PATH` / dirBefore + 三个常见成因 —— 这一条
+[在实测之前先修过一次](#字体下载失败时的错误归一化在跑-stage-9-失败路径之前先修),
+否则 404 只会给出一句 `Unexpected status code: 404.`),而**报告页仍然能看**。
 
 **这一步验的不是「成功路径能跑」,是「附属品失败时主交付不受拖累」** ——
 整个异步化设计就是为了这一条,不验它等于没做。
@@ -170,7 +190,7 @@ GHL 付款 workflow → Webhook action → POST /assessment-ghl-webhook
 
 ---
 
-# 判断标准 —— 这个项目反复用到的八条
+# 判断标准 —— 这个项目反复用到的九条
 
 **每一条都对应一次真实的返工,不是格言。** 括号里是它第一次出现的地方。
 
@@ -298,6 +318,35 @@ preflight 的状态码**必须 2xx**(否则抛,并列出 401/403/409 各查什�
 写死值钉住**意图**(顺序必须是这个顺序),推导式钉住**逻辑**
 (`statusesBefore` 不能变成含自己)。状态阶梯那两次变异分别只被其中一组咬住,
 少哪一组都会漏过一半。
+
+### 9. 验一条失败路径,要验的不只是「它会失败」,还有「它说的话够不够用来定位」
+
+前者容易验,**后者容易被前者的成功掩盖** —— 门确实响了,于是「这块验过了」被勾掉,
+而它说的那句话根本没法照着行动。
+
+与[第 1 条](#1-一道没见过它变红的门不值钱)是同一族的下一个形态:
+
+| | 问题 |
+|---|---|
+| 第 1 条 | 门**没见过变红** —— 不知道它会不会响 |
+| 本条 | 门**响了,但说的话没有信息量** —— 而响这件事本身让人以为已经验过了 |
+
+标本(Stage 9 失败路径实测**开跑之前**就读出来的,不是踩出来的):
+`@sparticuz/chromium` 的 `font()` 在非 200 时 reject 的是一个**裸字符串**
+(`build/index.js:65`),不是 Error。调用侧统一按
+`err instanceof Error ? err.message : String(err)` 降级,于是 `pdf_last_error` 会是整整一句:
+
+```
+Unexpected status code: 404.
+```
+
+没有 URL、没说这是字体、没有任何环境事实。而 **CDN 改错 / 文件被移走 / 403 恰恰是线上
+最可能的那种字体失败** —— 最可能发生的失败模式,给出的是最没法照着行动的那条错误。
+照原计划跑下去会拿到「`pdf_status` = failed ✅、`pdf_last_error` 非空 ✅」,然后把第 4 步勾掉。
+
+**推论:失败路径的验收标准要写成「错误里必须出现哪几样东西」,不能写成「应该报错」。**
+现在那条断言就是这么写的(必须出现 url / `HOME=` / `FONTCONFIG_PATH=` / 三个常见成因),
+而不是 `expect(...).toThrow()`。
 
 ---
 
@@ -3123,8 +3172,82 @@ Node **212**(+6)/ Deno 124,七道门全绿。
 
 ---
 
+# 字体下载失败时的错误归一化(在跑 Stage 9 失败路径之前先修)
+
+## 为什么在实测之前先修
+
+`@sparticuz/chromium` 的 `font()` 在非 200 时 reject 一个**裸字符串**
+(`build/index.js:65`),不是 Error。`installFallbackFont` 里 `await chromiumFont(fontUrl)`
+没包 try,那句 reject 直接穿过去;render-pdf 的 catch 按
+`err instanceof Error ? err.message : String(err)` 降级,于是 `pdf_last_error` 就是:
+
+```
+Unexpected status code: 404.
+```
+
+**下面那段带 `FONTCONFIG_PATH` / `HOME` / `dirBefore` / `dirAfter` 的诊断根本走不到** ——
+它只在「下载成功但文件缺失或 <1MB」时才触发。而 404 / 403(CDN 改错、对象被改名、
+防盗链变了)恰恰是线上最可能的那种字体失败。
+
+按原计划跑 Stage 9 第 4 步会拿到「状态确实 failed、错误确实非空」,然后把
+「错误具体到能照着行动」勾掉 —— 这条已经立成[判断标准 9](#9-验一条失败路径要验的不只是它会失败还有它说的话够不够用来定位)。
+
+## 顺带做的同类排查:只有这一处,所以不抽象
+
+`err instanceof Error ? ... : String(err)` 这种降级在仓库里有 **37 处**,
+但真正会收到**非 Error** 的只有一处:
+
+| 来源 | 结论 |
+|---|---|
+| `chromium.font()` 非 200 | ⚠️ `reject(string)` —— 全仓唯一一处,已修 |
+| `@sparticuz/chromium` 其余 | grep 过,没有第二处裸 reject |
+| supabase-js 的 `throw pgError` | ✅ `PostgrestError extends Error`,`.message` 拿得到 |
+| `fetch` / puppeteer / WebCrypto | ✅ 都是 Error |
+
+**一处就地包一层,不上 `normalizeError(err, context)`。** 统一封装要养一个新概念,
+而它现在只有一个用户 —— 等出现第二处再说。
+
+⚠️ **但排查带出了一件独立的事,没在这一轮做**:`PostgrestError` 除了 `message`
+还带 `code` / `details` / `hint`,而那 37 处全都只取 `.message`,
+把另外三个字段丢了(权限类错误的可执行信息常在 `hint` 里)。
+这与判断标准 9 是同一类问题,但改动面 37 处、跨三个运行时,**单独一轮做**。
+
+## 修法
+
+`chromiumFont(fontUrl)` 包一层 try,非 Error 的 rejection 归一化成带上下文的 Error:
+原始成因 + url + `HOME` / `FONTCONFIG_PATH` / `dirBefore` + **三个常见成因**
+(CDN_FONT_BASE 指错 / 对象被改名删除 / 访问权限变了)。
+
+最后那条尤其要写进去:浏览器侧加载的是 `*.subset.woff2`,与这个 `.otf` 是**不同的文件** ——
+「网站字体好好的」推不出「这个 URL 好好的」,而那是排查时最容易走错的一步。
+
+两个抛点的环境事实抽成 `fontEnvFacts()` 共用([判断标准 3](#3-同一份东西存两处--先想能不能取消复制)):
+往其中一处加字段而另一处落后,落后的那条恰好是你没预料到的那次失败走的路。
+
+`fontDir` 做成了默认参数,**只为能测** —— 在测试里往真实的 `/tmp/fonts` 造文件,
+恰好是[当年弄坏整个字体子系统](#我引入的回归提前创建-tmpfonts-让整个字体子系统失效)的那个动作,
+不能为了测一个函数去重演它。
+
+## 反向验证
+
+7 条新用例(`src/lib/lambdaEnv.test.ts`)。**断言写的是「错误里必须出现哪几样」,
+不是 `toThrow()`** —— 那正是判断标准 9 的要求。
+
+把 try/catch 去掉还原成修之前:**3 条红**(裸字符串那条、Error rejection 那条、
+三个成因那条),另外 4 条(落地校验、0 字节残留、前置条件、happy path)**保持绿** ——
+它们走的是别的路径,不该被这次改动影响。
+
+Node **219**(+7)/ Deno 124,七道门全绿。
+---
+
 ## 变更日志
 
+- 2026-08-07 — **字体下载失败的错误归一化**:`chromium.font()` 非 200 时 reject 裸字符串,
+  导致最可能的字体失败给出最没信息量的错误(`Unexpected status code: 404.`)。
+  包一层带 url + 环境事实 + 三个常见成因的 Error;两个抛点共用 `fontEnvFacts()`。
+  同类排查:37 处降级里只有这一处会收到非 Error,**故不抽象**。
+  新增[判断标准 9](#9-验一条失败路径要验的不只是它会失败还有它说的话够不够用来定位)。
+  **另记一笔:`PostgrestError` 的 `code`/`details`/`hint` 被那 37 处一律丢掉,单独一轮做**
 - 2026-08-07 — **雷达维度标签移到五个顶点旁**:新增 `buildLabelAnchors()`(角度仍只有一份),
   标签改为 SVG `<text>` 以免 PDF 打印错位,按象限分三档垂直偏移;删掉图下方那排列表与
   `RadarAxis.color`;viewBox 520×330 + `max-w-xl`。四次变异反向验证。**PDF 里的样子未确认**
@@ -3139,7 +3262,7 @@ Node **212**(+6)/ Deno 124,七道门全绿。
   `_shared/entitlementStatus.ts` 两处共用,「只往前走」交给 `.in()` 过滤而不是先读后写;
   7 条新用例经两次变异反向验证。**未部署、历史行未回填**
 
-- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的八条)」七条(每条附它对应的那次返工)②「[七道门](#七道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
+- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的九条)」七条(每条附它对应的那次返工)②「[七道门](#七道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
 - 2026-07-31 — rev1 初稿
 - 2026-07-31 — rev2:PDF 异步化 + Storage;字体 CDN 化;GHL Inbound Webhook 替代 workflow ID;环境变量改名与新增;D1–D5 批准;新增 D6/D7
 - 2026-07-31 — rev4 **Stage 0 定稿**:「8 张表」约束解除,D8 采用第 9 张 `app_settings` 表;D9 定稿(标签独立于字段写入、TRANSIENT/CONFIG/AUTH 三类错误分流、错误具体到字段 key);字体源文件位置与 `.gitignore` 规则确定;0.12 字段清单标记作废(实际前缀为 `qai_assessment_*`);`assessment-config.json` 第三次未送达

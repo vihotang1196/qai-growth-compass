@@ -77,6 +77,22 @@ export function assertChromiumEnvReady(): void {
 }
 
 /**
+ * 字体相关报错都要带的那几条环境事实 —— **一份实现,两个抛点共用**。
+ *
+ * 【为什么抽出来】下载失败与落地失败是两条不同的路径,但「排查时需要知道什么」是同一套。
+ * 分别写两遍的话,以后往其中一处加字段,另一处会悄悄落后 —— 而落后的那条恰好是
+ * 你没预料到的那次失败走的路。
+ */
+function fontEnvFacts(dirBefore: string[], dirAfter?: string[]): string {
+  return (
+    `FONTCONFIG_PATH=${process.env.FONTCONFIG_PATH ?? '(unset)'}, ` +
+    `HOME=${process.env.HOME ?? '(unset)'}, ` +
+    `dirBefore=${JSON.stringify(dirBefore)}` +
+    (dirAfter ? `, dirAfter=${JSON.stringify(dirAfter)}` : '')
+  );
+}
+
+/**
  * 把中文兜底字体装进 **fontconfig 真的会扫的目录**,并校验落地。
  *
  * ⚠️⚠️ 【必须在 `chromium.executablePath()` 之后调用 —— 顺序是这个函数的正确性前提】
@@ -104,10 +120,14 @@ export async function installFallbackFont(
   chromiumFont: (url: string) => Promise<unknown>,
   fontUrl: string,
   minBytes = 1_000_000,
+  /**
+   * fonts.conf 里唯一可写的 /tmp 目录。**做成参数只是为了能测** ——
+   * 生产永远用默认值,而在测试里往真实的 `/tmp/fonts` 里造文件恰好是当年
+   * 弄坏整个字体子系统的那个动作(见上面 mkdirSync 那段),不能为了测一个函数去重演它。
+   */
+  fontDir = '/tmp/fonts',
 ): Promise<{ path: string; bytes: number; dirBefore: string[]; dirAfter: string[] }> {
   const { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } = await import('node:fs');
-
-  const fontDir = '/tmp/fonts'; // fonts.conf 里唯一可写的 /tmp 目录
 
   /**
    * 【前提校验:fonts.conf 必须已经在那里】它由 executablePath() 解压出来。
@@ -123,7 +143,39 @@ export async function installFallbackFont(
     );
   }
 
-  await chromiumFont(fontUrl);
+  /**
+   * 【下载失败必须自己包一层 —— 否则最可能发生的失败给出信息量最低的错误】
+   *
+   * `@sparticuz/chromium` 的 `font()` 在非 200 时 reject 的是一个**裸字符串**
+   * (`build/index.js:65`:`reject(\`Unexpected status code: ${response.statusCode}.\`)`),
+   * 不是 Error。而调用侧统一按 `err instanceof Error ? err.message : String(err)` 降级,
+   * 于是 `pdf_last_error` 会变成完整的一句:
+   *
+   *     Unexpected status code: 404.
+   *
+   * 没有 URL、没说这是字体、没有任何环境事实。而 **CDN 改错 / 文件被移走 / 403 恰恰是线上
+   * 最可能的那种字体失败** —— 最可能发生的失败模式,给出的是最没法照着行动的那条错误。
+   * 下面那段带 FONTCONFIG_PATH / HOME / dirBefore / dirAfter 的诊断只在「下载成功但文件
+   * 缺失或过小」时才走到,404 根本到不了那里。
+   *
+   * 更麻烦的是它**会以「看起来像通过」的方式骗过失败路径的验证**:状态确实变成了 failed,
+   * `pdf_last_error` 确实非空,于是「错误信息有了」这一条被勾掉 —— 而那句话没有信息量。
+   * 见 PROGRESS.md 判断标准 9。
+   */
+  try {
+    await chromiumFont(fontUrl);
+  } catch (err) {
+    // 裸字符串 / 裸对象都在这里被归一化成带上下文的 Error
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `CJK fallback font download failed: ${cause} — url=${fontUrl}, ` +
+        `${fontEnvFacts(dirBefore)}。` +
+        `非 200 最常见的三种原因:CDN_FONT_BASE 指错、CDN 上该对象被改名/删除、` +
+        `或该对象的访问权限变了(Bunny 的 token auth / 防盗链)。` +
+        `注意浏览器侧用的是 *.subset.woff2,与这个 otf 是不同的文件 —— ` +
+        `网站字体正常【不能】推出这个 URL 也正常。`,
+    );
+  }
 
   const fileName = fontUrl.split('/').pop() ?? 'fallback.otf';
   const downloadedAt = `${process.env.HOME ?? '/tmp'}/.fonts/${fileName}`;
@@ -141,8 +193,7 @@ export async function installFallbackFont(
       `CJK fallback font not usable at ${fontPath}: ` +
         `${stat ? `size ${stat.size} bytes (expected >= ${minBytes})` : 'file does not exist'}. ` +
         `downloadedAt=${downloadedAt}(exists=${existsSync(downloadedAt)}), ` +
-        `FONTCONFIG_PATH=${process.env.FONTCONFIG_PATH ?? '(unset)'}, HOME=${process.env.HOME ?? '(unset)'}, ` +
-        `dirBefore=${JSON.stringify(dirBefore)}, dirAfter=${JSON.stringify(dirAfter)}, url=${fontUrl}。` +
+        `${fontEnvFacts(dirBefore, dirAfter)}, url=${fontUrl}。` +
         `fonts.conf 只扫 /var/task/.fonts、/var/task/fonts、/opt/fonts、/tmp/fonts —— ` +
         `不含 chromium.font() 的落点 /tmp/.fonts,所以必须复制过去。` +
         `兜底层不可用时生僻字会渲染成纯空白,宁可在这里失败,也不要出一份姓名看不见的报告。`,
