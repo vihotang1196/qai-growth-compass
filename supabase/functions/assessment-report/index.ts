@@ -39,6 +39,26 @@ function fromValueMap(profile: Record<string, unknown>, id: string, map: number[
   return map[idx];
 }
 
+/**
+ * 有路径就现签一条 —— 分享卡用。
+ *
+ * 【与 signedPdfUrl 的区别:不看 pdf_status】分享卡的存在与否只由它自己那一列决定。
+ * 挂上 pdf_status 的话,一次 PDF 失败会连带把已经存在的分享卡藏起来 ——
+ * 那正是「附属品的失败拖累另一个附属品」,方向和整条异步化相反。
+ */
+async function signedObjectUrl(
+  supa: ReturnType<typeof serviceClient>,
+  path: string | null,
+): Promise<string | null> {
+  if (!path) return null;
+  const { data, error } = await supa.storage.from('reports').createSignedUrl(path, 3600);
+  if (error) {
+    console.error(`failed to sign url for ${path}: ${error.message}`);
+    return null;
+  }
+  return data?.signedUrl ?? null;
+}
+
 /** ready 且有路径时现签一条 signed URL;其余情况回 null(前端据此显示静态兜底文案) */
 async function signedPdfUrl(
   supa: ReturnType<typeof serviceClient>,
@@ -121,7 +141,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: result, error: rErr } = await supa
       .from('assessment_results')
-      .select('dim_scores, total, tier, weakest, strongest, pdf_status, pdf_path')
+      .select('dim_scores, total, tier, weakest, strongest, pdf_status, pdf_path, share_card_path, share_card_tall_path')
       .eq('session_id', session.id)
       .maybeSingle();
     if (rErr) throw rErr;
@@ -251,6 +271,9 @@ Deno.serve(async (req: Request) => {
        * 再点,拿到的是 Storage 的 403,而那对客户完全无法解释。
        */
       pdfUrl: await signedPdfUrl(supa, result.pdf_status as string, result.pdf_path as string | null),
+      // 分享卡:两个尺寸各一条,没出来就是 null,前端据此整块不渲
+      cardUrl: await signedObjectUrl(supa, result.share_card_path as string | null),
+      cardTallUrl: await signedObjectUrl(supa, result.share_card_tall_path as string | null),
     });
   } catch (err) {
     console.error(`report failed: ${err instanceof Error ? err.message : String(err)}`);

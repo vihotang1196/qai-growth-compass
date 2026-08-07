@@ -6,6 +6,7 @@ import Quiz from '@/pages/Quiz';
 import Survey from '@/pages/Survey';
 import Report from '@/pages/Report';
 import Showcase from '@/pages/Showcase';
+import ShareCard from '@/pages/ShareCard';
 import LanguageToggle from '@/components/LanguageToggle';
 
 /**
@@ -28,6 +29,8 @@ export default function App() {
         <Route path="/quiz" element={<Quiz />} />
         <Route path="/survey" element={<Survey />} />
         <Route path="/report" element={<Report />} />
+        {/* 截图器专用,不给人访问 —— 与 /report 同样靠渲染令牌取数,没令牌就是空白 */}
+        <Route path="/share-card" element={<ShareCard />} />
         {/* 后台。守卫在 AdminLayout 里,而那一层只是 UX —— 真正的拦阻在
             assessment-admin 中(每次验 JWT + 查允许名单)。Stage 10 的其余四个模块
             会挂在 /admin 之下 */}

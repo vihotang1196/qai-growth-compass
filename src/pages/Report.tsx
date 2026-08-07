@@ -406,6 +406,43 @@ export default function Report() {
       <NextStep weakest={result.weakest[0]} locale={locale} L={L} mismatch={mismatch}
         priorityLabel={priority ? dimLabel(priority) : ''} needLabel={dimLabel(result.weakest[0])} tk={tk} />
 
+      {/*
+        8.5 分享卡 —— **整块只在图真的存在时才渲**。
+        没出来就当它不存在:这是附属品的附属品,为它显示一句「生成失败」
+        只会让客户去操心一件与他的报告无关的事。失败要被看见的地方是 Admin 名单页。
+      */}
+      {(data.cardUrl || data.cardTallUrl) && (
+        <Section title={tk('report.card.title')}>
+          <p className="mb-3 font-body text-sm opacity-70">{tk('report.card.hint')}</p>
+          <div className="flex flex-wrap gap-4">
+            {data.cardUrl && (
+              <figure className="w-52">
+                <img
+                  src={data.cardUrl}
+                  alt={tk('report.card.square')}
+                  className="w-full border-brutal border-line"
+                />
+                <figcaption className="mt-1 font-body text-xs opacity-60">
+                  {tk('report.card.square')}
+                </figcaption>
+              </figure>
+            )}
+            {data.cardTallUrl && (
+              <figure className="w-36">
+                <img
+                  src={data.cardTallUrl}
+                  alt={tk('report.card.tall')}
+                  className="w-full border-brutal border-line"
+                />
+                <figcaption className="mt-1 font-body text-xs opacity-60">
+                  {tk('report.card.tall')}
+                </figcaption>
+              </figure>
+            )}
+          </div>
+        </Section>
+      )}
+
       {/* 8. PDF / 打印 */}
       <Section title={tk('report.section.share')}>
         {pdf.status === 'ready' ? (

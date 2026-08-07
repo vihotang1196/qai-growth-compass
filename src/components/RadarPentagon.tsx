@@ -56,6 +56,8 @@ const CY = 172;
 const R = 110; // 顶格半径
 /** 标签锚点的半径 —— 比顶格再往外 18,免得压在数据线上 */
 const LABEL_R = R + 18;
+/** bare 取景时五边形与画幅边缘的留白:够让 2.5px 的墨边不被切到,又不浪费画面 */
+const BARE_PAD = 10;
 
 /** 第 i 个轴的角度(从正上方开始,顺时针) */
 function angleFor(i: number, n: number): number {
@@ -133,6 +135,7 @@ export default function RadarPentagon({
   baselineLabel,
   baselineN,
   noBaselineLabel,
+  bare: bareProp,
 }: {
   axes: RadarAxis[];
   scale: number;
@@ -142,6 +145,17 @@ export default function RadarPentagon({
   baselineN: number;
   /** 不画基准时的说明 */
   noBaselineLabel: string;
+  /**
+   * 【裸图模式】只画网格与数据多边形,不画顶点标签、不画图例。分享卡用。
+   *
+   * 为什么是一个开关而不是另写一个组件:形状必须与报告里的**完全一致** ——
+   * 分享卡的全部价值就在「这个形状是我的」,和报告对不上就什么都不是。
+   * 另写一份轴计算正是[雷达那三轮](#)栽过的地方。
+   *
+   * 分享卡刻意【不带】维度分数与维度名:那是诊断,诊断不该被公开对照。
+   * 形状本身有辨识度又不精确,那正是分享卡该有的信息密度。
+   */
+  bare?: boolean;
 }) {
   /**
    * 【n < 2 不画基准线】样本只有本人时,基准均值【定义上】等于本人分数,两条线完全重合。
@@ -153,14 +167,33 @@ export default function RadarPentagon({
   const rings = Array.from({ length: scale }, (_, k) => k + 1); // 1..scale 同心五边形
 
   const labelAnchors = buildLabelAnchors(n);
+  const bare = bareProp === true;
 
   return (
     /**
      * max-w 从 sm 放到 xl:viewBox 变宽(左右要装下标签)之后,同样的容器宽度会把
      * 五边形本身缩小。放宽容器让图形回到原来的视觉尺寸,多出来的是标签占的地方。
      */
-    <figure className="mx-auto w-full max-w-xl">
-      <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="w-full" role="img" aria-label={selfLabel}>
+    <figure className={bare ? 'w-full' : 'mx-auto w-full max-w-xl'}>
+      {/*
+        【bare 下裁一个方形 viewBox】520×330 那个画幅的左右余量**只为标签存在**。
+        bare 没有标签,还用那个画幅的话:五边形被白白缩小,而且外框是 1.58 的横长比,
+        塞进方形卡里下方会空出一大条。
+
+        裁 viewBox 不动 CX / CY / R —— 多边形的点一个都没变,只是取景变了。
+        这一点很重要:分享卡的形状必须与报告里的完全一致,而「一致」的唯一保证
+        就是两边走的是同一份几何。
+      */}
+      <svg
+        viewBox={
+          bare
+            ? `${CX - R - BARE_PAD} ${CY - R - BARE_PAD} ${2 * (R + BARE_PAD)} ${2 * (R + BARE_PAD)}`
+            : `0 0 ${VIEW_W} ${VIEW_H}`
+        }
+        className="w-full"
+        role="img"
+        aria-label={selfLabel}
+      >
         {/* 网格:每一分一圈同心五边形 */}
         {rings.map((ring) => (
           <polygon
@@ -215,6 +248,7 @@ export default function RadarPentagon({
 
           【opacity 0.75】同一条铁律:标签是辅助元素。压一档让黄面与墨线仍是最先看到的东西。
         */}
+        {!bare && (
         <g className="font-body" fontSize={14} opacity={0.75}>
           {axes.map((a, i) => {
             const anchor = labelAnchors[i];
@@ -230,9 +264,11 @@ export default function RadarPentagon({
             );
           })}
         </g>
+        )}
       </svg>
 
-      {/* 图例 */}
+      {/* 图例 —— bare 下不渲:分享卡上「本期样本只有你自己」这种话是说明,不是内容 */}
+      {!bare && (
       <figcaption className="mt-3 flex justify-center gap-5 font-body text-xs opacity-70">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2 w-5 bg-accent" aria-hidden /> {selfLabel}
@@ -245,6 +281,7 @@ export default function RadarPentagon({
           <span>{noBaselineLabel}</span>
         )}
       </figcaption>
+      )}
     </figure>
   );
 }

@@ -21,6 +21,8 @@ export interface RosterRowData {
       weakest: string[];
       pdf_status: string;
       pdf_last_error: string | null;
+      /** 分享卡渲染失败的原因。【非空不代表 PDF 失败】—— 两者是分开的 */
+      share_card_error: string | null;
     } | null;
   } | null;
 }
@@ -80,6 +82,12 @@ export default function RosterRow({
   const { tk } = useT();
   const result = r.session?.result ?? null;
   const pdfError = result?.pdf_last_error ?? null;
+  const cardError = result?.share_card_error ?? null;
+  /**
+   * 两种错误共用同一个展开行。分开做两个开关会让 PDF 列长出第二个按钮,
+   * 而那一列的全部要求就是【定宽】—— 名单页那次的教训。
+   */
+  const anyError = pdfError ?? cardError;
   const pdfReady = result?.pdf_status === 'ready';
 
   return (
@@ -128,7 +136,9 @@ export default function RosterRow({
           {result ? (
             <div className="flex items-center gap-2">
               <Badge tone={pdfReady ? 'ink' : 'muted'}>{result.pdf_status}</Badge>
-              {pdfError && (
+              {/* 分享卡只在【失败】时才占一个位:成功是常态,常态不该占列宽 */}
+              {cardError && <Badge tone="muted">{tk('admin.col.card')}</Badge>}
+              {anyError && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -211,18 +221,32 @@ export default function RosterRow({
         url / FONTCONFIG_PATH / HOME / dirBefore 和三个常见成因,是要被整段复制走的。
         所以要能选中、要换行(覆盖掉 Td 继承下来的 whitespace-nowrap)。
       */}
-      {errorOpen && pdfError && (
+      {errorOpen && anyError && (
         <Tr>
           <Td colSpan={ROSTER_COLUMNS.length} className="whitespace-normal bg-line-soft/20">
             <div
               id={`pdf-error-${r.id}`}
               className="max-w-3xl whitespace-pre-wrap break-words font-mono text-xs"
             >
-              <span className="font-head font-bold uppercase tracking-wider">
-                {tk('admin.pdf.errorLabel')}
-              </span>
-              <br />
-              {pdfError}
+              {pdfError && (
+                <>
+                  <span className="font-head font-bold uppercase tracking-wider">
+                    {tk('admin.pdf.errorLabel')}
+                  </span>
+                  <br />
+                  {pdfError}
+                </>
+              )}
+              {pdfError && cardError && <br />}
+              {cardError && (
+                <>
+                  <span className="font-head font-bold uppercase tracking-wider">
+                    {tk('admin.card.errorLabel')}
+                  </span>
+                  <br />
+                  {cardError}
+                </>
+              )}
             </div>
           </Td>
         </Tr>

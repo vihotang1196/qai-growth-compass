@@ -14,6 +14,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
 import { MAX_PDF_ATTEMPTS } from './_lib/pdfState.js';
+import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -133,11 +134,59 @@ interface RenderOutcome {
   pdf: Buffer;
   glyph: ReturnType<typeof classifyGlyphReport>;
   scan: GlyphScan;
+  /** 分享卡:失败不抛,只在 error 里留一句;images 为空即这一次没出来 */
+  cards: { images: { suffix: string; png: Buffer }[]; error: string | null };
 }
 
 /**
  * 真实渲染管线。正常路径与 probe 共用这一个函数 —— 见文件头。
  */
+/**
+ * 截两张分享卡。**任何失败都在这里被吃掉**,只回一条 error 字符串。
+ *
+ * 尺寸与元素 id 来自 `_lib/shareCard`,页面那边读的是同一份 —— 两边各写一份的话,
+ * 失败形态是截图器抛「找不到元素」,而那句话不会告诉你是 id 拼错还是页面没渲出来。
+ */
+async function renderShareCards(
+  page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>['newPage']>>,
+  appBase: string,
+  rt: string,
+): Promise<{ images: { suffix: string; png: Buffer }[]; error: string | null }> {
+  try {
+    await page.setViewport({
+      width: SHARE_CARD_VIEWPORT.width,
+      height: SHARE_CARD_VIEWPORT.height,
+      deviceScaleFactor: 1, // 卡片按 CSS 像素就是成品像素,不要 2x 再放大一倍
+    });
+    await page.goto(`${appBase}/share-card?rt=${encodeURIComponent(rt)}&lang=zh`, {
+      waitUntil: 'networkidle0',
+      timeout: 30_000,
+    });
+    // 与报告页同一个取向:等页面自己说画完了,不 sleep
+    await page.waitForFunction('window.__CARD_READY__ === true', { timeout: 20_000 });
+    await page.evaluateHandle('document.fonts.ready');
+
+    const images: { suffix: string; png: Buffer }[] = [];
+    for (const size of SHARE_CARD_SIZES) {
+      const el = await page.$(`#${size.id}`);
+      if (!el) throw new Error(`share card element #${size.id} not found on /share-card`);
+      const box = await el.boundingBox();
+      // 尺寸不对就说出来 —— 一张 1080×0 的图上传成功、下载下来是空的,那种失败最难查
+      if (!box || Math.round(box.width) !== size.w || Math.round(box.height) !== size.h) {
+        throw new Error(
+          `share card #${size.id} measured ${box ? `${Math.round(box.width)}×${Math.round(box.height)}` : 'null'}, expected ${size.w}×${size.h}`,
+        );
+      }
+      images.push({ suffix: size.suffix, png: Buffer.from(await el.screenshot({ type: 'png' })) });
+    }
+    return { images, error: null };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(`share card render failed (PDF is unaffected): ${detail}`);
+    return { images: [], error: detail.slice(0, 500) };
+  }
+}
+
 async function renderReport(sessionId: string): Promise<RenderOutcome> {
   const appBase = env('APP_BASE_URL').replace(/\/$/, '');
   const signedAtMs = Date.now();
@@ -340,7 +389,23 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
         margin: { top: '12mm', bottom: '12mm', left: '10mm', right: '10mm' },
       }),
     );
-    return { pdf, glyph, scan };
+
+    /**
+     * ── 分享卡:同一个浏览器实例里顺手截掉 ──
+     *
+     * 【为什么搭 PDF 的车而不是单开一条管线】另开一条要把字体安装、Lambda 环境注入、
+     * chromium 启动整套再写一遍(判断标准 3),还要多付一次冷启动(约 16 秒)。
+     * 搭车的边际成本只有一次 page.goto 加两次 element screenshot。
+     * 附带好处:重试路径也白拿了 —— Admin 的「重新生成」和定时 sweep 都会连带重渲分享卡。
+     *
+     * 【失败被单独关在这里】分享卡是**附属品的附属品**:PDF 失败只是少个下载按钮,
+     * 分享卡失败只是少张图。所以它抛出来的东西一律不许往外冒 ——
+     * `cards.error` 只是一条记录,`pdf` 该怎么返回还怎么返回。
+     * 这与整个异步化是同一个取向:主交付不受附属品拖累。
+     */
+    const cards = await renderShareCards(page, appBase, rt);
+
+    return { pdf, glyph, scan, cards };
   } finally {
     await browser.close();
   }
@@ -408,7 +473,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { pdf, glyph, scan } = await renderReport(sessionId);
+    const { pdf, glyph, scan, cards } = await renderReport(sessionId);
 
     if (probe) {
       // 同一条管线,只是不落地。post-deploy 的检查就跑这个
@@ -419,6 +484,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         glyph: glyph.severity,
         glyphMessage: glyph.message,
         scanned: scan.scanned,
+        // probe 不落地,但要回报分享卡这条支路健不健康 —— 不然 probe 说「管线没问题」时,
+        // 它其实没有看过分享卡那一半
+        cards: { rendered: cards.images.length, error: cards.error },
       });
     }
 
@@ -427,6 +495,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('reports')
       .upload(path, pdf, { contentType: 'application/pdf', upsert: true });
     if (upErr) throw new Error(`storage upload failed: ${upErr.message}`);
+
+    /**
+     * ── 分享卡落地 ──
+     *
+     * 【上传失败也不许抛】渲染那一步已经把失败关起来了,上传这一步同样要关 ——
+     * 否则「PDF 都好了,因为一张图没传上去而整条 render_failed」就是把主交付
+     * 绑在附属品上,方向和整个异步化正好相反。
+     * 注意 reports bucket 的 mime 白名单原来只有 application/pdf,
+     * image/png 是 20260808000100 那条迁移放开的 —— 迁移没应用的话这里会稳定失败,
+     * 而 share_card_error 里会写着 Storage 的原话。
+     */
+    const cardPaths: { share_card_path: string | null; share_card_tall_path: string | null } = {
+      share_card_path: null,
+      share_card_tall_path: null,
+    };
+    let cardError = cards.error;
+    for (const img of cards.images) {
+      const cardPath = `${sessionId}${img.suffix}`;
+      const { error: cardUpErr } = await supa.storage
+        .from('reports')
+        .upload(cardPath, img.png, { contentType: 'image/png', upsert: true });
+      if (cardUpErr) {
+        cardError = `share card upload failed for ${cardPath}: ${cardUpErr.message}`.slice(0, 500);
+        console.error(cardError);
+        continue;
+      }
+      if (img.suffix.includes('tall')) cardPaths.share_card_tall_path = cardPath;
+      else cardPaths.share_card_path = cardPath;
+    }
 
     /**
      * 【字形有问题仍然出 PDF】有方块的报告好过没有报告。严重程度只写进 pdf_last_error
@@ -439,13 +536,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         pdf_status: 'ready',
         pdf_status_at: new Date().toISOString(),
         pdf_last_error: glyph.message,
+        ...cardPaths,
+        // 成功时显式清空,免得上一次的错误一直挂着骗人
+        share_card_error: cardError,
       })
       .eq('session_id', sessionId);
 
     if (needsAttention(glyph.severity)) {
       console.error(`PDF rendered for ${sessionId} but ${glyph.message}`);
     }
-    return res.status(200).json({ ok: true, path, bytes: pdf.length, glyph: glyph.severity });
+    if (cardError) console.error(`PDF ready for ${sessionId} but the share card did not make it: ${cardError}`);
+    return res.status(200).json({
+      ok: true,
+      path,
+      bytes: pdf.length,
+      glyph: glyph.severity,
+      cards: { ...cardPaths, error: cardError },
+    });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error(`render-pdf failed for ${sessionId}: ${detail}`);

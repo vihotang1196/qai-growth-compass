@@ -50,6 +50,8 @@ interface RosterRow {
       weakest: string[];
       pdf_status: string;
       pdf_last_error: string | null;
+      /** 分享卡失败原因。【非空不代表 PDF 失败】—— 两者分开,CSV 里也是两列 */
+      share_card_error: string | null;
     } | null;
   } | null;
 }
@@ -266,7 +268,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
        session:assessment_sessions(
          id,
          status,
-         result:assessment_results(total, tier, weakest, pdf_status, pdf_last_error)
+         result:assessment_results(total, tier, weakest, pdf_status, pdf_last_error, share_card_error)
        )`,
     )
     .order('created_at', { ascending: false });
@@ -293,7 +295,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
 
 function rosterCsv(rows: RosterRow[]): string {
   return toCsv(
-    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', 'PDF 状态', 'PDF 最后错误'],
+    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', 'PDF 状态', 'PDF 最后错误', '分享卡错误'],
     rows.map((r) => [
       r.name,
       r.phone_e164,
@@ -310,6 +312,8 @@ function rosterCsv(rows: RosterRow[]): string {
       r.access_revoked_at ? 'yes' : null,
       r.session?.result?.pdf_status ?? null,
       r.session?.result?.pdf_last_error ?? null,
+      // 分享卡失败不影响 PDF,所以它必须单独一列 —— 混进 PDF 那列会让人以为 PDF 也坏了
+      r.session?.result?.share_card_error ?? null,
     ]),
   );
 }

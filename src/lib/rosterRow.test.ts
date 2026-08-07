@@ -45,6 +45,7 @@ function makeRow(over: Partial<RosterRowData> = {}): RosterRowData {
         weakest: ['traffic', 'value'],
         pdf_status: 'failed',
         pdf_last_error: LONG_ERROR,
+        share_card_error: null,
       },
     },
     ...over,
@@ -90,6 +91,7 @@ const ready = () =>
         weakest: ['traffic'],
         pdf_status: 'ready',
         pdf_last_error: null,
+        share_card_error: null,
       },
     },
   });
@@ -188,6 +190,36 @@ describe('the re-generate button keeps its place instead of appearing and disapp
     const count = (html: string) => (actionsCell(html).match(/<button/g) ?? []).length;
     expect(count(render(ready()))).toBe(count(render(makeRow())));
     expect(count(render(ready()))).toBe(5);
+  });
+
+  it('a share card failure never makes the PDF look broken', () => {
+    /**
+     * 两者是分开的:PDF ready + 分享卡失败,是真实且常见的一种组合。
+     * 把分享卡的错误混进 PDF 那一列,会让运营以为报告本身出了问题。
+     */
+    const html = render(
+      makeRow({
+        session: {
+          id: 's',
+          status: 'completed',
+          result: {
+            total: 3.4,
+            tier: 'spot',
+            weakest: ['traffic'],
+            pdf_status: 'ready',
+            pdf_last_error: null,
+            share_card_error: 'share card element #share-card-tall not found',
+          },
+        },
+      }),
+      true,
+    );
+    // PDF 那颗徽章仍然是 ready,且重新生成按钮仍然是占位的隐形态
+    expect(mainRow(html)).toContain('ready');
+    expect(actionsCell(html)).toContain('invisible');
+    // 而分享卡的错误确实可见,并且带着「不影响 PDF」这句话
+    expect(html).toContain('share-card-tall');
+    expect(html).toContain(zh('admin.card.errorLabel'));
   });
 
   it('a row with no result at all renders neither the badge nor the button', () => {

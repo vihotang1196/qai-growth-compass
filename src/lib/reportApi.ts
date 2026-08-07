@@ -33,6 +33,14 @@ export interface ReportPayload {
   pdfStatus: string;
   /** ready 时服务端现签的 signed URL(1 小时);其余为 null */
   pdfUrl: string | null;
+  /**
+   * 分享卡的 signed URL,两个尺寸各一条,没出来就是 null。
+   *
+   * 【刻意不跟 pdfStatus 挂钩】分享卡是附属品的附属品:PDF 失败不该把已经存在的
+   * 分享卡一起藏掉。整块渲不渲只看这两条是不是 null。
+   */
+  cardUrl: string | null;
+  cardTallUrl: string | null;
 }
 
 /** 报告还没算出来(还没走完 finalize)—— 与鉴权失败区分开 */
