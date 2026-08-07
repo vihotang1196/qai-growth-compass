@@ -14,6 +14,7 @@
 import { serviceClient } from '../_shared/supa.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
+import { statusesBefore } from '../_shared/entitlementStatus.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
 import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
@@ -92,7 +93,7 @@ Deno.serve(async (req: Request) => {
       case 'survey':
         return await saveSurvey(supa, session, body.responses);
       case 'finalize':
-        return await finalize(supa, session, ent.ghl_contact_id as string);
+        return await finalize(supa, session, ent.id as string, ent.ghl_contact_id as string);
       default:
         return json({ error: 'unknown_action', action }, 400);
     }
@@ -197,6 +198,7 @@ async function saveSurvey(
 async function finalize(
   supa: ReturnType<typeof serviceClient>,
   session: SessionRow,
+  entitlementId: string,
   ghlContactId: string,
 ): Promise<Response> {
   const { data: answerRows, error: aErr } = await supa
@@ -280,6 +282,31 @@ async function finalize(
     .update({ status: 'completed', completed_at: new Date().toISOString() })
     .eq('id', session.id);
   if (stErr) console.error(`failed to mark session ${session.id} completed: ${stErr.message}`);
+
+  /**
+   * ── entitlement 也要跟着推到 completed ──
+   *
+   * 【为什么是两张表两次写】session.status 是答题流程的位置(决定登录后跳哪),
+   * entitlement.status 是运营视角的进度(Admin 名单页那一列、CSV 的「状态」与
+   * 「完成时间」)。漏掉这一句的失败形态是**安静地错**:分数、报告、PDF 全对,
+   * 只有名单页永远显示 started —— 而名单页正是运营判断「谁答完了」的唯一依据。
+   *
+   * 【不许倒退,而且由这条 UPDATE 自己保证】`.in('status', statusesBefore(...))`
+   * 让「只往前走」落在数据库那一次原子写上,不是先读后写 ——
+   * 客户连点两次提交是真实存在的,先读后写在那种情况下会互相覆盖 completed_at。
+   * 阶梯与 assessment-auth 推 started 用的是同一份(_shared/entitlementStatus.ts)。
+   *
+   * 【失败只记日志】与上面那句 session 一样:分数已经算出来了,
+   * 不能因为一个时间戳没写上就让客户看不到报告。
+   */
+  const { error: entErr } = await supa
+    .from('assessment_entitlements')
+    .update({ status: 'completed', completed_at: new Date().toISOString() })
+    .eq('id', entitlementId)
+    .in('status', statusesBefore('completed'));
+  if (entErr) {
+    console.error(`failed to mark entitlement ${entitlementId} completed: ${entErr.message}`);
+  }
 
   // ── GHL 写回(共用 _shared/ghlWriteback,与重试 sweep 同一份实现)──
   const payload = buildWritebackPayload(result, survey);

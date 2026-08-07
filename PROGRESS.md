@@ -65,7 +65,7 @@
 | 11 | GHL 写回 + 重试(**含从 Stage 7 挂回的:tags、Vercel Cron 定时、Admin 刷新字段映射按钮**) | 部分先行(字段映射 / 判据 / sweep 已在 Stage 7 做掉) |
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
-当前分支基线:`main` = `931922a`。测试基线:**Node 206 / Deno 117,七道门全绿**。
+当前分支基线:`main` = `97327b1`。测试基线:**Node 206 / Deno 124,七道门全绿**。
 
 ---
 
@@ -73,28 +73,16 @@
 
 按「下一个人应该先拿哪一件」排序。
 
-### 1. ⚠️ `assessment_entitlements.status` 不跟着 finalize 走(已确认的 bug,未修)
+### 1. ⚠️ 已修好的 `entitlements.status` 需要**部署 + 一次真实跑通**,历史行还要回填
 
-`assessment-score` 的 finalize 只更新了 **session** 那张表:
+代码已修(见 [那一节](#entitlementsstatus-不跟着-finalize-走--已修)),**但两件事没做**:
 
-```ts
-// supabase/functions/assessment-score/index.ts:278
-.from('assessment_sessions').update({ status: 'completed', completed_at: ... })
-```
-
-而 `assessment_entitlements` 有它**自己**的 `status`(`pending` / `link_sent` / `started` /
-`completed`)和自己的 `completed_at`,**没有任何地方把它推到 `completed`** ——
-`assessment-auth` 把它推到 `started` 之后就停在那里了。
-
-**失败形态是「安静地错」**:客户答完了、分数算好了、报告能看、PDF 也出了,
-而 **Admin 名单页永远显示 `started`**,`completed_at` 永远是 null。
-名单页正是运营判断「谁答完了」的唯一依据 —— 数据全对,只有那一列在骗人。
-
-修的时候注意两件:
-- 状态**只能往前走**(`assessment-auth` 里已有这个约定:`completed` 的人再登录不能被打回
-  `started`),推 `completed` 时同样要防倒退。
-- 这一步失败**不该挡住 finalize 返回** —— 与旁边那句 `completed` 一样,记 `console.error` 就行。
-  分数已经算出来了,不能因为一个时间戳没写上就让客户看不到。
+- **未部署**。修在 `assessment-score` / `assessment-auth` 两个 Edge Function 里,
+  要 `npm run deploy:functions`,然后走一遍「答完 → 看 Admin 名单」确认那一列变 `completed`。
+  新的断言只落在纯函数(`_shared/entitlementStatus.ts`)上,**「写库那一句真的写对了表」本地无处可测**
+  —— 按[判断标准 4](#4-断言的边界必须等于执行路径)的后半条,它属于必须放到部署之后的检查。
+- **历史行没回填**。修之前答完的人,`status` 仍停在 `started`、`completed_at` 仍是 null。
+  判据是「有 result 但 entitlement 还没 completed」。**这是一次生产数据写入,动之前先确认。**
 
 ### 2. 雷达图维度标签移到五个顶点旁
 
@@ -2968,7 +2956,68 @@ Node 206 / Deno 117,七道门全绿。
 
 ---
 
+# `entitlements.status` 不跟着 finalize 走 —— 已修
+
+## 确认过的失败链(不是推断)
+
+一条链上四处,每一处都实际看过:
+
+1. `assessment-score` finalize 只写 `assessment_sessions`(旧 `index.ts:278`)
+2. 全仓 `grep "'completed'"`,写 status 的**只有那一处** —— 没有任何地方推 entitlement
+3. `assessment-auth` 把它推到 `started` 就停下(`index.ts:112`)
+4. 影响面落在三个地方,都读 entitlement 自己的 `status`:
+   `Roster.tsx:307` 的徽章、`Roster.tsx:101` 的状态筛选(筛 `completed` 一个人都不出来)、
+   `rosterCsv` 的「状态」与「完成时间」两列
+
+## 修法:阶梯抽成共用,不许倒退交给数据库
+
+**新增 `_shared/entitlementStatus.ts`。** 这条阶梯原本只活在 auth 的一句
+`if (status === 'pending' || status === 'link_sent')` 里 —— 只有一份时那样写没问题,
+但 finalize 一旦也要判「哪些状态算更早」,第二份就出现了。
+按[判断标准 3](#3-同一份东西存两处--先想能不能取消复制):**在复制品出现的那一刻取消它,
+而不是事后给它加一道一致性守卫。**
+
+**「只往前走」落在那一次 UPDATE 上,不是先读后写:**
+
+```ts
+.update({ status: 'completed', completed_at: ... })
+.eq('id', entitlementId)
+.in('status', statusesBefore('completed'))
+```
+
+先读后写在客户连点两次提交时会互相覆盖 `completed_at`;过滤条件让数据库自己保证方向。
+`statusesBefore()` 与 auth 用的 `canAdvance()` 出自同一个数组,不存在两套顺序。
+失败只记 `console.error`,不挡 finalize 返回 —— 与旁边那句 session 同一个取向。
+
+## 反向验证:两次变异,被两组不同的用例咬住
+
+按[判断标准 1](#1-一道没见过它变红的门不值钱),新加的 7 条用例必须证明它们会红:
+
+| 变异 | 红的用例 |
+|---|---|
+| 阶梯里 `started` / `completed` 对调 | 三条**字面**用例(含「started → completed 必须能推得动」) |
+| `statusesBefore` 的 `slice` 改成含自己(off-by-one) | 「原地不动不算前进」+「每一对的方向都对」 |
+
+**顺带记一个盲区**:「阶梯上每一对的方向都对」那条对**调换顺序是无感的** ——
+它拿 `ENTITLEMENT_STATUS_ORDER` 的下标去断言 `canAdvance`,而后者也从同一个数组推导,
+所以顺序怎么换它都绿。钉住顺序的是那几条写死值的用例;这条守的是**推导逻辑**
+(第二次变异证明了它有用)。两组都要,少哪一组都有一半的变异漏过去。
+
+## 两件没做完的
+
+- **未部署实测**。「写库那一句真的写对了表」本地无处可测,按[判断标准 4](#4-断言的边界必须等于执行路径)
+  的后半条,它必须放到部署之后
+- **历史行未回填**。修之前答完的人还停在 `started`。是一次生产数据写入,动之前先确认
+
+Node 206 / Deno **124**(+7),七道门全绿。
+
+---
+
 ## 变更日志
+
+- 2026-08-07 — **修 `assessment_entitlements.status` 不跟着 finalize 走**:阶梯抽成
+  `_shared/entitlementStatus.ts` 两处共用,「只往前走」交给 `.in()` 过滤而不是先读后写;
+  7 条新用例经两次变异反向验证。**未部署、历史行未回填**
 
 - 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的七条)」七条(每条附它对应的那次返工)②「[七道门](#七道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
 - 2026-07-31 — rev1 初稿

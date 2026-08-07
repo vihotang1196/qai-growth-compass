@@ -16,6 +16,7 @@
  * 请求体里没有任何字段能影响 target ——lang 只影响 query,不影响路径。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { canAdvance } from '../_shared/entitlementStatus.ts';
 import { postAuthTarget, targetWithLang, type SessionStatus } from '../_shared/postAuthTarget.ts';
 import { sessionCookieHeader, signSession } from '../_shared/session.ts';
 
@@ -108,10 +109,11 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── 首次登录的时间戳与状态推进 ────────────────────────────
-    // status 只往前走:completed 的人再登录不能被打回 started
+    // status 只往前走:completed 的人再登录不能被打回 started。
+    // 阶梯在 _shared/entitlementStatus.ts,与 finalize 推 completed 用同一份
     const patch: Record<string, unknown> = {};
     if (!ent.first_login_at) patch.first_login_at = new Date().toISOString();
-    if (ent.status === 'pending' || ent.status === 'link_sent') patch.status = 'started';
+    if (canAdvance(ent.status, 'started')) patch.status = 'started';
     if (Object.keys(patch).length) {
       const { error } = await supa
         .from('assessment_entitlements')
