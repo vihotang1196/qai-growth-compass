@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Badge,
   Button,
   Card,
   CardBody,
@@ -8,44 +7,18 @@ import {
   Table,
   TableWrap,
   Tbody,
-  Td,
   Th,
   Thead,
   Tr,
 } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
 import { adminPost } from '@/lib/adminApi';
-
-interface RosterRow {
-  id: string;
-  name: string | null;
-  phone_e164: string | null;
-  phone_raw: string | null;
-  email_lower: string | null;
-  status: string;
-  first_login_at: string | null;
-  completed_at: string | null;
-  access_revoked_at: string | null;
-  cohort: { id: string; name: string } | null;
-  session: {
-    id: string;
-    status: string;
-    result: {
-      total: number;
-      tier: string;
-      weakest: string[];
-      pdf_status: string;
-      pdf_last_error: string | null;
-    } | null;
-  } | null;
-}
+import RosterRowView, { ROSTER_COLUMNS, type RosterRowData as RosterRow } from './RosterRow';
 
 interface RosterResponse {
   rows: RosterRow[];
   stats: { total: number; unparseablePhones: number; unparseableRatio: number; thresholdExceeded: boolean };
 }
-
-const fmt = (iso: string | null) => (iso ? iso.slice(0, 16).replace('T', ' ') : '—');
 
 /**
  * 名单管理页。
@@ -60,6 +33,11 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * 展开着错误详情的那一行。**一次只开一条** —— 同时铺开好几段千字错误
+   * 会把名单本身挤没了,而排查是一条一条看的。
+   */
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const [cohort, setCohort] = useState('');
   const [status, setStatus] = useState('');
@@ -271,113 +249,24 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
           <Table>
             <Thead>
               <Tr>
-                {[
-                  'admin.col.name',
-                  'admin.col.phone',
-                  'admin.col.email',
-                  'admin.col.cohort',
-                  'admin.col.status',
-                  'admin.col.firstLogin',
-                  'admin.col.completed',
-                  'admin.col.total',
-                  'admin.col.tier',
-                  'admin.col.weakest',
-                  'admin.col.pdf',
-                  'admin.col.actions',
-                ].map((k) => (
-                  <Th key={k}>{tk(k as Parameters<typeof tk>[0])}</Th>
+                {ROSTER_COLUMNS.map((k) => (
+                  <Th key={k}>{tk(k)}</Th>
                 ))}
               </Tr>
             </Thead>
             <Tbody>
               {rows.map((r) => (
-                /* 号码解析失败的行标红 —— flagged 用黄底,不引入新色相 */
-                <Tr key={r.id} flagged={r.phone_e164 === null}>
-                  <Td>{r.name ?? '—'}</Td>
-                  <Td>
-                    {r.phone_e164 ?? (
-                      <span className="font-bold">
-                        {r.phone_raw ?? '—'} · {tk('admin.phoneBad')}
-                      </span>
-                    )}
-                  </Td>
-                  <Td>{r.email_lower ?? '—'}</Td>
-                  <Td>{r.cohort?.name ?? '—'}</Td>
-                  <Td>
-                    <Badge tone={r.status === 'completed' ? 'ink' : 'muted'}>{r.status}</Badge>
-                    {r.access_revoked_at && (
-                      <Badge tone="accent" className="ml-1">
-                        {tk('admin.revoked')}
-                      </Badge>
-                    )}
-                  </Td>
-                  <Td>{fmt(r.first_login_at)}</Td>
-                  <Td>{fmt(r.completed_at)}</Td>
-                  <Td>{r.session?.result?.total ?? '—'}</Td>
-                  <Td>{r.session?.result?.tier ?? '—'}</Td>
-                  <Td>{r.session?.result?.weakest?.join(' / ') ?? '—'}</Td>
-                  <Td>
-                    {r.session?.result ? (
-                      <div className="flex flex-col gap-1">
-                        <Badge tone={r.session.result.pdf_status === 'ready' ? 'ink' : 'muted'}>
-                          {r.session.result.pdf_status}
-                        </Badge>
-                        {/* 失败原因原样展示 —— 「生成失败」那种话没法照着行动 */}
-                        {r.session.result.pdf_last_error && (
-                          <span className="max-w-[16rem] break-words text-xs opacity-60">
-                            {r.session.result.pdf_last_error}
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      '—'
-                    )}
-                  </Td>
-                  <Td>
-                    <div className="flex gap-1">
-                      {/* 查看报告要等 Stage 8 —— 现在禁用而不是隐藏,让人知道它会有 */}
-                      <Button size="sm" variant="ghost" disabled title="Stage 8">
-                        {tk('admin.action.report')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busyId === r.id || r.access_revoked_at !== null}
-                        onClick={() => void act('resend', r)}
-                      >
-                        {tk('admin.action.resend')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={busyId === r.id}
-                        onClick={() => void act('rotate', r)}
-                      >
-                        {tk('admin.action.rotate')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="solid"
-                        disabled={busyId === r.id || r.access_revoked_at !== null}
-                        onClick={() => void act('revoke', r)}
-                      >
-                        {tk('admin.action.revoke')}
-                      </Button>
-                      {/* 对任何非 ready 状态都给 —— finalize 那次触发可能丢,卡住的 pending
-                          否则没有出路(见 assessment-admin 的 render_pdf) */}
-                      {r.session?.result && r.session.result.pdf_status !== 'ready' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busyId === r.id}
-                          onClick={() => void renderPdf(r)}
-                        >
-                          {busyId === r.id ? tk('admin.pdf.rendering') : tk('admin.action.renderPdf')}
-                        </Button>
-                      )}
-                    </div>
-                  </Td>
-                </Tr>
+                <RosterRowView
+                  key={r.id}
+                  row={r}
+                  busy={busyId === r.id}
+                  errorOpen={openError === r.id}
+                  onToggleError={() => setOpenError((cur) => (cur === r.id ? null : r.id))}
+                  onResend={() => void act('resend', r)}
+                  onRotate={() => void act('rotate', r)}
+                  onRevoke={() => void act('revoke', r)}
+                  onRenderPdf={() => void renderPdf(r)}
+                />
               ))}
             </Tbody>
           </Table>
