@@ -191,10 +191,17 @@ Deno.serve(async (req: Request) => {
         const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
         if (!sessionId) return json({ error: 'missing session_id' }, 400);
 
-        // 先把计数与错误清掉,否则 render-pdf 会因为 attempts >= 3 直接拒
+        // 先把计数与错误清掉,否则 render-pdf 会因为 attempts >= 3 直接拒。
+        // pdf_status_at 一并盖上 —— 定时 sweep 用它算「这个状态放了多久」,
+        // 不写的话这条刚重置的 pending 会带着旧时间戳,下一次 sweep 立刻又抢着重跑一遍
         const { error: resetErr } = await supa
           .from('assessment_results')
-          .update({ pdf_status: 'pending', pdf_attempts: 0, pdf_last_error: null })
+          .update({
+            pdf_status: 'pending',
+            pdf_attempts: 0,
+            pdf_last_error: null,
+            pdf_status_at: new Date().toISOString(),
+          })
           .eq('session_id', sessionId);
         if (resetErr) throw resetErr;
 

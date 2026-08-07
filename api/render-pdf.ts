@@ -13,6 +13,7 @@ import { createClient } from '@supabase/supabase-js';
 import { existsSync, readdirSync } from 'node:fs';
 import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
+import { MAX_PDF_ATTEMPTS } from './_lib/pdfState.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -29,7 +30,6 @@ import { signRenderToken } from './_lib/renderToken.js';
  * 渲染失败多半是内容或字体问题,重试一百次还是一样。
  */
 
-const MAX_ATTEMPTS = 3;
 /** 探测串:这几个字若渲不出,说明中文字体压根没加载(见 glyphCheck 的分级) */
 const COMMON_PROBE = '盈利增长罗盘诊断报告';
 
@@ -397,13 +397,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .eq('session_id', sessionId)
       .maybeSingle();
     const attempts = (row?.pdf_attempts as number) ?? 0;
-    if (attempts >= MAX_ATTEMPTS) {
+    if (attempts >= MAX_PDF_ATTEMPTS) {
       // 已经用完次数 —— 不再自动重试,等 Admin 手动重置
       return res.status(409).json({ error: 'failed_permanent', attempts });
     }
     await supa
       .from('assessment_results')
-      .update({ pdf_status: 'rendering', pdf_attempts: attempts + 1 })
+      .update({ pdf_status: 'rendering', pdf_attempts: attempts + 1, pdf_status_at: new Date().toISOString() })
       .eq('session_id', sessionId);
   }
 
@@ -437,6 +437,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .update({
         pdf_path: path,
         pdf_status: 'ready',
+        pdf_status_at: new Date().toISOString(),
         pdf_last_error: glyph.message,
       })
       .eq('session_id', sessionId);
@@ -458,7 +459,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await supa
         .from('assessment_results')
         .update({
-          pdf_status: attempts >= MAX_ATTEMPTS ? 'failed_permanent' : 'failed',
+          pdf_status: attempts >= MAX_PDF_ATTEMPTS ? 'failed_permanent' : 'failed',
+          pdf_status_at: new Date().toISOString(),
           pdf_last_error: detail.slice(0, 1000),
         })
         .eq('session_id', sessionId);

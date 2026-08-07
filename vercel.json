@@ -11,12 +11,19 @@
     "api/render-pdf.ts": {
       "maxDuration": 60,
       "memory": 1769
+    },
+    "api/cron/pdf-sweep.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [
     {
       "path": "/api/cron/retention",
       "schedule": "17 3 * * *"
+    },
+    {
+      "path": "/api/cron/pdf-sweep",
+      "schedule": "*/10 * * * *"
     }
   ],
   "rewrites": [
