@@ -13,7 +13,7 @@
 
 **必读四节,按这个顺序:**
 
-1. **[判断标准](#判断标准--这个项目反复用到的十条)** —— 十条。它们不是格言,是每一条都对应一次真实的返工。
+1. **[判断标准](#判断标准--这个项目反复用到的十一条)** —— 十一条。它们不是格言,是每一条都对应一次真实的返工。
    不读这节,后面很多设计会显得像洁癖。
 2. **[七道门](#七道门--每一道都是撞出来的)** —— 构建链上的七道守卫各自守什么、**因为踩了什么坑才加的**。
    没有那个背景,下一个人会以为它们可以绕过。
@@ -190,7 +190,7 @@ GHL 付款 workflow → Webhook action → POST /assessment-ghl-webhook
 
 ---
 
-# 判断标准 —— 这个项目反复用到的十条
+# 判断标准 —— 这个项目反复用到的十一条
 
 **每一条都对应一次真实的返工,不是格言。** 括号里是它第一次出现的地方。
 
@@ -365,6 +365,32 @@ Unexpected status code: 404.
 
 **判定方法**:把约束改坏(`max-w-[16rem]` → `max-w-[2rem]`),如果没有任何断言变红,
 说明这个约束从来就没有被任何东西验证过 —— 它现在是否生效,只是运气。
+
+
+### 11. 新标准 / 新守卫上线,先对现有代码全量跑一遍 —— 第一批命中的往往是自己刚写的
+
+这个规律在本项目稳定到可以当预期用,而不是当巧合:
+
+| 上线的东西 | 第一个命中 |
+|---|---|
+| `check:dim` | **落地当天就判了 Showcase 自己违规** —— 那六个色块把维度名写在填充里 |
+| `check:api-imports` | 第一版误报了 `lambdaEnv.ts` **自己** |
+| `check:dep-sync` / `check:cross` | 各自的第一个真实收获都是**自身的盲区** |
+| `check:runtime-pin` | 第一版**永远绿** —— 命中的是这道门本身 |
+| [判断标准 10](#10-用-css-表达的意图没有渲染断言就要假设它没生效) | 立完的第一件事就抓到**同一次改动里新写的** `max-w-3xl` 同样没有渲染断言 |
+
+**为什么会这样**:定标准的人刚刚写过一批「符合直觉」的代码,而标准存在的理由正是
+直觉在这里不够用。所以最新的代码是违规密度最高的地方,不是最低的。
+
+推论一:**新守卫的第一次运行必须是全量,不能只跑 diff。** 只跑 diff 会让它从
+「盘点现状」退化成「守住增量」,而现状里那批才是它当初被立出来的原因。
+
+推论二:**第一批命中不要顺手改掉了事** —— 那是这条标准最好的一批标本,
+写进文档比修掉更有价值。上面这张表就是这么攒出来的。
+
+⚠️ 与[第 1 条](#1-一道没见过它变红的门不值钱)的关系:第 1 条是「门没见过变红」,
+本条是「门第一次变红时,红的是谁」。两条都指向同一件事 —— **门的『存在』不等于『有效』**,
+而验证有效性的最快办法是让它先咬自己一口。
 
 ---
 
@@ -595,7 +621,7 @@ qai-growth-compass/
 │   ├── [...path].ts                 # → Supabase Functions 代理 (D1)
 │   ├── render-pdf.ts                # Stage 9
 │   ├── font-probe.ts                # Stage 1,中文字体探针(保留当健康检查)
-│   └── cron/retry.ts                # Stage 11,GHL 写回 + PDF 双重试
+│   └── cron/retry.ts                # ⛔ 已过时:实际拆成两个,见 Stage 11 的 cron 清单
 ├── src/
 │   ├── config/
 │   │   ├── assessment-config.json   # ★ 唯一真相源,只读不改
@@ -2366,8 +2392,35 @@ Node 146 / Deno 117 / 跨运行时一致。
 判据验通即 Stage 7 收尾。以下三件**挂回 Stage 11**(它们本来就是 Stage 11「GHL 写回 + 重试」的活):
 
 - **tags**(tags_always + tags_conditional,含 assessment_mismatch)—— 纯新功能,不影响任何验证
-- **Vercel Cron 定时**(api/cron/ghl-retry.ts + vercel.json)—— sweep 现靠手动 curl
+- **Vercel Cron 定时** —— 见下面那张清单
 - **Admin「刷新字段映射」按钮** —— 现靠 syncToGhl 里的自愈 force-refresh 覆盖常见场景
+
+## Stage 11 要加的 cron 条目 —— 就这一条
+
+盘过一遍(`grep -rln 'Cron|定时' supabase/functions api`),需要排期的一共三处,
+现在两处已有,**缺的只有 GHL 写回重试**:
+
+| 目标 | handler | vercel.json | 状态 |
+|---|---|---|---|
+| `assessment-maintenance`(留存清理) | `api/cron/retention.ts` | `17 3 * * *` | ✅ 已排 |
+| PDF 兜底重跑 | `api/cron/pdf-sweep.ts` | `*/10 * * * *` | ✅ Stage 9 已做 |
+| `assessment-ghl-resync`(写回重试) | **`api/cron/ghl-retry.ts` 未建** | **未加** | ⛔ Stage 11 |
+
+⚠️ **[0.4 的文件树](#04-文件结构)那行已经过时**:它写的是
+`api/cron/retry.ts # Stage 11,GHL 写回 + PDF 双重试` —— **一个 handler 管两件**。
+实际 PDF 那半已经在 Stage 9 单独做成 `api/cron/pdf-sweep.ts` 了。
+照着 0.4 建「双重试」会把 PDF 那半**重做一遍**,而两个 sweep 同时扫同一批行
+会互相抢着重跑。**Stage 11 只建 GHL 那一半。**
+
+⚠️ **`assessment-ghl-resync` 的文件头写着「由 Vercel Cron 定时调」,而它从来没被排期过。**
+这句话在仓库里存在了整整一个 Stage,没有任何东西检查它成立 ——
+和[判断标准 10](#10-用-css-表达的意图没有渲染断言就要假设它没生效) 同形,
+只是介质从 CSS 换成了注释里的一句承诺。
+**要不要给 vercel.json 的 crons 与 `api/cron/*.ts` 加一道一致性守卫,等 Stage 11 一起看**
+—— 现在只有三条,加守卫的收益还不如把它记在这里。
+
+字段映射**不需要 cron**:10 分钟内存 TTL → `app_settings` → 回源三级,
+加上 Admin 那个 force-refresh 按钮就够,定时回源只会白打 GHL 的接口。
 
 **为什么它们一度在 Stage 7:** 判据不定,就验不了写回到底成没成,Stage 7 的验收(「手算分数与系统一致」延伸到「分数确实写进了 GHL」)就是假的。这个理由到判据定完用尽 —— 字段映射 / 判据 / sweep 是验证的必要前提,tags 不是。
 
@@ -3403,6 +3456,37 @@ retention 那条走 Vercel Cron → Edge Function,理由写在它的注释里:
 | 两个陈旧阈值对调 | 「rendering 的宽限必须比 pending 长」(**写死方向**的那条,判断标准 8) |
 | 去掉 `computed_at` 回落 | 「`pdf_status_at` 还是 null 时回落 computed_at」 |
 
+## 部署后怎么验:两条,不是一条
+
+库里现有的行是 `ready`,sweep 应该扫到 **0 条** —— 那本身是第一条断言
+(`scanned` 有数、`swept` 是 0,说明它跑了但没乱动),别把「没输出」当成「没跑」。
+
+造给它扫的行,**两条路径都要造**,因为它们走的是不同分支:
+
+```sql
+-- ① failed:立刻重跑,不看年龄
+update public.assessment_results
+set    pdf_status = 'failed', pdf_attempts = 0, pdf_status_at = now()
+where  session_id = '<那一条>';
+```
+
+```sql
+-- ② pending + 时间戳往回拨:这才是 waitUntil 丢了的那一类,验的是陈旧判断
+update public.assessment_results
+set    pdf_status = 'pending', pdf_attempts = 0,
+       pdf_status_at = now() - interval '10 minutes'
+where  session_id = '<那一条>';
+```
+
+**只造 ① 是不够的**:`failed` 那条分支根本不看年龄,跑通它证明不了陈旧判断成立 ——
+而陈旧判断正是这次为了 `pending` / `rendering` 新加一列的全部理由
+([判断标准 7](#7-能不能区分-a-和-b必须两边都有样本):要证明「它能区分该扫和不该扫」,
+两边都得有样本)。想更狠一点就再造一条 `pdf_status_at = now()` 的 `pending`,
+**它必须【不】被扫到**。
+
+⚠️ 两条 SQL 都带 `where`。不带的话会打到整张表 ——
+症状是「别人的报告坏了」,不是「我的测试没跑通」(名单页那次的教训)。
+
 ## 未做 / 未验
 
 - **未部署实测。** 「cron 真的被调用了、真的挑对了行」本地无处可测
@@ -3419,6 +3503,10 @@ Node **243**(+14)/ Deno 124,七道门全绿。
 
 ## 变更日志
 
+- 2026-08-08 — **判断标准增至十一条**:新增[第 11 条「新守卫先对现有代码全量跑」](#11-新标准--新守卫上线先对现有代码全量跑一遍--第一批命中的往往是自己刚写的)。
+  同时盘清 **Stage 11 只缺一条 cron**(GHL 写回重试),并就地标掉
+  [0.4 文件树](#04-文件结构)里那行过时的「双重试」—— 照它建会把 PDF 那半重做一遍,
+  两个 sweep 会互相抢着重跑同一批行
 - 2026-08-08 — **PDF 定时兜底 sweep**(Stage 9):扫 pending(陈旧 3 分)/ failed /
   rendering(陈旧 5 分),排除 ready 与 failed_permanent,并照抄端点的 `attempts < MAX` 守卫;
   新增 `pdf_status_at` 列(故意不加 trigger)与 `api/_lib/pdfState.ts` 纯函数;
@@ -3450,7 +3538,7 @@ Node **243**(+14)/ Deno 124,七道门全绿。
   `_shared/entitlementStatus.ts` 两处共用,「只往前走」交给 `.in()` 过滤而不是先读后写;
   7 条新用例经两次变异反向验证。**未部署、历史行未回填**
 
-- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的十条)」七条(每条附它对应的那次返工)②「[七道门](#七道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
+- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的十一条)」七条(每条附它对应的那次返工)②「[七道门](#七道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
 - 2026-07-31 — rev1 初稿
 - 2026-07-31 — rev2:PDF 异步化 + Storage;字体 CDN 化;GHL Inbound Webhook 替代 workflow ID;环境变量改名与新增;D1–D5 批准;新增 D6/D7
 - 2026-07-31 — rev4 **Stage 0 定稿**:「8 张表」约束解除,D8 采用第 9 张 `app_settings` 表;D9 定稿(标签独立于字段写入、TRANSIENT/CONFIG/AUTH 三类错误分流、错误具体到字段 key);字体源文件位置与 `.gitignore` 规则确定;0.12 字段清单标记作废(实际前缀为 `qai_assessment_*`);`assessment-config.json` 第三次未送达
