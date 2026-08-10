@@ -73,7 +73,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `f2302c8`(三条分支已合入)。测试基线:**Node 274 / Deno 132,七道门全绿**。
+当前分支基线:`main` = `596e2d2`。测试基线:**Node 287 / Deno 132,七道门全绿**。
 
 
 ---
@@ -4002,6 +4002,115 @@ bundle: fp=9a7c2fa4 iat=2023-11-14 | local: fp=afe8151a iat=2026-08-06
 
 ⚠️ 官方 troubleshooting 页面有一句说「已经不再可能轮换 legacy anon / service / JWT secret」,
 推荐直接迁移。**界面上有按钮不等于可用** —— 点之前先确认,报错的话迁移就得提前。
+
+---
+
+# 迁到 publishable / secret keys(legacy 已不能轮换)
+
+## 为什么这不是可选项
+
+service_role key 泄露。Legacy 那个 tab **没有 regenerate 按钮** ——
+只有 anon(Copy)、service_role(Reveal),和下方的 "Disable JWT-based API keys"。
+官方文档也这么说。**所以补救路径只有一条:迁到新 key,然后 Disable legacy。**
+
+⚠️ **Disable 是可逆的**(官方:迁移期内可随时 disable / re-enable),而且
+**anon 与 service_role 只能一起 disable**,没有分开的开关。
+
+⚠️ **Disable ≠ 那把泄露的 key 被销毁。** 它是「停用,而且任何有后台权限的人能再打开」。
+真正的销毁要等 legacy JWT secret 被 revoke(那是迁到 JWT signing keys 之后的另一件事)。
+所以按下 Disable 之后的正确心态是「已止血」,不是「已作废」。
+
+## 代码改了哪些,以及为什么不是一刀切
+
+**一刀切会毁掉「开回来」这条退路。** Disable 可逆意味着出问题要能回滚,
+而回滚之后代码得照样能跑。所以**两代并存,新的优先**:
+
+| 位置 | 改动 |
+|---|---|
+| `api/_lib/apiKeys.ts`(新) | 判代次 + 决定发哪些头 + 两代挑选。**三个运行时共用一份** |
+| `_shared/apiKeys.ts`(新) | Deno 侧一行 re-export(照 renderToken 的先例) |
+| `api/[...path].ts` | 头由 `supabaseKeyHeaders()` 决定;key 由 `pickPublishableKey()` 挑 |
+| `api/cron/retention.ts` | 同上,共用同一份判断 |
+| `_shared/supa.ts` | `pickSecretKey(SUPABASE_SECRET_KEYS, SUPABASE_SERVICE_ROLE_KEY)` |
+| `api/render-pdf.ts` / `api/cron/pdf-sweep.ts` | `pickSecretKeyFromPlainEnv()` |
+| `src/lib/supabase.ts` | `pickPublishableKey(VITE_…_PUBLISHABLE_KEY, VITE_…_ANON_KEY)` |
+| `scripts/seed-test-data.ts` | 同上 |
+| `scripts/smoke-deploy.mjs` | bundle 比对改成两代都接受(否则迁移后**假红**) |
+| `scripts/check-env.mjs` | 豁免平台注入的 `SUPABASE_SECRET_KEYS`;新增「二选一」标签 |
+
+**核心那条规则**:legacy 是 JWT → `apikey` **和** `Authorization: Bearer` 都发;
+新 key 不是 JWT → **只发 `apikey`**,进 Bearer 会被拒。
+判错的失败形态是**鉴权被拒**,而鉴权被拒从来不会说「你把 key 放错头了」——
+所以它有用例,四次变异都咬得住(新 key 也发 Bearer / legacy 不发 Bearer /
+优先顺序反过来 / 未知值当成新格式)。
+
+**「至少有一个」不是「都要有」**:三处 `missing` 检查都改了。
+把新变量并进「全都必须有」里,等于在配它之前就先 500 —— 滚动迁移根本走不通。
+
+**`check:env` 的清单原来在说假话**:两代都标「必须配置」,而实际是二选一
+(挑选逻辑在函数里,静态扫不出来);`SUPABASE_SECRET_KEYS` 被标成要人配,
+而它是平台注入的。这道门的全部理由就是「清单必须可信」,所以两条都修了 ——
+只改标签,不放宽任何检查。
+
+## 操作顺序(每一步都有退路)
+
+```
+1. 合这条分支 + 部署      ← 此时仍然吃 legacy,行为零变化
+2. Supabase 后台创建 publishable + secret key
+3. Vercel 加 4 个新变量(见下),legacy 那几个【先别删】
+4. 重新构建 + 部署         ← VITE_ 是 build-time,这一步不能省
+5. npm run deploy:functions ← Edge Function 要拿到 SUPABASE_SECRET_KEYS
+6. 按下 Disable JWT-based API keys
+7. 跑下面那份验收清单
+8. 有一条不过 → 立刻 re-enable,回来看日志;全过 → 删掉 legacy 那几个变量
+```
+
+**Vercel 要加的 4 个**(legacy 的 3 个先留着当退路):
+
+| 变量 | 值 |
+|---|---|
+| `SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…` |
+| `SUPABASE_SECRET_KEY` | `sb_secret_…` |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | 同 publishable(**build-time**) |
+| `SUPABASE_SECRET_KEY`(本地 shell) | 给 `npm run seed:test` |
+
+Edge Function 侧**什么都不用配** —— `SUPABASE_SECRET_KEYS` 是平台注入的。
+但**必须重新部署**:平台注入的变量在旧实例上不会变。
+
+## Disable 之后的验收清单
+
+**判据不是「代码改了」,是「Disable 之后每一条都真跑过」。**
+每条都写明怎么跑、看什么。⚠️ 任何一条不过,先 re-enable 再排查 —— 别边坏边查。
+
+| # | 路径 | 怎么跑 | 通过标准 |
+|---|---|---|---|
+| 1 | **代理链 + bundle key** | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base <域名>` | 6/6 通过。**含 bundle 那条** —— 它同时验了「重新构建过」 |
+| 2 | **Admin 登录** | 浏览器走一遍魔法链接登录 | 进得去名单页。这条走 `src/lib/supabase.ts` 那把 publishable key |
+| 3 | **名单页取数** | 登录后看 Roster | 15 条 seed + 真实行都在。这条走 `assessment-admin` → `_shared/supa.ts` 的 secret key |
+| 4 | **答题 → 报告** | 用一条 seed 的链接打开 `/report` | 报告完整。走 `assessment-report` + 代理链 |
+| 5 | **PDF 渲染** | 对一条 seed 点 Admin「重新生成」 | `pdf_status` 变 `ready`。走 render-pdf 的 secret key + Storage |
+| 6 | **分享卡** | 同上那次渲染 | 报告页出现两张卡(与 PDF 同一次渲染产出) |
+| 7 | **GHL 写回** | `curl -X POST <SUPABASE_URL>/functions/v1/assessment-ghl-resync -H "X-Internal-Secret: …"` | 200。走 `_shared/supa.ts` + GHL |
+| 8 | **cron: retention** | `curl <域名>/api/cron/retention -H "Authorization: Bearer $CRON_SECRET"` | 200。**这条专门验 header 那个改动** —— 它是手写 apikey 的两处之一 |
+| 9 | **cron: pdf-sweep** | `curl <域名>/api/cron/pdf-sweep -H "Authorization: Bearer $CRON_SECRET"` | 200 + `scanned` 有数。走 Vercel 侧 secret key |
+| 10 | **seed 脚本** | `SUPABASE_SECRET_KEY=… node scripts/seed-test-data.ts --dry-run` | 15 行照常。**dry-run 不写库**,但会验证 key 能建客户端 |
+
+**第 1、8 条是这次改动的直接靶子**(手写 header 的两处);
+**第 3、5、7 条是 Edge Function 侧 `SUPABASE_SECRET_KEYS` 的靶子**;
+**第 2 条是 build-time 那条的靶子**。其余是回归。
+
+⚠️ **第 8 条别只看 200。** retention 会真的删过期数据 —— 那是它的正常职责,
+但要知道你按了它。只想验 header 不想触发清理的话,看 Vercel 日志里那次
+cron 的既有执行记录也行,只是那不算「Disable 之后跑过」。
+
+## 没做完的
+
+- **没有对真环境跑过任何一条** —— 我这边没有凭据。上面十条要你按顺序跑
+- Vercel 的 legacy 变量在第 8 步之后才删。删之前那三个是唯一的退路
+- 之后还有一件独立的事:迁到 **JWT signing keys** 并 revoke legacy JWT secret ——
+  那才是让泄露的那把 key **永久失效**的一步。单独排
+
+Node **287**(+13)/ Deno 132,七道门全绿。
 
 ---
 

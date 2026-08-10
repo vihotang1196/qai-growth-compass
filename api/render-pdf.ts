@@ -20,6 +20,7 @@ import {
 import { signRenderToken } from './_lib/renderToken.js';
 import { MAX_PDF_ATTEMPTS } from './_lib/pdfState.js';
 import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
+import { pickSecretKeyFromPlainEnv } from './_lib/apiKeys.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -47,6 +48,7 @@ const COMMON_PROBE = '盈利增长罗盘诊断报告';
 const ENV = {
   INTERNAL_FN_SECRET: process.env.INTERNAL_FN_SECRET,
   SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   APP_BASE_URL: process.env.APP_BASE_URL,
   CDN_FONT_BASE: process.env.CDN_FONT_BASE ?? 'https://cdn.qiai.tech/fonts/',
@@ -518,7 +520,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'missing session_id', detail: 'expected { session_id: "<uuid>" }' });
   }
 
-  const supa = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
+  /**
+   * 【两代 secret key,新的优先】Disable 之后 legacy 不认;配好新 key 之前 legacy 还要能用。
+   * 两个都没有才报错 —— 见 _lib/apiKeys.ts。
+   */
+  const secretKey = pickSecretKeyFromPlainEnv(ENV.SUPABASE_SECRET_KEY, ENV.SUPABASE_SERVICE_ROLE_KEY);
+  if (!secretKey) {
+    console.error(
+      'server_misconfigured: neither SUPABASE_SECRET_KEY nor SUPABASE_SERVICE_ROLE_KEY is set',
+    );
+    return res.status(500).json({ error: 'server_misconfigured' });
+  }
+  const supa = createClient(env('SUPABASE_URL'), secretKey, {
     auth: { persistSession: false },
   });
 

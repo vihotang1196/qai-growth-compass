@@ -1,3 +1,4 @@
+import { pickPublishableKey } from '../../api/_lib/apiKeys';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 /**
@@ -16,10 +17,24 @@ let client: SupabaseClient | null = null;
 export function supabaseAuth(): SupabaseClient {
   if (client) return client;
   const url = import.meta.env.VITE_SUPABASE_URL;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  /**
+   * 【两代 key,新的优先】`VITE_SUPABASE_PUBLISHABLE_KEY` 是新的,
+   * `VITE_SUPABASE_ANON_KEY` 是 legacy 兜底。按下 Disable 之后 legacy 不认了。
+   *
+   * ⚠️ 两者都是 **build-time** 的:Vite 构建时替换成字面量编译进 dist。
+   * 所以换 key **必须重新构建 + 部署**,改环境变量不够 ——
+   * 漏了的症状是 Admin 登录坏掉,不会有任何一处说「key 旧了」。
+   * `npm run smoke` 里有一条专门守它。
+   */
+  const anonKey = pickPublishableKey(
+    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    import.meta.env.VITE_SUPABASE_ANON_KEY,
+  );
   if (!url || !anonKey) {
     // 这两个缺失时后台完全不可用,所以直接抛 —— 静默降级会让人以为是登录逻辑坏了
-    throw new Error('missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+    throw new Error(
+      'missing VITE_SUPABASE_URL, or neither VITE_SUPABASE_PUBLISHABLE_KEY nor VITE_SUPABASE_ANON_KEY',
+    );
   }
   client = createClient(url, anonKey, {
     auth: {

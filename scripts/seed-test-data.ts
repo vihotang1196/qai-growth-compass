@@ -34,6 +34,7 @@ import { mapOption, mapOptions } from '../src/lib/optionMap.ts';
 import { normalizePhone, phoneTail } from '../src/lib/phone.ts';
 import config from '../src/config/assessment-config.json' with { type: 'json' };
 import { createHash } from 'node:crypto';
+import { pickSecretKeyFromPlainEnv } from '../api/_lib/apiKeys.ts';
 
 const COUNT = 15;
 /** 所有种子数据的共同前缀 —— 既是幂等键,也是清理时唯一的判据 */
@@ -197,20 +198,22 @@ interface SurveyQuestion {
  */
 const ENV = {
   SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
 };
 
 function requireEnv(): { url: string; key: string } {
-  const missing = Object.entries(ENV)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
+  // 两代 secret key「至少有一个」,新的优先 —— Disable 之后 legacy 不认了
+  const key = pickSecretKeyFromPlainEnv(ENV.SUPABASE_SECRET_KEY, ENV.SUPABASE_SERVICE_ROLE_KEY);
+  const missing = [
+    ...(ENV.SUPABASE_URL ? [] : ['SUPABASE_URL']),
+    ...(key ? [] : ['SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY']),
+  ];
   if (missing.length) {
-    console.error(
-      `missing ${missing.join(', ')} —— 与 render-pdf 用的是同两个,在 Vercel / .env 里已有。`,
-    );
+    console.error(`missing ${missing.join(', ')} —— 与 render-pdf 用的是同一套,在你的 shell / .env 里。`);
     process.exit(1);
   }
-  return { url: ENV.SUPABASE_URL!, key: ENV.SUPABASE_SERVICE_ROLE_KEY! };
+  return { url: ENV.SUPABASE_URL!, key: key! };
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { pickPublishableKey, supabaseKeyHeaders } from '../_lib/apiKeys.js';
 
 /**
  * Vercel Cron → assessment-maintenance(PROGRESS.md S4-B)。
@@ -44,8 +45,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         headers: {
           'Content-Type': 'application/json',
           'X-Internal-Secret': internal,
-          apikey: process.env.SUPABASE_ANON_KEY ?? '',
-          Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY ?? ''}`,
+          /**
+           * 【两个头还是一个头由 key 的代次决定】新的 publishable key 不是 JWT,
+           * 放进 `Authorization: Bearer` 会被拒。与代理共用 _lib/apiKeys 那一份判断 ——
+           * 两处各写一遍迟早对不上,而对不上的症状是鉴权被拒,
+           * 而鉴权被拒从来不会说「你把 key 放错头了」。
+           */
+          ...supabaseKeyHeaders(
+            pickPublishableKey(process.env.SUPABASE_PUBLISHABLE_KEY, process.env.SUPABASE_ANON_KEY) ?? '',
+          ),
         },
         body: '{}',
       },

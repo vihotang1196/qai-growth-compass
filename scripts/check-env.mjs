@@ -38,10 +38,40 @@ const PRINT = process.argv.includes('--print');
  * 同类变量(Lambda 注入的 AWS_EXECUTION_ENV)撞上「必须进 .env.example」的规则 ——
  * 而把它写进模板反而会误导下一个人手动去设一个平台变量。盲区在「按平台判」这个前提上。
  */
+/**
+ * 【二选一的变量对】—— 值是「另一个的名字 + 理由」。
+ *
+ * 【为什么需要它】新旧两代 API key 并存期间,`SUPABASE_PUBLISHABLE_KEY` 与
+ * `SUPABASE_ANON_KEY` 是**配一个就够**。而本脚本的分类只看读取点有没有 `??` 默认值,
+ * 挑选逻辑在 `_lib/apiKeys.ts` 的函数里,静态扫不出来 —— 于是两代都被标成「必须配置」。
+ *
+ * 那是**清单在说假话**:它会让下一个人以为两个都得配,而这道门存在的全部理由
+ * 就是「清单必须可信」(漏掉的清单比没有清单更糟)。所以这里显式声明配对关系,
+ * 只影响打印出来的标签,不放宽任何检查 —— 两个名字仍然都必须出现在 .env.example 里,
+ * 因为模板要同时告诉人「有这两个」和「二选一」。
+ */
+const EITHER_OR = new Map([
+  ['SUPABASE_PUBLISHABLE_KEY', { with: 'SUPABASE_ANON_KEY', why: '新格式优先,legacy 兜底' }],
+  ['SUPABASE_ANON_KEY', { with: 'SUPABASE_PUBLISHABLE_KEY', why: '新格式优先,legacy 兜底' }],
+  ['SUPABASE_SECRET_KEY', { with: 'SUPABASE_SERVICE_ROLE_KEY', why: '新格式优先,legacy 兜底' }],
+  ['SUPABASE_SERVICE_ROLE_KEY', { with: 'SUPABASE_SECRET_KEY', why: '新格式优先,legacy 兜底' }],
+  ['VITE_SUPABASE_PUBLISHABLE_KEY', { with: 'VITE_SUPABASE_ANON_KEY', why: '新格式优先,legacy 兜底' }],
+  ['VITE_SUPABASE_ANON_KEY', { with: 'VITE_SUPABASE_PUBLISHABLE_KEY', why: '新格式优先,legacy 兜底' }],
+]);
+
 const PLATFORM_INJECTED = new Map([
   ['SUPABASE_URL', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
   ['SUPABASE_ANON_KEY', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
   ['SUPABASE_SERVICE_ROLE_KEY', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
+  [
+    'SUPABASE_SECRET_KEYS',
+    {
+      on: ['supabase'],
+      why:
+        '新格式 API key 的字典,Supabase Edge Functions 运行时自动注入(按名字索引的 JSON)。' +
+        '不该进 .env.example —— 写进去会让下一个人以为要手动配一个平台变量。',
+    },
+  ],
   ['SUPABASE_DB_URL', { on: ['supabase'], why: 'Supabase Edge Functions 运行时自动注入' }],
   [
     'AWS_EXECUTION_ENV',
@@ -278,8 +308,16 @@ for (const target of TARGETS) {
     const entry = found.get(name);
     const users = [...entry.files].sort();
     const injected = isPlatformInjected(name, target.id);
-    const tag = injected ? '平台注入' : entry.allDefaulted ? '可选(有默认)' : '必须配置';
-    lines.push(`    ${tag.padEnd(12)} ${name.padEnd(26)} ← ${users.join(', ')}`);
+    const pair = EITHER_OR.get(name);
+    const tag = injected
+      ? '平台注入'
+      : pair
+        ? '二选一'
+        : entry.allDefaulted
+          ? '可选(有默认)'
+          : '必须配置';
+    const note = pair && !injected ? `(与 ${pair.with} ${pair.why})` : '';
+    lines.push(`    ${tag.padEnd(12)} ${name.padEnd(30)} ← ${users.join(', ')}${note ? `  ${note}` : ''}`);
 
     // 有默认值的不强制进 .env.example —— 它不配也能跑
     if (target.requireInEnvExample && !injected && !entry.allDefaulted && documented && !documented.has(name)) {

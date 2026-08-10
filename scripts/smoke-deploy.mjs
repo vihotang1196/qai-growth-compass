@@ -145,11 +145,21 @@ const checks = [
      * 【拿不到本地值时报 unverified,不算通过】没设 SUPABASE_ANON_KEY 就说拿不出证据 ——
      * 让一次「没法比」伪装成「比过了」正是这套检查最该避免的事。
      */
-    name: '线上 bundle 里烘的 anon key = 当前的 SUPABASE_ANON_KEY(轮换后必须重新构建)',
+    name: '线上 bundle 里烘的公开 key = 当前的 publishable / anon key(换 key 后必须重新构建)',
     async run() {
-      const expected = process.env.SUPABASE_ANON_KEY;
+      /**
+       * 【比对对象跟着迁移走】迁移后前端用的是 publishable key,变量名和值都变了。
+       * 这条检查不跟着改的话,它会在迁移完成后开始【假红】——
+       * 而一条会假红的检查很快就会被人习惯性忽略,那正是它失效的方式
+       * (判断标准 1 的推论二:守卫误报和漏报一样坏)。
+       * 两代都接受,新的优先 —— 与运行时那几处同一个顺序。
+       */
+      const expected = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
       if (!expected) {
-        return 'unverified:本地没有 SUPABASE_ANON_KEY,无法比对 —— 这不算通过。轮换 key 之后请带上它再跑一次。';
+        return (
+          'unverified:本地既没有 SUPABASE_PUBLISHABLE_KEY 也没有 SUPABASE_ANON_KEY,无法比对 —— ' +
+          '这不算通过。换 key 之后请带上它再跑一次。'
+        );
       }
       const htmlRes = await fetch(`${base}/`, { redirect: 'follow' });
       if (!htmlRes.ok) return `unverified:首页 ${htmlRes.status}`;
@@ -177,9 +187,19 @@ const checks = [
        *   iat —— 从 JWT payload 解出来的签发时间(base64url,公开元数据)。
        *          它直接说明【哪一把是旧的】,而那才是这条错误要回答的问题。
        */
-      const bundled = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.exec(js)?.[0] ?? null;
+      /**
+       * 【两代 key 的形状不同,都要能抓到】legacy 是三段 JWT;
+       * 新 key 是 `sb_publishable_…`。只认 JWT 的话,迁移后这条错误会说
+       * 「没找到 JWT 形状的串」—— 那句话把「bundle 里是新 key」误报成「抓不到」。
+       */
+      const bundled =
+        /sb_publishable_[A-Za-z0-9_-]+/.exec(js)?.[0] ??
+        /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.exec(js)?.[0] ??
+        null;
       const fp = (v) => createHash('sha256').update(v).digest('hex').slice(0, 8);
-      const iat = (v) => {
+      /** legacy JWT 能解出签发日,新 key 不是 JWT —— 解不出就说 n/a,不装作有 */
+      const issued = (v) => {
+        if (!v || !v.startsWith('eyJ')) return 'n/a';
         try {
           const payload = JSON.parse(Buffer.from(v.split('.')[1], 'base64url').toString());
           return payload.iat ? new Date(payload.iat * 1000).toISOString().slice(0, 10) : '?';
@@ -187,10 +207,11 @@ const checks = [
           return '?';
         }
       };
+      const kind = (v) => (v?.startsWith('sb_publishable_') ? 'publishable' : v ? 'legacy' : '?');
       return (
-        `bundle 里的 anon key 与本地的不一致 —— 多半是改了环境变量但没重新构建部署。` +
-        `bundle: fp=${bundled ? fp(bundled) : '(没找到 JWT 形状的串)'} iat=${bundled ? iat(bundled) : '?'} | ` +
-        `local: fp=${fp(expected)} iat=${iat(expected)}`
+        `bundle 里的公开 key 与本地的不一致 —— 多半是改了环境变量但没重新构建部署。` +
+        `bundle: ${kind(bundled)} fp=${bundled ? fp(bundled) : '(抓不到)'} iat=${issued(bundled)} | ` +
+        `local: ${kind(expected)} fp=${fp(expected)} iat=${issued(expected)}`
       );
     },
   },

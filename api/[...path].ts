@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { pickPublishableKey, supabaseKeyHeaders } from './_lib/apiKeys.js';
 
 /**
  * `/api/*` → Supabase Edge Functions 的代理(PROGRESS.md D1)。
@@ -75,17 +76,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 所以日志里只列真正缺的那些 —— 两个一起列的话排查时还得逐个比对
   const env = {
     SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
     SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   };
-  const missing = Object.entries(env)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
+  /**
+   * 【两代 key 是「至少有一个」,不是「都要有」】
+   * 迁移期必须能滚动:先部署这份代码(那时 SUPABASE_PUBLISHABLE_KEY 还没配)→
+   * 再配新 key → 验 → 才按 Disable。把新变量并进「全都必须有」的检查里,
+   * 就等于在配它之前直接 500 —— 那会让滚动迁移这条路径根本走不通。
+   */
+  const publicKey = pickPublishableKey(env.SUPABASE_PUBLISHABLE_KEY, env.SUPABASE_ANON_KEY);
+  const missing = [
+    ...(env.SUPABASE_URL ? [] : ['SUPABASE_URL']),
+    ...(publicKey ? [] : ['SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY']),
+  ];
   if (missing.length) {
     console.error(`server_misconfigured: missing ${missing.join(', ')} (Vercel env)`);
     return res.status(500).json({ error: 'server_misconfigured' });
   }
   const base = env.SUPABASE_URL!;
-  const anonKey = env.SUPABASE_ANON_KEY!;
+  const anonKey = publicKey!;
 
   /**
    * 【不依赖 req.query.path 的形状】
@@ -125,10 +135,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (HOP_BY_HOP.has(key.toLowerCase())) continue;
     headers.set(key, Array.isArray(value) ? value.join(', ') : value);
   }
-  // Edge Functions 网关要求 apikey;anon key 是公开凭证,但由代理注入而不是
-  // 让浏览器带上 —— 少一个前端需要知道的东西
-  headers.set('apikey', anonKey);
-  headers.set('Authorization', `Bearer ${anonKey}`);
+  /**
+   * Edge Functions 网关要求 apikey;公开 key 由代理注入而不是让浏览器带,
+   * 这样前端 bundle 里那把即使过期也不影响这条链。
+   *
+   * 【两个头还是一个头,由 key 的代次决定】legacy 是 JWT,历来两个头都发;
+   * 新的 publishable key 不是 JWT,**放进 `Authorization: Bearer` 会被拒**。
+   * 判断在 _lib/apiKeys.ts(有用例)—— 不在这里就地写,因为 retention cron
+   * 也要同一份判断,两处各写一遍迟早对不上(判断标准 3)。
+   */
+  for (const [h, v] of Object.entries(supabaseKeyHeaders(anonKey))) headers.set(h, v);
 
   // 真实客户 IP 透传给函数用于限流。Vercel 的 x-forwarded-for 已经在 headers 里,
   // 这里显式再钉一次,避免上游改写

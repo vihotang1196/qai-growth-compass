@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { pickSecretKeyFromPlainEnv } from '../_lib/apiKeys.js';
 import {
   MAX_PDF_ATTEMPTS,
   pdfSweepReason,
@@ -46,19 +47,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const env = {
     SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
     APP_BASE_URL: process.env.APP_BASE_URL,
     INTERNAL_FN_SECRET: process.env.INTERNAL_FN_SECRET,
   };
+  /**
+   * 【两代 secret key 是「至少有一个」】新的优先(Disable 之后 legacy 不认了),
+   * legacy 兜底(配好新 key 之前、以及 Disable 被开回来时)。
+   * 并进「全都必须有」的检查会让滚动迁移走不通 —— 配新 key 之前就先 500 了。
+   */
+  const secretKey = pickSecretKeyFromPlainEnv(env.SUPABASE_SECRET_KEY, env.SUPABASE_SERVICE_ROLE_KEY);
   const missing = Object.entries(env)
-    .filter(([, v]) => !v)
+    .filter(([k, v]) => !v && k !== 'SUPABASE_SECRET_KEY' && k !== 'SUPABASE_SERVICE_ROLE_KEY')
     .map(([k]) => k);
+  if (!secretKey) missing.push('SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY');
   if (missing.length) {
     console.error(`server_misconfigured: missing ${missing.join(', ')} (Vercel env)`);
     return res.status(500).json({ error: 'server_misconfigured' });
   }
 
-  const supa = createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
+  const supa = createClient(env.SUPABASE_URL!, secretKey!, {
     auth: { persistSession: false },
   });
 
