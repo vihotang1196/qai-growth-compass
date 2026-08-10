@@ -29,7 +29,9 @@
     "config:check": "node scripts/apply-config.mjs --check",
     "config:apply": "node scripts/apply-config.mjs",
     "check:api-imports": "node scripts/check-api-imports.mjs",
-    "check:runtime-pin": "node scripts/check-runtime-pin.mjs"
+    "check:runtime-pin": "node scripts/check-runtime-pin.mjs",
+    "seed:test": "node scripts/seed-test-data.ts",
+    "seed:test:clean": "node scripts/seed-test-data.ts --clean --yes"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",
