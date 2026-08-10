@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyGlyphReport, needsAttention, type GlyphScan } from '../../api/_lib/glyphCheck';
+import {
+  classifyGlyphReport,
+  mergeGlyphScans,
+  needsAttention,
+  type GlyphScan,
+} from '../../api/_lib/glyphCheck';
 
 /**
  * 测试数据里的中日韩字符从【码位】构造,不写成字符串字面量。
@@ -104,5 +109,88 @@ describe('needsAttention', () => {
     expect(needsAttention('inconclusive')).toBe(true);
     expect(needsAttention('partial')).toBe(false);
     expect(needsAttention('ok')).toBe(false);
+  });
+
+  it('incomplete needs attention too — a partial verdict read as a full one is the bug we just had', () => {
+    expect(needsAttention('incomplete')).toBe(true);
+  });
+});
+
+const clean: GlyphScan = { commonMissing: [], otherTofu: [], otherBlank: [], scanned: 40 };
+
+describe('mergeGlyphScans keeps evidence from every page', () => {
+  it('unions the character lists and sums the counts', () => {
+    /**
+     * 【为什么不是「取最严重的那一页」】缺字是逐字符的事实,不是页面的属性:
+     * 报告页缺 A、分享卡缺 B,两个都要报出来。只留一页等于丢掉另一页的证据。
+     */
+    const a: GlyphScan = { commonMissing: ['A'], otherTofu: ['X'], otherBlank: [], scanned: 30 };
+    const b: GlyphScan = { commonMissing: [], otherTofu: ['Y'], otherBlank: ['Z'], scanned: 12 };
+    const m = mergeGlyphScans([a, b]);
+    expect(m.commonMissing).toEqual(['A']);
+    expect(m.otherTofu).toEqual(['X', 'Y']);
+    expect(m.otherBlank).toEqual(['Z']);
+    expect(m.scanned).toBe(42);
+  });
+
+  it('dedupes a character that both pages are missing', () => {
+    const one: GlyphScan = { commonMissing: [], otherTofu: ['X'], otherBlank: [], scanned: 5 };
+    expect(mergeGlyphScans([one, one]).otherTofu).toEqual(['X']);
+  });
+
+  it('an empty list of scans is inconclusive, not ok', () => {
+    // 一页都没扫成 —— 那是「我们不知道」,不是「没问题」
+    expect(classifyGlyphReport(mergeGlyphScans([])).severity).toBe('inconclusive');
+  });
+});
+
+describe('a verdict must not claim more coverage than it has', () => {
+  it('clean glyphs but an unscanned page is NOT ok', () => {
+    /**
+     * 这是分享卡那次的直接回归断言:管线渲了 /report 与 /share-card,
+     * 扫描只跑在 /report 上 —— 于是 verdict 说 ok,而它根本没看过卡。
+     * 缺一个字符是具体问题;**扫描范围小于渲染范围是结构问题**。
+     */
+    const v = classifyGlyphReport(clean, { visited: ['/report', '/share-card'], scanned: ['/report'] });
+    expect(v.severity).toBe('incomplete');
+    expect(v.message).toContain('/share-card');
+  });
+
+  it('says which page was missed, not just that something was', () => {
+    // 「覆盖不全」没法照着行动,「/share-card 没被扫」可以 —— 判断标准 9
+    const v = classifyGlyphReport(clean, { visited: ['/report', '/og-image'], scanned: ['/report'] });
+    expect(v.message).toContain('/og-image');
+    expect(v.message).not.toContain('/report,');
+  });
+
+  it('a real tofu finding still keeps its own severity, and still reports the gap', () => {
+    /**
+     * 缺口【无论如何】都要附在 message 上。只在「否则就是 ok」时才说的话,
+     * 一旦同时有 tofu,缺口就被吞掉了 —— 而那正是「结论看起来完整」的老毛病。
+     */
+    const tofu: GlyphScan = { commonMissing: [], otherTofu: ['X'], otherBlank: [], scanned: 40 };
+    const v = classifyGlyphReport(tofu, { visited: ['/report', '/share-card'], scanned: ['/report'] });
+    expect(v.severity).toBe('partial');
+    expect(v.message).toContain('GLYPH_PARTIAL');
+    expect(v.message).toContain('/share-card');
+  });
+
+  it('full coverage is still plain ok', () => {
+    // 反向锁:上面几条不是恒真 —— 扫遍了就该干净地 ok
+    const v = classifyGlyphReport(clean, { visited: ['/report', '/share-card'], scanned: ['/report', '/share-card'] });
+    expect(v.severity).toBe('ok');
+    expect(v.message).toBeNull();
+  });
+
+  it('no coverage argument at all behaves exactly as before', () => {
+    // 老调用点(probe 之类)不传 coverage,不能因此变成 incomplete
+    expect(classifyGlyphReport(clean).severity).toBe('ok');
+  });
+
+  it('scanning a page that was never visited is not a gap', () => {
+    // 只有「渲了却没扫」是问题;反过来不是
+    expect(
+      classifyGlyphReport(clean, { visited: ['/report'], scanned: ['/report', '/share-card'] }).severity,
+    ).toBe('ok');
   });
 });

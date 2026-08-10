@@ -11,7 +11,12 @@ import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
 import { existsSync, readdirSync } from 'node:fs';
-import { classifyGlyphReport, needsAttention, type GlyphScan } from './_lib/glyphCheck.js';
+import {
+  classifyGlyphReport,
+  mergeGlyphScans,
+  needsAttention,
+  type GlyphScan,
+} from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
 import { MAX_PDF_ATTEMPTS } from './_lib/pdfState.js';
 import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
@@ -142,6 +147,17 @@ interface RenderOutcome {
  * 真实渲染管线。正常路径与 probe 共用这一个函数 —— 见文件头。
  */
 /**
+ * 扫当前这一页的字形。**等 document.fonts.ready 之后再扫** ——
+ * 字体还没就位时扫出来的方块是假的。
+ */
+async function scanCurrentPage(
+  page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>['newPage']>>,
+): Promise<GlyphScan> {
+  await page.evaluateHandle('document.fonts.ready');
+  return (await page.evaluate(scanGlyphsInPage, COMMON_PROBE)) as GlyphScan;
+}
+
+/**
  * 截两张分享卡。**任何失败都在这里被吃掉**,只回一条 error 字符串。
  *
  * 尺寸与元素 id 来自 `_lib/shareCard`,页面那边读的是同一份 —— 两边各写一份的话,
@@ -151,7 +167,12 @@ async function renderShareCards(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>['newPage']>>,
   appBase: string,
   rt: string,
-): Promise<{ images: { suffix: string; png: Buffer }[]; error: string | null }> {
+): Promise<{
+  images: { suffix: string; png: Buffer }[];
+  error: string | null;
+  /** 卡页自己的字形扫描;渲染失败时为 null(那时也确实没扫到) */
+  scan: GlyphScan | null;
+}> {
   try {
     await page.setViewport({
       width: SHARE_CARD_VIEWPORT.width,
@@ -164,7 +185,15 @@ async function renderShareCards(
     });
     // 与报告页同一个取向:等页面自己说画完了,不 sleep
     await page.waitForFunction('window.__CARD_READY__ === true', { timeout: 20_000 });
-    await page.evaluateHandle('document.fonts.ready');
+
+    /**
+     * 【卡页也要扫】分享卡上线那天扫描没跟着动,于是「glyph: ok」从那天起就不完整了。
+     * 缺一个字符是具体问题,**扫描范围小于渲染范围是结构问题** ——
+     * 它让一个不完整的结论看起来完整。
+     * 这里不是靠「记得加一行」保证的:renderReport 末尾会比对
+     * 「导航过的路径」与「扫过的路径」,漏了会写进 verdict(见 GlyphCoverage)。
+     */
+    const scan = await scanCurrentPage(page);
 
     const images: { suffix: string; png: Buffer }[] = [];
     for (const size of SHARE_CARD_SIZES) {
@@ -179,11 +208,11 @@ async function renderShareCards(
       }
       images.push({ suffix: size.suffix, png: Buffer.from(await el.screenshot({ type: 'png' })) });
     }
-    return { images, error: null };
+    return { images, error: null, scan };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error(`share card render failed (PDF is unaffected): ${detail}`);
-    return { images: [], error: detail.slice(0, 500) };
+    return { images: [], error: detail.slice(0, 500), scan: null };
   }
 }
 
@@ -295,6 +324,32 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
     await page.setViewport({ width: 900, height: 1400, deviceScaleFactor: 2 });
 
     /**
+     * ── 这次渲染到底访问了哪些页 ──
+     *
+     * 【为什么用运行时采集,而不是一份手写清单】分享卡上线那天,扫描代码没跟着动:
+     * 它只跑在报告页上,而管线已经多渲了一页。于是「glyph: ok」从那天起就是不完整的结论。
+     * 手写清单挡不住下一次 —— 再加一个渲染产物(OG image、别的尺寸),
+     * 清单照样要靠人记得改,那就是同一个 bug 的下一次。
+     *
+     * framenavigated 采集的是**真的发生过的导航**。末尾比对「访问过」与「扫过」,
+     * 漏了就写进 verdict(severity 变 incomplete),不需要任何人记得。
+     * 这比加一道 grep `page.goto` 的构建门更准:门守的是源码写法,这个守的是实际行为。
+     */
+    const visited = new Set<string>();
+    page.on('framenavigated', (frame) => {
+      if (frame !== page.mainFrame()) return;
+      try {
+        const u = new URL(frame.url());
+        // about:blank 与 devtools 之类不算产物
+        if (u.protocol === 'http:' || u.protocol === 'https:') visited.add(u.pathname);
+      } catch {
+        // 拿不到合法 URL 就不记 —— 记一个垃圾值只会制造假缺口
+      }
+    });
+    const scannedPaths = new Set<string>();
+    const scans: GlyphScan[] = [];
+
+    /**
      * 【把页面侧的事情记下来 —— 超时不是「等久一点」能解决的】
      * 30 秒等不到 __REPORT_READY__,调到 50 秒大概率还是等不到,只是把一个确定的失败
      * 变成一个更慢的失败。真正需要的是知道页面那边发生了什么:它报了什么错、哪个请求失败了。
@@ -377,10 +432,8 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
         `${err instanceof Error ? err.message : String(err)} || page=${JSON.stringify(facts)}`,
       );
     }
-    await page.evaluateHandle('document.fonts.ready');
-
-    const scan = (await page.evaluate(scanGlyphsInPage, COMMON_PROBE)) as GlyphScan;
-    const glyph = classifyGlyphReport(scan);
+    scans.push(await scanCurrentPage(page));
+    scannedPaths.add(new URL(page.url()).pathname);
 
     const pdf = Buffer.from(
       await page.pdf({
@@ -404,6 +457,21 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
      * 这与整个异步化是同一个取向:主交付不受附属品拖累。
      */
     const cards = await renderShareCards(page, appBase, rt);
+    if (cards.scan) {
+      scans.push(cards.scan);
+      scannedPaths.add(new URL(page.url()).pathname);
+    }
+
+    /**
+     * 【分级放到最后,因为它现在要看全部产物】
+     * 以前 classify 紧跟报告页那次扫描 —— 那正是它只覆盖一页的原因。
+     * 现在它拿到的是合并后的扫描结果 + 覆盖情况。
+     */
+    const scan = mergeGlyphScans(scans);
+    const glyph = classifyGlyphReport(scan, {
+      visited: [...visited],
+      scanned: [...scannedPaths],
+    });
 
     return { pdf, glyph, scan, cards };
   } finally {
