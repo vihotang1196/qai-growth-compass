@@ -17,6 +17,8 @@ import RosterRowView, { ROSTER_COLUMNS, type RosterRowData as RosterRow } from '
 
 interface RosterResponse {
   rows: RosterRow[];
+  /** 服务端数出来的测试行条数 —— 前端隐藏它们时要能说出「藏了几条」 */
+  testRows?: number;
   stats: { total: number; unparseablePhones: number; unparseableRatio: number; thresholdExceeded: boolean };
 }
 
@@ -44,6 +46,13 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
   const [minScore, setMinScore] = useState('');
   const [maxScore, setMaxScore] = useState('');
   const [badPhoneOnly, setBadPhoneOnly] = useState(false);
+  /**
+   * 【默认隐藏测试数据】运营看名单时要的是真实学员。
+   * 但要有开关 —— 造完数据得能看见它们,否则只能去数据库里确认,那不算能用。
+   * 注意这只是**显示偏好**:CSV 导出在服务端无条件剔除测试行,不看这个开关
+   * (让一个开关决定要不要给假联系人发消息,那种耦合太危险)。
+   */
+  const [showTest, setShowTest] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,6 +84,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
     const min = minScore === '' ? null : Number(minScore);
     const max = maxScore === '' ? null : Number(maxScore);
     return (data?.rows ?? []).filter((r) => {
+      if (!showTest && r.cohort?.is_test) return false;
       if (cohort && r.cohort?.id !== cohort) return false;
       if (status && r.status !== status) return false;
       if (badPhoneOnly && r.phone_e164 !== null) return false;
@@ -84,7 +94,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
       if (max !== null && (total === null || total > max)) return false;
       return true;
     });
-  }, [data, cohort, status, minScore, maxScore, badPhoneOnly]);
+  }, [data, cohort, status, minScore, maxScore, badPhoneOnly, showTest]);
 
   /**
    * 重新生成 PDF —— 不加确认框(重置只是重渲一次,误点成本很低;确认框会让人形成
@@ -170,6 +180,18 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
         </Card>
       )}
 
+      {/*
+        藏了几条必须说出来 —— 否则「这批一条都没有」和「都被开关藏起来了」
+        在页面上长得一模一样,而那正是我造完数据后第一个会误判的地方。
+      */}
+      {!showTest && (data?.testRows ?? 0) > 0 && (
+        <Card padding="sm">
+          <CardBody className="font-body text-sm opacity-70">
+            {tk('admin.testHidden').replace('{n}', String(data?.testRows ?? 0))}
+          </CardBody>
+        </Card>
+      )}
+
       <Card padding="sm">
         <CardBody className="flex flex-wrap items-end gap-3">
           <select
@@ -220,6 +242,20 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
               className="h-5 w-5 border-brutal border-line"
             />
             {tk('admin.filter.badPhoneOnly')}
+          </label>
+          {/*
+            测试数据开关 —— 只影响这张表的显示。
+            **CSV 导出不看它**(服务端无条件剔除):让一个前端开关决定要不要
+            给假联系人发消息,那种耦合出错时没有任何迹象。
+          */}
+          <label className="flex items-center gap-2 font-body text-sm">
+            <input
+              type="checkbox"
+              checked={showTest}
+              onChange={(e) => setShowTest(e.target.checked)}
+              className="h-5 w-5 border-brutal border-line"
+            />
+            {tk('admin.showTest')}
           </label>
           <Button size="sm" variant="outline" onClick={() => void load()}>
             {tk('admin.refresh')}
