@@ -35,7 +35,7 @@ function makeRow(over: Partial<RosterRowData> = {}): RosterRowData {
     first_login_at: '2026-08-01T10:00:00Z',
     completed_at: '2026-08-01T10:30:00Z',
     access_revoked_at: null,
-    cohort: { id: 'c1', name: 'Batch 1' },
+    cohort: { id: 'c1', name: 'Batch 1', is_test: false },
     session: {
       id: 'ses-1',
       status: 'completed',
@@ -190,6 +190,20 @@ describe('the re-generate button keeps its place instead of appearing and disapp
     const count = (html: string) => (actionsCell(html).match(/<button/g) ?? []).length;
     expect(count(render(ready()))).toBe(count(render(makeRow())));
     expect(count(render(ready()))).toBe(5);
+  });
+
+  it('a test-cohort row is labelled so, once it is shown at all', () => {
+    /**
+     * 名单默认隐藏测试行,但一旦显示出来就必须看得出哪几条是假的 ——
+     * 显示了却分不清,比不显示更糟:运营会把演示记录当成真实学员去跟进。
+     */
+    const html = render(makeRow({ cohort: { id: 'c9', name: 'Demo', is_test: true } }));
+    expect(html).toContain(zh('admin.testBadge'));
+  });
+
+  it('a real row carries no test badge', () => {
+    // 反向锁:徽章不是每行都有
+    expect(render(makeRow())).not.toContain(zh('admin.testBadge'));
   });
 
   it('a share card failure never makes the PDF look broken', () => {

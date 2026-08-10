@@ -11,7 +11,7 @@ export interface RosterRowData {
   first_login_at: string | null;
   completed_at: string | null;
   access_revoked_at: string | null;
-  cohort: { id: string; name: string } | null;
+  cohort: { id: string; name: string; is_test: boolean } | null;
   session: {
     id: string;
     status: string;
@@ -103,7 +103,15 @@ export default function RosterRow({
           )}
         </Td>
         <Td>{r.email_lower ?? '—'}</Td>
-        <Td>{r.cohort?.name ?? '—'}</Td>
+        <Td>
+          {r.cohort?.name ?? '—'}
+          {/* 测试批次当场标出来 —— 显示出来了却看不出哪几条是假的,比不显示更糟 */}
+          {r.cohort?.is_test && (
+            <Badge tone="accent" className="ml-1">
+              {tk('admin.testBadge')}
+            </Badge>
+          )}
+        </Td>
         <Td>
           <Badge tone={r.status === 'completed' ? 'ink' : 'muted'}>{r.status}</Badge>
           {r.access_revoked_at && (

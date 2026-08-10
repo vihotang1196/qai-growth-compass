@@ -40,7 +40,7 @@ interface RosterRow {
   completed_at: string | null;
   link_sent_at: string | null;
   access_revoked_at: string | null;
-  cohort: { id: string; name: string } | null;
+  cohort: { id: string; name: string; is_test: boolean } | null;
   session: {
     id: string;
     status: string;
@@ -124,8 +124,22 @@ Deno.serve(async (req: Request) => {
         return json(await roster(supa));
 
       case 'export': {
+        /**
+         * 【导出一律剔掉测试行,而且不接受任何参数来改这件事】
+         * 导出的 CSV 会被拿去做 GHL 分群 —— 测试行混进去就是**给假联系人发消息**。
+         * 名单页那个「显示测试数据」开关是前端的显示偏好,它【不能】影响这里:
+         * 让一个开关的状态决定要不要给假联系人发消息,那种耦合太危险,
+         * 而且出错时没有任何迹象(导出成功、行数看起来也合理)。
+         * 所以过滤放在服务端、无条件、不看 body。
+         */
         const data = await roster(supa);
-        return json({ filename: 'compass-roster.csv', csv: rosterCsv(data.rows) });
+        const real = data.rows.filter((r) => r.cohort?.is_test !== true);
+        const dropped = data.rows.length - real.length;
+        if (dropped > 0) {
+          // 说出来 —— 「导了 20 行」和「导了 20 行、另有 5 行是测试数据被剔掉」不是一回事
+          console.log(`admin ${verdict.email} exported ${real.length} row(s), excluded ${dropped} test row(s)`);
+        }
+        return json({ filename: 'compass-roster.csv', csv: rosterCsv(real), excludedTestRows: dropped });
       }
 
       case 'resend':
@@ -264,7 +278,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
     .select(
       `id, name, phone_e164, phone_raw, email_lower, status,
        first_login_at, completed_at, link_sent_at, access_revoked_at,
-       cohort:assessment_cohorts(id, name),
+       cohort:assessment_cohorts(id, name, is_test),
        session:assessment_sessions(
          id,
          status,
@@ -275,11 +289,19 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
   if (error) throw error;
 
   const rows = (data ?? []) as unknown as RosterRow[];
-  const total = rows.length;
-  const unparseablePhones = rows.filter((r) => r.phone_e164 === null).length;
+  /**
+   * 【统计只看真实行】号码解析失败率是一条运营阈值(>2% 就说明 GHL 里号码质量比预期差),
+   * 而测试数据的号码是我们自己造的、必然干净 —— 混进去只会把比例稀释,
+   * 让一个真实的数据质量问题看起来不到阈值。
+   */
+  const realRows = rows.filter((r) => r.cohort?.is_test !== true);
+  const total = realRows.length;
+  const unparseablePhones = realRows.filter((r) => r.phone_e164 === null).length;
 
   return {
     rows,
+    /** 测试行照常返回 —— 前端那个开关要能把它们显示出来;统计与导出各自剔除 */
+    testRows: rows.length - realRows.length,
     stats: {
       total,
       unparseablePhones,

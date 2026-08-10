@@ -9,6 +9,7 @@
  * 都在这里定好,前端不猜(PROGRESS 0.9)。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { verifyRenderToken } from '../_shared/renderToken.ts';
 import { missingKeys } from '../_shared/env.ts';
@@ -199,24 +200,22 @@ Deno.serve(async (req: Request) => {
     const { data: allRows, error: allErr } = await supa
       .from('assessment_results')
       .select(
-        'dim_scores, total, tier, session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id))',
+        // cohort.is_test 一路嵌下来 —— 少了它,buildBaselinePools 会把测试行当成真实行
+        'dim_scores, total, tier, session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
       )
       .eq('session.status', 'completed');
     if (allErr) throw allErr;
 
-    const norm = (r: { dim_scores: unknown; total: number; tier: string }): ResultRow => ({
-      dimensions: (r.dim_scores ?? {}) as Record<string, number>,
-      total: r.total,
-      tier: r.tier,
-    });
-    const globalRows: ResultRow[] = (allRows ?? []).map(norm);
-    const cohortRows: ResultRow[] = (allRows ?? [])
-      .filter((r) => {
-        // deno-lint-ignore no-explicit-any
-        const cid = (r as any).session?.entitlement?.cohort_id;
-        return ent.cohort_id !== null && cid === ent.cohort_id;
-      })
-      .map(norm);
+    /**
+     * 【分池交给纯函数,不在这里就地 filter】
+     * 「测试数据不许进全局池」这条规则一旦只活在一句 filter 里,就没有任何东西能断言它 ——
+     * 而它的失败形态是最不该出错的那一处:新批次第一个学员的报告,基准是一堆假数据,
+     * 而报告看起来完全正常。见 _shared/baselinePools.ts 与它的用例。
+     */
+    const { globalRows, cohortRows } = buildBaselinePools(
+      (allRows ?? []) as unknown as RawBaselineRow[],
+      ent.cohort_id as string | null,
+    );
 
     const baseline = selectBaseline(cohortRows, globalRows, DIM_KEYS, MIN_N);
 
