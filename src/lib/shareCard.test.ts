@@ -116,6 +116,29 @@ describe('the share card must not leak the diagnostic', () => {
   });
 });
 
+describe('the card itself is pure content — no UI controls', () => {
+  /**
+   * 【为什么这一组与 shareCardChrome.test.ts 是两半,不能只留一个】
+   * 那一组挂 MemoryRouter 走真实路由,守的是**全局布局漏到卡上**(EN 按钮那次)。
+   * 但 SSR 下 `/share-card` 的 ShareCard 渲出来是 `null`(数据是 useEffect 拉的)——
+   * 所以那一组**根本没看到卡面本身**。卡面自己有没有混进交互元素,只能在这里断言。
+   * 两半合起来才等于「截图里不会出现 UI 控件」。
+   */
+  const INTERACTIVE = ['<button', '<nav', '<a ', '<input', '<select', '<textarea', '<form'];
+
+  it('carries no interactive element', () => {
+    const html = render();
+    for (const tag of INTERACTIVE) {
+      expect(html, `${tag} must not appear on the card`).not.toContain(tag);
+    }
+  });
+
+  it('carries no tabindex or click handler surface', () => {
+    // 就算不是 button,一个可聚焦的东西也不该在一张要发朋友圈的图上
+    expect(render()).not.toContain('tabindex');
+  });
+});
+
 describe('the sizes are what the screenshotter expects', () => {
   it('renders one element per declared size, at that exact pixel box', () => {
     /**
