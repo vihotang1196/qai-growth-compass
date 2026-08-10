@@ -44,6 +44,13 @@
   前者会强制先过 verify。
 - **改过 secret 之后必须重新部署函数。** `supabase secrets set` 成功 ≠ 函数拿到新值,
   这条烧过三轮,详见 [那一节](#探针空白的根因fontconfig-不扫-chromiumfont-的落点)。
+- **改过任何 `VITE_` 前缀的变量,必须重新构建 + 部署 —— 改环境变量不够。**
+  Vite 在**构建时**把 `VITE_*` 替换成字面量编译进 `dist`,所以线上产物里那份值
+  与 Vercel 环境变量里那份是**两个时刻的两个东西**。
+  漏了重新构建的症状**不会说「值旧了」**:轮换 anon key 时它表现为 **Admin 登录坏掉**
+  (前端拿一把已失效的 key 去 Supabase Auth,得到一个语义无关的鉴权错误)。
+  这与上一条是同一族 —— **配置改了但产物没改**,只是介质从函数换成了构建产物。
+  `npm run smoke` 里有一条专门守它([那一节](#轮换-anon-key-时最容易漏的一步))。
 
 ---
 
@@ -3930,6 +3937,71 @@ survey / results,再删那个批次。**`--clean` 与 `--dry-run` 互斥** —�
   CSV 导出不含它们** —— 这三条至今没实测过
 
 Node **274** / Deno **132**,七道门全绿。
+
+---
+
+# 轮换 anon key 时最容易漏的一步
+
+## 症状不会告诉你原因
+
+`VITE_SUPABASE_ANON_KEY` 是 **build-time** 的:Vite 构建时把它替换成字面量编译进 `dist`。
+所以轮换 key 之后**只改 Vercel 环境变量是不够的,必须重新构建 + 部署**。
+
+漏了这一步的症状是 **Admin 登录坏掉** —— 前端拿着一把已失效的 anon key 去 Supabase Auth,
+拿回来的是一个语义无关的鉴权错误。**没有任何一处会说「这把 key 旧了」。**
+
+这与「`supabase secrets set` 成功 ≠ 函数拿到新值」是同一族:
+**两个东西属于同一个部署,却各自按不同的时刻取值。** 已记进[「从这里开始」](#从这里开始--交接给一个没看过对话记录的人)
+的走位常识,紧挨着那一条。
+
+## 守它的那条 smoke 检查
+
+手法**照抄 `api/font-probe.ts` 的 `checkBundleBase`** —— 这个项目已经解决过同一类问题一次
+(网页从一个 CDN 取字体、PDF 从另一个取)。抓自己站点的 HTML → 模块脚本 →
+在 JS 里找那个字面量,与本地的 `SUPABASE_ANON_KEY` 比对。
+
+放 `npm run smoke` 而不是构建门:**这条路径本地不存在** ——
+要有一份真的线上产物才能比([判断标准 4](#4-断言的边界必须等于执行路径)的后半条)。
+
+三条设计细节:
+
+- **anon key 可以这样比,`service_role` 绝不可以。** anon 本来就是要发到浏览器的公开凭证,
+  拿它比对不额外泄露任何东西;service_role 连截断都不该出现在冒烟输出里
+- **拿不到本地值时报 `unverified`,并且算失败。** 让一次「没法比」伪装成「比过了」
+  正是这套检查最该避免的事(与 `font-probe` 同一个取向)
+- **错误里报 sha256 前 8 位 + 从 payload 解出的 `iat`**,不报 key 的任何片段
+
+## 那条错误消息的第一版是废的
+
+第一版报的是两边各头 12 个字符。而 **JWT 的头部对同一个 alg 完全一样**,于是输出成了:
+
+```
+bundle=eyJhbGciOiJI… local=eyJhbGciOiJI…
+```
+
+**门确实红了,可它说的话没法照着行动** —— 判断标准 9,而且这次犯的人是刚写完那条标准的我。
+**是真跑了一次红路径才发现的,不是读代码读出来的**:正向绿、反向红两条都跑,
+第一版的反向输出摆在眼前才看出它没有信息量。
+
+改成 fp + iat 之后:
+
+```
+bundle: fp=9a7c2fa4 iat=2023-11-14 | local: fp=afe8151a iat=2026-08-06
+```
+
+`iat` 直接回答「哪一把是旧的」,`fp` 让重新部署之后能确认两边相等。
+
+## 顺带确认过的事实(轮换前查的,不是记忆)
+
+| | |
+|---|---|
+| 仓库里有没有真值 | **没有**,`.env.example` 五行全是空占位符 |
+| supabase-js 2.110.8 认不认新 key | **认**,`@supabase/functions-js` 里写明 `sb_publishable_` / `sb_secret_` 不走 Bearer。所以 `createClient` 那四处迁移时不用改代码 |
+| 迁新 key 要改哪几处 | **三处手写 header**:`api/[...path].ts:131`、`api/cron/retention.ts:48`(新 key 不能进 `Authorization: Bearer`),以及 `_shared/supa.ts`(Edge Function 侧注入的是 `SUPABASE_SECRET_KEYS`,**JSON 对象**不是字符串) |
+| 轮换 legacy JWT secret 的连带 | anon 与 service_role **同时**失效;Admin 全部要重新登录(access token 用 JWT secret 签);**客户答题 session 不受影响**(我们自己的 HMAC,用 `SESSION_SECRET`)、魔法链接 `access_token` 与渲染令牌同样不受影响 |
+
+⚠️ 官方 troubleshooting 页面有一句说「已经不再可能轮换 legacy anon / service / JWT secret」,
+推荐直接迁移。**界面上有按钮不等于可用** —— 点之前先确认,报错的话迁移就得提前。
 
 ---
 

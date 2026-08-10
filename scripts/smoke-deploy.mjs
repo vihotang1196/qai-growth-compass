@@ -25,6 +25,8 @@
  * 并消耗 IP 限流额度。改用 GET 换 405,同样能证明代理解析出了正确的函数名。
  */
 
+import { createHash } from 'node:crypto';
+
 /**
  * 我们自己签发的 session cookie 名。
  * 必须与 supabase/functions/_shared/session.ts 的 SESSION_COOKIE
@@ -121,6 +123,75 @@ const checks = [
       const html = await res.text();
       if (!html.includes('<div id="root">')) return '首页 HTML 里没有 #root,构建产物可能不对';
       return null;
+    },
+  },
+  {
+    /**
+     * 【线上 bundle 里烘的 anon key 是不是当前那把】
+     *
+     * `VITE_SUPABASE_ANON_KEY` 是 **build-time** 的:Vite 构建时把它替换成字面量,
+     * 编译进 dist。所以轮换 key 之后【只改 Vercel 环境变量是不够的,必须重新构建部署】。
+     *
+     * 【为什么必须有这条检查】漏了重新构建的症状是 **Admin 登录坏掉**,
+     * 而不是任何一处报「key 旧了」—— 前端拿着一把已失效的 anon key 去 Supabase Auth,
+     * 得到的是一个语义无关的鉴权错误。那属于「配置改了但产物没改」那一族,
+     * 与 `supabase secrets set` 成功但函数没重载、以及本文件开头那次代理 404 同形:
+     * **两个东西属于同一个部署,却各自按不同的时刻取值。**
+     *
+     * 手法照抄 `api/font-probe.ts` 的 checkBundleBase:抓自己站点的 HTML → 模块脚本 →
+     * 在 JS 里找那个字面量。anon key 本来就是要发到浏览器的公开凭证,
+     * 拿它做比对不额外泄露任何东西(**service_role 绝不能这样比**)。
+     *
+     * 【拿不到本地值时报 unverified,不算通过】没设 SUPABASE_ANON_KEY 就说拿不出证据 ——
+     * 让一次「没法比」伪装成「比过了」正是这套检查最该避免的事。
+     */
+    name: '线上 bundle 里烘的 anon key = 当前的 SUPABASE_ANON_KEY(轮换后必须重新构建)',
+    async run() {
+      const expected = process.env.SUPABASE_ANON_KEY;
+      if (!expected) {
+        return 'unverified:本地没有 SUPABASE_ANON_KEY,无法比对 —— 这不算通过。轮换 key 之后请带上它再跑一次。';
+      }
+      const htmlRes = await fetch(`${base}/`, { redirect: 'follow' });
+      if (!htmlRes.ok) return `unverified:首页 ${htmlRes.status}`;
+      const html = await htmlRes.text();
+      const m = /<script[^>]+src="([^"]+\.js)"/i.exec(html);
+      if (!m) return 'unverified:首页 HTML 里找不到模块脚本';
+
+      const jsUrl = new URL(m[1], base).toString();
+      const jsRes = await fetch(jsUrl);
+      if (!jsRes.ok) return `unverified:bundle ${jsRes.status}`;
+      const js = await jsRes.text();
+
+      if (js.includes(expected)) return null;
+      /**
+       * 【不匹配时报什么,是这条检查唯一容易做废的地方】
+       *
+       * 第一版报的是两边各头 12 个字符 —— 而 JWT 的头部对同一个 alg 是【完全一样的】,
+       * 于是输出成了 `bundle=eyJhbGciOiJI… local=eyJhbGciOiJI…`:
+       * 门确实红了,可它说的话没法照着行动(判断标准 9)。
+       * 是真跑了一次红路径才发现的,不是读代码读出来的。
+       *
+       * 现在报两样:
+       *   fp —— sha256 前 8 位。永远能区分,而且不泄露 key 的任何片段。
+       *          修完重新部署再跑一次,两个 fp 相等就是好了。
+       *   iat —— 从 JWT payload 解出来的签发时间(base64url,公开元数据)。
+       *          它直接说明【哪一把是旧的】,而那才是这条错误要回答的问题。
+       */
+      const bundled = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.exec(js)?.[0] ?? null;
+      const fp = (v) => createHash('sha256').update(v).digest('hex').slice(0, 8);
+      const iat = (v) => {
+        try {
+          const payload = JSON.parse(Buffer.from(v.split('.')[1], 'base64url').toString());
+          return payload.iat ? new Date(payload.iat * 1000).toISOString().slice(0, 10) : '?';
+        } catch {
+          return '?';
+        }
+      };
+      return (
+        `bundle 里的 anon key 与本地的不一致 —— 多半是改了环境变量但没重新构建部署。` +
+        `bundle: fp=${bundled ? fp(bundled) : '(没找到 JWT 形状的串)'} iat=${bundled ? iat(bundled) : '?'} | ` +
+        `local: fp=${fp(expected)} iat=${iat(expected)}`
+      );
     },
   },
 ];
