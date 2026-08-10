@@ -1,4 +1,3 @@
-import { useLocation } from 'react-router-dom';
 import { useT } from '@/lib/i18n';
 
 /**
@@ -11,16 +10,14 @@ import { useT } from '@/lib/i18n';
  * 【文案是「要切去的那个语言」】common.lang 在中文界面显示 "EN"、英文界面显示 "中文" ——
  * 按钮上写的是点下去会变成的语言,不是当前语言。
  *
- * 【在后台与展示页隐藏】/admin 右上角已有「退出」按钮,固定定位会撞上;
- * 而且后台面向运营不面向客户。/_showcase 是开发演示页。其余客户页都显示。
+ * 【它不再自己判断该不该显示】上一版带着一份 HIDDEN_PREFIXES 黑名单
+ * (/admin 右上角已有「退出」按钮会撞上;/_showcase 是开发页)。
+ * 那份名单被 /share-card 绕过了 —— 新路由不在名单里,EN 按钮就被截进了分享卡。
+ * 现在这个组件只由 PublicShell 渲染,而哪些路由套 PublicShell 是路由表说的事:
+ * **该不该出现由「在不在那一层」决定,不由一份要人维护的名单决定。**
  */
-const HIDDEN_PREFIXES = ['/admin', '/_showcase'];
-
 export default function LanguageToggle() {
   const { locale, setLocale, tk } = useT();
-  const { pathname } = useLocation();
-
-  if (HIDDEN_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return null;
 
   return (
     <button
