@@ -218,7 +218,78 @@ GHL 写回(本条)、魔法链接重发(`resendLink` —— seed 行的 `email_l
 两个方向都验过:对着「200 + HTML」的服务器两条都红(错误里直接写出
 「Vercel 的 cron 历史里这也是 200」),对着回 401 JSON 的两条都绿。
 
-### 7. 一直挂着的
+### 7. ⚠️ 测试数据会被自动化流程当成真数据 —— 盘点与修法(逐个补是错的解法)
+
+三个已经实测到的实例,一个比一个便宜地暴露:
+
+| 实例 | 后果 |
+|---|---|
+| `assessment-ghl-resync` | 对 GHL 发了 **15 次**请求,查不存在的 contact |
+| `api/cron/pdf-sweep` | 把 15 条 seed 全渲了 —— **15 次 Chromium**,而 seed 脚本明说「刻意不渲」 |
+| (基准线) | 已修,见 [`baselinePools`](#is_test测试--演示数据与真实数据共存) |
+
+**seed 脚本那句「刻意不済」被 sweep 无视了** —— 这说明「意图写在注释里」对自动化流程无效。
+
+## 判别标准不是「碰不碰测试数据」,是【无人请求 vs 有人请求】
+
+39 个跨表取数点里绝大多数是**有人请求的单行操作**(auth / quiz / score / report /
+login-request):它们处理的是请求者自己那一行。测试数据走这些路径是**正确的** ——
+现场模式演示时那个人答题、看报告,本来就该正常工作。
+
+危险的只有**无人请求**的那几个:cron 与 sweep 捡起了没人问过的行。
+
+| 流程 | 类别 | 现状 | 该怎么修 |
+|---|---|---|---|
+| `assessment-ghl-resync` | 无人请求 | ⛔ 无过滤 | 收口(见下) |
+| `api/cron/pdf-sweep` | 无人请求 | ⛔ 无过滤 | 在**选行**处过滤 |
+| `assessment-report` 基准池 | 聚合 | ✅ 已修 | — |
+| Admin roster / 统计 / CSV | 聚合 | ✅ 已修 | — |
+| `assessment-maintenance`(retention) | 无人请求 | ✅ **不受影响** | — |
+| finalize → `syncToGhl` | 有人请求 | ⛔ 会对假 contact 写回 | 收口(见下) |
+| Admin「重新生成 PDF」 | 有人请求 | ✅ 应当照做 | **不要拦** |
+| Admin 重发 / 换链接 | 有人请求 | ⚠️ 会尝试发给假联系人 | 收口(见下) |
+| Stage 11 的 GHL tags | 未建 | — | **走收口就自动被覆盖** |
+
+⚠️ **`retention` 查过了,它只 `delete` `assessment_login_attempts`**,一次都没碰
+entitlements / sessions / results。所以它不在名单上 —— 这条是查出来的,不是假设的。
+
+## 修法:收口,不是逐个查询加过滤
+
+逐个加过滤就是**手写覆盖范围**([判断标准 12](#12-覆盖范围是手写的守卫会被代码悄悄长到边界外面--让覆盖由运行时事实驱动)):
+下一个 sweep、下一个功能照样会漏,而漏的时候没有任何东西报错。
+
+**对外副作用只有两个出口**(全仓查证,各只有 2 个调用点):
+
+| 出口 | 调用点 |
+|---|---|
+| `_shared/ghlWriteback.ts` → `syncToGhl()` | resync(无人请求)+ finalize(有人请求) |
+| `_shared/resendLink.ts` → `sendMagicLink()` | Admin 重发 / 换链接 + login-request |
+
+**在这两处各加一道判断,就覆盖了所有现在和将来的 GHL 流量与外发消息** ——
+包括 Stage 11 的 tags,因为它一定会走 `syncToGhl`。**这是在功能写出来之前就覆盖了它。**
+
+**`syncToGhl` 里怎么表达「跳过」——复用 D9 的 CONFIG 类,不加新状态。**
+置 `ghl_next_retry_at = null` + `ghl_last_error = 'CONFIG: test cohort — skipped'`。
+CONFIG 的语义本来就是「重试一万次也没用」,而 resync 已经会跳过它 ——
+**这一点刚刚在真实数据上被验过了**(第二次调用回 `nothing due for retry`)。
+不要用 `ghl_synced = true` 表示跳过:那是在数据里说谎。
+
+**PDF 那条不能收在 `render-pdf`**:那样会连 Admin 的「重新生成」一起拦掉,
+而那个按钮是**有人请求**的 —— 演示时就是要看真 PDF。所以 PDF 的过滤放在
+**pdf-sweep 的选行处**,判别的正是「无人请求」。
+
+**还要抽一个与行形状无关的共用谓词**:现在那个 `isTestResultRow` 绑在基准线的行形状上,
+而收口处拿到的是 entitlement id / session id,形状不同。
+
+## 一个开着的问题(不硬做)
+
+收口处要判「这一行的 cohort 是不是测试」,而那是一次**数据库查询**,不是纯函数。
+所以收口的代价是每次外发前多一次 lookup。可以按调用缓存,但**不要为了省这一次查询
+而把判断交给调用方传参** —— 那就又回到「调用方必须记得」,也就是这一整条的病因。
+
+Node **287** / Deno 132,七道门全绿(本条只改文档)。
+
+### 8. 一直挂着的
 
 - **真正的冷启动耗时仍未测准** —— 两次都约 16 秒,但都是热的。要在**新部署之后的第一次调用**才拿得到
 - **`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
