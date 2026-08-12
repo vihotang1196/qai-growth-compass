@@ -3,7 +3,12 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import config from '@/config/assessment-config.json';
 import { LocaleProvider } from '@/lib/i18n';
-import LiveSlide, { LIVE_SLIDES, type LiveSlideKey } from '@/pages/admin/LiveSlide';
+import LiveSlide, {
+  HEADLINE_MAIN_VMIN,
+  HEADLINE_SUB_VMIN,
+  LIVE_SLIDES,
+  type LiveSlideKey,
+} from '@/pages/admin/LiveSlide';
 import { UI_STRINGS } from '@/config/ui-strings';
 
 const zh = (k: keyof typeof UI_STRINGS) => UI_STRINGS[k].zh;
@@ -103,13 +108,73 @@ describe('sized for a room, not a screen', () => {
     expect(html).not.toMatch(/font-size:\s*\d+(\.\d+)?rem/);
   });
 
-  it('the headline slide shows only two numbers', () => {
-    // 一屏三四个数字是这个模块的形态,不是妥协
+  it('the headline slide carries nothing from the other slides', () => {
     const html = visible(render('headline', 'KL Batch 3', false));
-    expect(html).toContain('15');
-    expect(html).toContain('3.3');
-    // 档位/最弱那些数字不该出现在这一屏
     expect(html).not.toContain(zh('live.slide.tier'));
+  });
+});
+
+describe('the headline slide has exactly ONE main number', () => {
+  /**
+   * ─────────────────────────────────────────────────────────────────────────────
+   * 上一版把人数与平均分同尺寸并排,于是「1」和「4.3」被读成了「14.3」。
+   *
+   * 【为什么断言钉的是「同尺寸的元素只有一个」,而不是文本相邻】
+   * 旧标记的可见文本是「1 已完成 4.3 平均总分」—— 两串数字在**文本里根本不相邻**,
+   * 所以任何「相邻子串」式的断言都抓不到那个 bug(它是**视觉**相邻)。
+   * 真正变了的是「有几个元素处在主尺寸这一层级」:旧版两个,新版一个。
+   * 这条是唯一会因为那次回归而变红的断言。
+   *
+   * ⚠️ 仍然是**代理指标**(判断标准 10):静态标记看不到实际渲染出来的样子,
+   * 它拦的是「层级又被拉平」这一类回归,拦不住「30vmin 在会场后排还是太小」。
+   * ─────────────────────────────────────────────────────────────────────────────
+   */
+  const mainSizeHits = (html: string) =>
+    html.match(new RegExp(`font-size:\\s*${HEADLINE_MAIN_VMIN}vmin`, 'g')) ?? [];
+
+  it('only one element sits at the main size — the lock for the「14.3」misread', () => {
+    expect(mainSizeHits(render('headline', 'KL Batch 3', false))).toHaveLength(1);
+  });
+
+  it('the main number is the average, not the head count', () => {
+    /**
+     * n=1 / avg=4.3 正是读错的那一组:真实批次只有 1 人。
+     * 人数当主数字的话,全场最大的那个字会是一个背景信息。
+     */
+    const one = { ...AGG, n: 1, averageTotal: 4.3 };
+    const html = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        null,
+        createElement(LiveSlide, { slide: 'headline', aggregate: one, cohortName: 'KL', isTest: false }),
+      ),
+    );
+    expect(html).toMatch(new RegExp(`font-size:\\s*${HEADLINE_MAIN_VMIN}vmin[^>]*>\\s*4\\.3`));
+    expect(mainSizeHits(html)).toHaveLength(1);
+    // 反向锁:人数**没有被删掉**,只是降级了。删掉也能让上面两条绿
+    expect(visible(html)).toContain(zh('live.completedCount').replace('{n}', '1'));
+  });
+
+  it('the two sizes stay far apart — a ratio, not two literals', () => {
+    /**
+     * 钉比值而不是具体数字:以后有人微调字号不该让这条红,
+     * 但把辅助行调到接近主数字(= 层级又被拉平)必须红。
+     */
+    expect(HEADLINE_MAIN_VMIN / HEADLINE_SUB_VMIN).toBeGreaterThanOrEqual(3);
+  });
+
+  it('no OTHER slide puts two different-unit numbers at one size', () => {
+    /**
+     * 其余三屏逐个看过:档位与最弱那两屏的数字**全是同一个单位**(人数)、
+     * 各自贴着自己那一行的标签、纵向排列;雷达那屏的五个数各自钉在自己的顶点旁,
+     * 也是同一个单位(0–5 分)。所以并排歧义只在第一屏存在。
+     *
+     * 这条把「主尺寸只出现一次」推广到全部四屏 —— 它拦的是
+     * 「以后有人往别的屏加第二个大数字」。
+     */
+    for (const slide of LIVE_SLIDES) {
+      expect(mainSizeHits(render(slide, 'KL Batch 3', false)).length, slide).toBeLessThanOrEqual(1);
+    }
   });
 });
 

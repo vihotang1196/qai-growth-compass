@@ -16,6 +16,16 @@ export const LIVE_SLIDES = ['headline', 'radar', 'tier', 'weakest'] as const;
 export type LiveSlideKey = (typeof LIVE_SLIDES)[number];
 
 /**
+ * 第一屏的两个字号 —— **导出是为了让断言引用它们,而不是复制字面量**。
+ *
+ * 复制一份字面量到测试里,改了代码不改测试时测试仍然绿(而且看起来还在守着)。
+ * 断言里真正要钉的是**比值**:主数字必须显著大于辅助行,
+ * 否则「两个不同量纲的数看起来同一层级」这个错法会悄悄回来。
+ */
+export const HEADLINE_MAIN_VMIN = 30;
+export const HEADLINE_SUB_VMIN = 3;
+
+/**
  * 现场模式的一屏 —— **纯展示,不取数、不含任何交互**。
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -108,23 +118,41 @@ export default function LiveSlide({
             {tk('live.empty')}
           </p>
         ) : slide === 'headline' ? (
-          /* 一屏只有两个数字 —— 后排看得清的前提 */
-          <div className="flex items-center justify-center" style={{ gap: '10vmin' }}>
-            <div className="text-center">
-              <div className="font-head font-bold leading-none" style={{ fontSize: '22vmin' }}>
-                {a.n}
-              </div>
-              <div className="font-body uppercase tracking-widest" style={{ fontSize: '2.6vmin', opacity: 0.6 }}>
-                {tk('live.completed')}
-              </div>
+          /*
+            ─────────────────────────────────────────────────────────────────────
+            【一个主数字,人数降级成小字】
+            上一版把人数与平均分**同尺寸并排**(两个 22vmin),于是
+            「1」和「4.3」被读成了「14.3」—— 第一眼就读错,而这一屏是投给一屋子人的,
+            读错的成本是讲课的人要停下来解释。
+
+            根因不是间距不够,是**两个量纲不同的数被排成了同一层级**:
+            人数是背景信息,平均分才是全场关心的那个数字。
+            所以不是「把间距拉大」,是把层级分开 —— 拉间距只是让同一个错法更难触发。
+
+            【标签夹在两个数字中间,不是紧挨着】顺序是
+            主数字 → 「平均总分」→ 「N 人已完成」。
+            两串数字之间永远隔着一行文字,所以连缀读法在**布局上**就不成立。
+
+            【小字里没有「本批」】用户给的措辞是「本批 1 人已完成」,但这一屏
+            也可能是「全部批次」范围 —— 那时「本批」是错的。而范围已经写在标题上了,
+            所以这一行只说「N 人已完成」。
+            ─────────────────────────────────────────────────────────────────────
+          */
+          <div className="text-center">
+            <div className="font-head font-bold leading-none" style={{ fontSize: `${HEADLINE_MAIN_VMIN}vmin` }}>
+              {a.averageTotal === null ? '—' : a.averageTotal.toFixed(1)}
             </div>
-            <div className="text-center">
-              <div className="font-head font-bold leading-none" style={{ fontSize: '22vmin' }}>
-                {a.averageTotal === null ? '—' : a.averageTotal.toFixed(1)}
-              </div>
-              <div className="font-body uppercase tracking-widest" style={{ fontSize: '2.6vmin', opacity: 0.6 }}>
-                {tk('live.avgTotal')}
-              </div>
+            <div
+              className="font-body uppercase tracking-widest"
+              style={{ marginTop: '2vmin', fontSize: '3vmin', opacity: 0.6 }}
+            >
+              {tk('live.avgTotal')}
+            </div>
+            <div
+              className="font-body"
+              style={{ marginTop: '4vmin', fontSize: `${HEADLINE_SUB_VMIN}vmin`, opacity: 0.6 }}
+            >
+              {tk('live.completedCount').replace('{n}', String(a.n))}
             </div>
           </div>
         ) : slide === 'radar' ? (

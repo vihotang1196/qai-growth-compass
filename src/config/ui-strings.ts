@@ -281,6 +281,11 @@ export const UI_STRINGS = {
   'live.people': { zh: '人', en: '' },
   'live.avgTotal': { zh: '平均总分', en: 'Average' },
   'live.completed': { zh: '已完成', en: 'Completed' },
+  /**
+   * 第一屏那行小字。**没有「本批」** —— 这一屏也可能是「全部批次」范围,
+   * 那时「本批」是错的;而范围已经写在标题上了。
+   */
+  'live.completedCount': { zh: '{n} 人已完成', en: '{n} completed' },
   'live.empty': { zh: '这个范围里还没有人完成测评', en: 'Nobody has completed the assessment in this scope' },
   'dash.scope': { zh: '批次范围', en: 'Cohort scope' },
   'dash.scope.all': { zh: '全部批次(不含测试)', en: 'All cohorts (excluding test)' },
