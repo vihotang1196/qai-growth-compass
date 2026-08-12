@@ -18,7 +18,6 @@ import {
   cohortStanding,
   dimensionDiffs,
   selectBaseline,
-  type ResultRow,
 } from '../../../src/lib/reportStats.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
@@ -225,10 +224,10 @@ Deno.serve(async (req: Request) => {
      * finalize 里把 status 标 completed 那步失败时【只记日志不失败】,所以它是会发生的。
      * 与其让人从「n=1 但不重合」去反推,不如让端点直说。
      */
-    const selfInPool = (allRows ?? []).some((r) => {
-      // deno-lint-ignore no-explicit-any
-      return (r as any).session?.id === session.id;
-    });
+    const selfInPool = (allRows ?? []).some(
+      // 只读一个字段,所以就地写出那一个字段的形状
+      (r) => (r as unknown as { session: { id: string } | null }).session?.id === session.id,
+    );
 
     const myDims = (result.dim_scores ?? {}) as Record<string, number>;
     // cohort_rank 板块:样本够才给;不足则 null,前端整块隐藏(跨期分位没意义,B1)

@@ -27,7 +27,9 @@ function toHalfWidth(input: string): string {
   return input
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     .replace(/＋/g, '+')
-    .replace(/　/g, ' ');
+    // \u3000 = 全角空格(IDEOGRAPHIC SPACE)。用户从微信 / Excel 粘号码时常带,
+    // 而它在源码里**肉眼与普通空格无异** —— 写成转义才有名字
+    .replace(/\u3000/g, ' ');
 }
 
 /** 只留数字与开头的一个 +;中间的 + 一律丢掉 */

@@ -32,5 +32,14 @@ export function toCsv(header: readonly string[], rows: readonly (readonly (strin
    * 姓名和维度名全是乱码。加 BOM 是让 Excel 认出 UTF-8 的唯一可靠办法。
    * 用 \r\n 是同样的理由 —— Excel 对纯 \n 的兼容性不稳。
    */
-  return `﻿${lines.join('\r\n')}\r\n`;
+      /**
+       * 开头那个 `\uFEFF` 是 **BOM,不是脏数据 —— 别删**。
+       * Excel 打开 CSV 时靠它认出 UTF-8;没有它,中文姓名会变成乱码 ——
+       * 而乱码的 CSV 拿去做 GHL 分群,错的是联系人的名字。
+       *
+       * 【为什么写成转义而不是那个字符本身】BOM 在编辑器里**完全不可见**,
+       * 看起来就是「文件开头什么都没有」。一个 Excel 兼容的关键字符
+       * 以没人看得见的形式待在代码里,本身就是个问题;转义之后它有名字了。
+       */
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }

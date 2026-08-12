@@ -63,6 +63,64 @@ interface RosterRow {
   } | null;
 }
 
+/**
+ * 下面三个是 PostgREST 嵌套查询的**最小**返回形状 —— 只写下游真正读到的字段。
+ *
+ * 【原来这三处是 `as any[]`,而且带着 `// deno-lint-ignore no-explicit-any`】
+ * 也就是说 deno 的 linter 当年被安抚过,而 eslint 那条同名规则从来没跑到 ——
+ * 全量 `eslint .` 不在任何一道门里(入口审计那一轮的发现)。
+ *
+ * 【为什么是「最小」而不是完整的行类型】完整写一遍 PostgREST 的嵌套形状,
+ * 下一个人改 select 列表时那份类型不会报错、只会悄悄与现实脱节。
+ * 只写读到的字段,改动 select 时 `deno check` 就会指着用到的那一行说话。
+ */
+interface CohortRef {
+  name?: string | null;
+  is_test?: boolean | null;
+}
+
+/** survey_insights:survey 行 + 它的 session / result / entitlement */
+interface SurveyInsightRow {
+  session_id: string;
+  responses: Record<string, unknown> | null;
+  session: {
+    result: { weakest: string[] | null } | null;
+    entitlement: {
+      id: string;
+      name: string | null;
+      phone_e164: string | null;
+      email_lower: string | null;
+      cohort_id: string | null;
+      cohort: CohortRef | null;
+    } | null;
+  } | null;
+}
+
+/** funnel:entitlement 行 + 它的 session(profile 是 jsonb) */
+interface FunnelEntitlementRow {
+  cohort_id: string | null;
+  cohort: CohortRef | null;
+  link_sent_at: string | null;
+  first_login_at: string | null;
+  session: {
+    id: string;
+    status: string | null;
+    profile: Record<string, unknown> | null;
+  } | null;
+}
+
+/** cohort_dashboard:result 行 + 它的 session / entitlement(只为判范围) */
+interface DashboardResultRow {
+  session_id: string;
+  dim_scores: Record<string, number> | null;
+  total: number;
+  tier: string;
+  weakest: string[];
+  session: {
+    entitlement: { cohort_id: string | null; cohort: CohortRef | null } | null;
+  } | null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') {
     return json({ error: 'method_not_allowed', expected: 'POST' }, 405);
@@ -461,15 +519,32 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
     .eq('session.status', 'completed');
   if (rErr) throw rErr;
 
-  // deno-lint-ignore no-explicit-any
-  const all = (rowsRaw ?? []) as any[];
-  const inScope = all.filter((r) => {
-    const ent = r.session?.entitlement;
-    return scope === 'all' ? !isTestCohort(ent?.cohort) : ent?.cohort_id === scope;
-  });
+  const all = (rowsRaw ?? []) as unknown as SurveyInsightRow[];
+  /**
+   * 【把「有 session 且有 entitlement」写进过滤,而不是下面用 `?? {}` 兜】
+   *
+   * 查询两处都是 `!inner`,所以缺 session / entitlement 的行**根本不会返回** ——
+   * 这个条件在运行时是空转的。但类型上它是必要的:上一版下面写着 `?? {}`,
+   * 于是 `ent.id as string` 在 entitlement 缺失时会静默变成 `undefined`,
+   * 而 `as any[]` 让编译器一个字都没说。换成最小类型后,这六处立刻报了出来。
+   *
+   * 也就是说这不是「为了让类型过去而加的一行」,是那一行原本就该有 ——
+   * `?? {}` 是把一个不可能的状态假装成一个空对象,而空对象会一路流到导出的 CSV 里。
+   */
+  const inScope = all.filter(
+    (r): r is SurveyInsightRow & {
+      session: NonNullable<SurveyInsightRow['session']> & {
+        entitlement: NonNullable<NonNullable<SurveyInsightRow['session']>['entitlement']>;
+      };
+    } => {
+      const ent = r.session?.entitlement;
+      if (!ent) return false;
+      return scope === 'all' ? !isTestCohort(ent.cohort) : ent.cohort_id === scope;
+    },
+  );
 
   const rows = inScope.map((r) => {
-    const ent = r.session?.entitlement ?? {};
+    const ent = r.session.entitlement;
     const resp = (r.responses ?? {}) as Record<string, unknown>;
     const weakest = (r.session?.result?.weakest ?? null) as string[] | null;
     const priority = resp.priority_dimension;
@@ -540,8 +615,7 @@ async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string)
     );
   if (eErr) throw eErr;
 
-  // deno-lint-ignore no-explicit-any
-  const all = (entRows ?? []) as any[];
+  const all = (entRows ?? []) as unknown as FunnelEntitlementRow[];
   const inScope = all.filter((r) =>
     scope === 'all' ? !isTestCohort(r.cohort) : r.cohort_id === scope,
   );
@@ -607,8 +681,7 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
     .eq('session.status', 'completed');
   if (rErr) throw rErr;
 
-  // deno-lint-ignore no-explicit-any
-  const rows = (resultRows ?? []) as any[];
+  const rows = (resultRows ?? []) as unknown as DashboardResultRow[];
   const inScope = rows.filter((r) => {
     const ent = r.session?.entitlement;
     if (scope === 'all') return !isTestCohort(ent?.cohort);

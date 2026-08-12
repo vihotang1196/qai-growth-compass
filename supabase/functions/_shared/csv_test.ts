@@ -3,7 +3,8 @@ import { toCsv } from './csv.ts';
 
 /** 去掉 BOM 与末尾换行,方便按行断言 */
 function body(csv: string): string[] {
-  return csv.replace(/^﻿/, '').replace(/\r\n$/, '').split('\r\n');
+      // ^\uFEFF = 剥掉 csv.ts 加的那个 BOM(见那边的注释:Excel 靠它认 UTF-8)
+  return csv.replace(/^\uFEFF/, '').replace(/\r\n$/, '').split('\r\n');
 }
 
 Deno.test('基本表头与行', () => {
@@ -47,7 +48,7 @@ Deno.test('正常的负数会被加前缀 —— 这是刻意的权衡', () => {
 
 Deno.test('BOM 与 CRLF 都在 —— Excel 认 UTF-8 靠这两个', () => {
   const csv = toCsv(['姓名'], [['陈大文']]);
-  assertEquals(csv.startsWith('﻿'), true, '缺 BOM,中文在 Excel 里会乱码');
+  assertEquals(csv.startsWith('\uFEFF'), true, '缺 BOM,中文在 Excel 里会乱码');
   assertEquals(csv.includes('\r\n'), true, '缺 CRLF');
   assertEquals(csv.endsWith('\r\n'), true, '末行也要有换行');
 });

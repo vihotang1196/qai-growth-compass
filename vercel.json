@@ -24,6 +24,10 @@
     {
       "path": "/api/cron/pdf-sweep",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/ghl-retry",
+      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [
