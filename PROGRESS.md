@@ -375,6 +375,30 @@ GHL 付款 workflow → Webhook action → POST /assessment-ghl-webhook
 把注释里提到包名的文件也算成导入者,误报了 `lambdaEnv.ts` 自己。
 误报会让人开始习惯性忽略那道门,而那正是它失效的方式。
 
+推论三:**变异验证要能区分三种绿 —— 真的守住了、永远绿、无事可做。**
+
+前两种已经在上面了。第三种是这个项目后来才撞出来的:**断言的前提在 fixture 里不成立**,
+所以它无事可做,而名字和结构都在声称它守住了。
+
+| 绿的种类 | 长什么样 | 怎么分辨 |
+|---|---|---|
+| 真的守住了 | 变异 → 红 | 跑变异 |
+| **永远绿**(tautology) | 断言从被测对象自己推导出来 | 变异 → 仍绿 |
+| **无事可做**(前提不成立) | fixture 里没有触发那个条件的数据 | 变异 → 仍绿;**再去看 fixture** |
+
+两个标本,都是**跑变异**才发现的,读代码读不出来:
+
+- 「顺序不能反」那条:把配置判断与上游判断对调后 168 条**全绿** ——
+  今天没有任何一条真实消息同时命中两套模式,所以顺序怎么排都一样。
+  注释和用例名都是我编的。
+- 「0 行不画条形」那条:用的 fixture 是 15 人 seed,而**档位计数全是 3,一个 0 都没有** ——
+  它在验一个不存在的行。
+
+关键的一句:**一条永远绿的断言和一条无事可做的断言,在正常运行时长得一模一样** ——
+两者都绿,都在报告里占一行,都让人以为那块地方被守着。
+所以变异不只是「证明断言会红」,也是「证明断言**有事可做**」;
+后者变异之后要**多走一步**:去 fixture 里找那个触发条件的数据在哪。
+
 ### 2. 打印一个值,但不对它做判断,等于没打印
 
 日志、探针、诊断字段,只要没有一句断言去看它,它就只是噪音 —— 出问题时没人会回头翻。
@@ -5356,10 +5380,151 @@ jsdom 不做布局(`getBoundingClientRect()` 全是 0),所以「五行的 x 是�
 
 两次都是**跑变异**才发现的,读代码读不出来。
 
+# 「名字像入口但没人引用」六类清单(**只列不删**)
+
+判断标准 18 推论三那一遍。**六类都只出清单** —— `build:ci` 那次我的审计脚本
+自己骗过我两次,而这一轮判的是「删不删」,错了代价更大。
+
+## 先说三条:审计脚本这次又骗了我三回
+
+都是自检抓到的,不是读代码看出来的:
+
+| 骗法 | 后果 | 修法 |
+|---|---|---|
+| `npm run X` 是**前缀匹配** | `test` 显示「被 verify 调用」,而 verify 里根本没有 `npm run test` | 名字后面加边界字符判断 |
+| 只数 `npm run`,忘了 **`npm test`** 这个内置别名 | 同上,`test` 一度被列成死脚本 | 两种写法都数 |
+| 一条 `alter table` 只认**第一个** `add column` | `share_card.sql` 里三列只抽到一列 → 列审计的「0 个候选」不可信 | 先切语句块再块内 matchAll |
+
+第三条是**自检点名了漏掉的那一个**(`share_card_error` → `cols.has === false`)才暴露的。
+而我的第一版自检本身也是空的:假列被塞在检查循环**之后**,于是它打印「应当被报出来」
+而报告里仍然是「无」—— 一句没有被任何东西验证的声明,正是这一轮在找的东西
+(判断标准 1 推论三的第三种绿)。
+
+## ① npm scripts(25 个)
+
+判据是**三个来源都为 0**:被别的 script 调用 / 被文档提到 / 被 `scripts/*.mjs` 提到。
+给人用的入口天然没有调用方,所以不能只看调用关系。
+
+| 名字 | 结论 |
+|---|---|
+| ⚠️ **`lint`**(`eslint .`) | **不在任何一道门里,而且现在就是红的(8 个 error)** —— 见下,这是本轮最值钱的一条 |
+| `preview`、`test:watch` | Vite / Vitest 脚手架自带,措辞是约定俗成的,误导性低 → **建议留** |
+| 其余 22 个 | 都有调用方或文档引用 |
+
+`scripts/` 目录里 13 个文件全部有引用方(`dump-phone.ts` 在 package.json 里 0 次,
+但被 `check-cross-runtime.mjs` 当子进程跑 —— 那是**第四类调用方**,
+只看 package.json 会把它误判成死的)。
+
+### ⚠️ `npm run lint` 现在是红的,而它不在任何门里
+
+八道门里只有 `lint:cjk` 会跑 eslint,而它只带 CJK 那一条规则、只扫 `src/**`。
+`eslint .`(全量规则、全仓库)**没有任何门会跑到** —— 于是它红了不知多久,没人知道。
+这正是判断标准 18 说的形状:**名字越像正式入口,危害越大**。
+
+| 位置 | 规则 | 我的判断 |
+|---|---|---|
+| `src/lib/phone.ts:30` | `no-irregular-whitespace` | **误报,但值得改**:那是 `U+3000` 全角空格的字面量(马来西亚用户粘贴号码常带),改成 `\u3000` 转义后意图反而更清楚 |
+| `_shared/csv.ts:35`、`csv_test.ts:6` | 同上 | 同上:那是 `U+FEFF` BOM,Excel 靠它认 UTF-8。改成 `\uFEFF` |
+| `assessment-admin/index.ts` ×3、`assessment-report/index.ts` ×1 | `no-explicit-any` | **真问题** |
+| `assessment-report/index.ts:21` | `no-unused-vars` | **真死代码**:`type ResultRow` 导进来没用过 —— 这条本身就是一个「入口审计」的结果,而那道没人跑的门早就知道了 |
+
+**没动**。要不要把 `lint` 收进 `build`、以及那三条空白改不改,是你的决定 ——
+收进去之前得先把 8 条清掉,否则八道门立刻全红。
+
+## ② `api/**` 路由(5 个):**0 个死的**
+
+| 文件 | 入口 |
+|---|---|
+| `api/[...path].ts` | SPA rewrite 之外的全部 `/api/*` 转发 |
+| `api/render-pdf.ts`、`api/font-probe.ts` | `vercel.json` 的 `functions` 配置;font-probe 带 `INTERNAL_FN_SECRET`,且 `src/styles/fonts.ts` 与它共用同一份 `@font-face` |
+| `api/cron/retention.ts`、`api/cron/pdf-sweep.ts` | `vercel.json` 的 `crons` |
+
+## ③ `vercel.json`:**0 个死的**,但缺一条
+
+两条 cron 都指向存在的文件;rewrite 就是 SPA 兜底。
+**缺的是 `assessment-ghl-resync` 的排期** —— 见 ⑥ 下面那条。
+
+## ④ Edge Function 的 action(11 个):**0 个死的**,而朴素扫描说有 3 个
+
+字面量扫描报 `resend` / `revoke` / `rotate` 无人调用 —— **三个都是假阳性**:
+`Roster.tsx` 通过**变量**调(`adminPost(action, …)`,action 是联合类型)。
+与 `build:ci` 那次「字面量匹配报 verify: 0/8」是同一个失效方式。
+
+## ⑤ `api/_lib` 与 `_shared` 的导出(104 个)
+
+「27 个无人 import」这个数字**不能直接报** —— 里面 24 个是**类型**,
+被当注解用不需要 import 名字;另有 2 个(`REQUIRED_FIELD`、`SESSION_DAYS`)
+在自己文件内被用,是我审计的假阳性。真正的候选只有一个:
+
+- ⚠️ **`_shared/ghlFieldMap.ts` 的 `_resetFieldMapCache()`** ——
+  注释写着「供测试重置内存缓存」,而 **`ghlFieldMap` 根本没有测试文件**。
+  它是一个为不存在的测试准备的钩子,而那句注释会让下一个人以为字段映射缓存是有覆盖的。
+  两条路:补测试(缓存逻辑值得测),或连注释一起删。**建议补测试。**
+
+另外单列一类(**不是死代码**,但产品代码没在用,只有测试 import):11 个,
+如 `PDF_PENDING_STALE_MS`、`FUNNEL_STAGES`、`ENTITLEMENT_STATUS_ORDER`。
+它们都在自己模块内被用、被测试钉住,属于正常形态。
+
+## ⑥ Supabase 侧:表 / 列 / 索引 / 函数 / bucket
+
+| 类别 | 数量 | 结论 |
+|---|---|---|
+| 表 | 9 | 全部有 `.from()` 引用 |
+| 列 | 56 | **0 个未引用**(修好抽取器、且埋的假列确实被报出来之后) |
+| 函数 | 2 | `upsert_assessment_entitlement` 有 3 处调用;`touch_updated_at` 代码里 0 次但**被 trigger 用着** —— SQL 内部的引用不在代码里,这是这一类的固有盲点 |
+| bucket | 1（`reports`) | 用着(PDF 与分享卡共用);rev3 预留的 `internal` bucket 当时就取消了 |
+| 索引 | 11 | **1 个候选**,见下 |
+
+### ⚠️ `assessment_results_tier_idx` —— 没有任何查询按 tier 过滤或排序
+
+`(tier)` 上的索引,而全仓库 0 处 `.eq('tier')` / `.order('tier')`。
+tier 只是被 select 出来读值,那用不到索引。它在每次写入时都要维护,
+而且会让人以为「有个按档位捞人的查询」。**不用现在删**,但记一笔。
+
+### ⚠️ 真正要紧的一条:`assessment-ghl-resync` 存在、正确、**没有任何东西触发它**
+
+这个 Edge Function 存在,鉴权(`X-Internal-Secret`)与 maintenance 同套,
+候选查询也是对的(`ghl_synced = false` + `ghl_next_retry_at`,那条索引因此**是活的**)。
+但:
+
+- `vercel.json` 的 crons 里只有 `retention` 与 `pdf-sweep`;
+- `retention` 只打给 `assessment-maintenance`,而 maintenance 没有任何对外 fetch。
+
+**所以 `ghlWriteback` 失败时写下的 `ghl_next_retry_at` 没有任何东西会去读 ——
+GHL 写回失败在生产上从来没有被重试过。** PROGRESS 里早有一行写着它「无人请求」
+(Stage 11 待做),但那行读起来像「还没接上」,而实际后果是**一个已经上线的重试机制从未运行**。
+这是这一遍里最像判断标准 18 的一条:**东西是好的,名字是对的,只是没人叫它。**
+
+## 汇总:该动手的四件(按我的排序)
+
+| # | 事 | 为什么排这里 |
+|---|---|---|
+| 1 | 给 `assessment-ghl-resync` 加 cron(Stage 11 本来就要做) | 唯一一条**正在影响真实数据**的 |
+| 2 | 把 `lint` 收进 `build`(先清掉 8 条) | 一道红着的门没人看,比没有门更糟 |
+| 3 | `_resetFieldMapCache` → 补 `ghlFieldMap` 的测试 | 注释在声称一个不存在的覆盖 |
+| 4 | `assessment_results_tier_idx` | 只是维护成本 + 误导,最不急 |
+
 ---
 
 ## 变更日志
 
+- 2026-08-12 — **「名字像入口但没人引用」六类清单(只列不删)**:npm scripts / `api/**` /
+  `vercel.json` / Edge action / `_lib`+`_shared` 导出 / Supabase 表列索引函数 bucket。
+  最值钱的两条:①**`npm run lint`(eslint 全量)不在任何一道门里,而且现在就是红的**
+  (8 个 error,其中 3 个是 `U+3000`/`U+FEFF` 字面量的误报、1 个是真死类型
+  `ResultRow`)②**`assessment-ghl-resync` 存在且正确,但没有任何东西触发它 ——
+  GHL 写回失败在生产上从未被重试过**(PROGRESS 里那行「无人请求」读起来像「还没接上」)。
+  另有 `_resetFieldMapCache`(为不存在的测试准备的钩子)与
+  `assessment_results_tier_idx`(0 处按 tier 过滤)。
+  ④ 的朴素扫描报 3 个死 action **全是假阳性**(经变量调用)。
+  ⚠️ 审计脚本这次又骗了我三回,全靠自检才暴露(前缀匹配、漏了 `npm test` 别名、
+  一条 alter table 只认第一个 add column),而**第一版自检本身是空的**
+  (假列塞在检查之后,打印了「应当被报出来」而报告里是「无」)
+- 2026-08-12 — **判断标准 1 增加推论三:变异要能区分三种绿** —— 真的守住了 /
+  永远绿(tautology)/ **无事可做(断言的前提在 fixture 里不成立)**。
+  第三种的标本是「0 行不画条形」那条用了没有 0 的 fixture,与「顺序不能反」同形态。
+  关键:**永远绿与无事可做在正常运行时长得一模一样**,所以变异之后要多走一步 ——
+  去 fixture 里找那个触发条件的数据
 - 2026-08-12 — **判断标准 14 增加推论四:观测环境必须与被观测对象的运行环境一致**。
   与推论二(截断的输出)同族但换了介质:`vmin` 排版的东西嵌在大页面里看,
   尺寸按整页视口算,**失真的观测看起来和真的一样**。同一条标准的另一头占掉了整个
