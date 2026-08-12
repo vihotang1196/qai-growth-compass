@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { magicLink } from './token.ts';
 import { buildResendPayload } from './resendPayload.ts';
 import { triggerAccepted } from './ghlTriggerResponse.ts';
+import { isTestEntitlement } from './testCohort.ts';
 
 export interface SendTarget {
   id: string;
@@ -44,6 +45,19 @@ export async function sendMagicLink(
   resendUrl: string,
   appBaseUrl: string,
 ): Promise<SendOutcome> {
+  /**
+   * ── 测试 / 演示批次一律不外发 ──
+   *
+   * 这个函数是**所有外发消息的唯一出口**(Admin 重发/换链接 + login-request 两个调用点)。
+   * seed 的邮箱是 `@seed.invalid`、contact 在 GHL 里不存在,所以发出去只会失败 ——
+   * 但「会失败」不是不发的理由,**不该对着假联系人发起动作**才是。
+   * 与 syncToGhl 同一个收口位置:将来任何新的外发功能只要走这里,就自动被覆盖。
+   */
+  if (await isTestEntitlement(supa, target.id)) {
+    console.log(`sendMagicLink skipped for entitlement ${target.id}: test cohort`);
+    return { ok: false, detail: 'skipped: test cohort — no outbound message for demo data' };
+  }
+
   const payload = buildResendPayload({
     ghlContactId: target.ghl_contact_id,
     magicLink: magicLink(appBaseUrl, target.access_token),

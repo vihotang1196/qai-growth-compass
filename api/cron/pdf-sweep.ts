@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { pickSecretKeyFromPlainEnv } from '../_lib/apiKeys.js';
+import { isTestCohort } from '../_lib/testCohort.js';
 import {
   MAX_PDF_ATTEMPTS,
   pdfSweepReason,
@@ -86,14 +87,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      */
     const { data, error } = await supa
       .from('assessment_results')
-      .select('session_id, pdf_status, pdf_attempts, pdf_status_at, computed_at')
+      .select(
+        'session_id, pdf_status, pdf_attempts, pdf_status_at, computed_at, ' +
+          'session:assessment_sessions!inner(entitlement:assessment_entitlements!inner(cohort:assessment_cohorts(is_test)))',
+      )
       .neq('pdf_status', 'ready')
       .lt('pdf_attempts', MAX_PDF_ATTEMPTS)
       .order('computed_at', { ascending: true });
     if (error) throw error;
 
     const now = Date.now();
-    const candidates = (data ?? [])
+    /**
+     * 【测试批次不进 sweep —— 收在【选行】处,不收在 render-pdf 里】
+     *
+     * 实测:seed 那 15 条 pdf_status=pending 被这个 cron 全捡走渲了 ——
+     * **15 次 Chromium**,而 seed 脚本里明说「刻意不渲」。
+     * 意图写在注释里对自动化流程无效。
+     *
+     * 【为什么不收在 render-pdf】那会连 Admin 的「重新生成」一起拦掉,
+     * 而那个按钮是**有人请求**的 —— 演示时就是要看真 PDF。
+     * 过滤的判据是**请求的来源**,不是数据的属性(判断标准 13):
+     * cron 捡起没人问过的行 = 无人请求 → 跳过;人点按钮 = 有人请求 → 照做。
+     */
+    const rows = (data ?? []) as unknown as (PdfSweepRow & {
+      session?: { entitlement?: { cohort?: { is_test?: boolean | null } | null } | null } | null;
+    })[];
+    const realRows = rows.filter((r) => !isTestCohort(r.session?.entitlement?.cohort));
+    const skippedTest = rows.length - realRows.length;
+    if (skippedTest > 0) {
+      // 说出来 —— 「没活干」与「活都是测试数据」在日志里必须能区分
+      console.log(`pdf-sweep: skipped ${skippedTest} row(s) in test cohorts`);
+    }
+    const candidates = realRows
       .map((row) => ({ row: row as PdfSweepRow, reason: pdfSweepReason(row as PdfSweepRow, now) }))
       .filter((c): c is { row: PdfSweepRow; reason: NonNullable<typeof c.reason> } => c.reason !== null);
 
@@ -102,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (batch.length === 0) {
       // 「没活干」也要说出来,否则「跑了」和「跑了但没干活」在 Cron 历史里没有区别
-      return res.status(200).json({ ok: true, scanned: data?.length ?? 0, swept: 0, deferred: 0 });
+      return res.status(200).json({ ok: true, scanned: data?.length ?? 0, swept: 0, deferred: 0, skippedTest });
     }
 
     const base = env.APP_BASE_URL!.replace(/\/$/, '');
@@ -143,6 +168,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       ok: failed === 0,
       scanned: data?.length ?? 0,
+      skippedTest,
       swept: results.length,
       failed,
       deferred,

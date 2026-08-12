@@ -19,6 +19,7 @@ import { checkFields, type FieldSpec } from './ghlDomain.ts';
 import { classifyGhlError, verifyWrittenFields, type GhlErrorClass } from './ghlVerify.ts';
 import { getFieldMap } from './ghlFieldMap.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+import { isTestSessionCohort } from './testCohort.ts';
 
 export interface WritebackResult {
   total: number;
@@ -65,6 +66,25 @@ export async function syncToGhl(
   payload: Record<string, unknown>,
   logTag: string,
 ): Promise<WritebackOutcome> {
+  /**
+   * ── 测试 / 演示批次一律不外发 ──
+   *
+   * 【为什么收在这里,而不是在 resync 的选行处加过滤】这个函数是**所有 GHL 流量的唯一出口**
+   * (resync 与 finalize 两个调用点)。收在这里,将来 Stage 11 的 tags 一写出来就自动被覆盖 ——
+   * 而在 resync 那边加过滤只挡住 resync,tags 会再漏一次。
+   * 实测代价:seed 那 15 条曾让 resync 对 GHL 发了 15 次请求,查的是不存在的 contact。
+   *
+   * 【为什么归 CONFIG,而不是置 ghl_synced = true】
+   * `ghl_synced = true` 表示「同步成功了」—— 那是在数据里说谎。
+   * CONFIG 的语义本来就是「重试一万次也没用」,而 sweep 已经会跳过 CONFIG
+   * (这一点在真实数据上验过:第二次调用回 `nothing due for retry`)。
+   * 所以既跳过了,又留下了原因,而且没有新增状态。
+   */
+  if (await isTestSessionCohort(supa, sessionId)) {
+    await recordFailure(supa, sessionId, 'CONFIG', 'test cohort — writeback intentionally skipped', logTag);
+    return { attempted: false, ok: false, detail: 'skipped: test cohort' };
+  }
+
   // 写回前按 domain 校验(值域)。不在域内是 CONFIG —— 同样的 payload 重试无意义
   const specs = config.ghl_writeback.custom_fields as unknown as FieldSpec[];
   const domainFailures = checkFields(payload, specs);
