@@ -219,18 +219,29 @@ const checks = [
 ];
 
 /**
- * ── 每个 cron 端点都必须【真的执行到我们的代码】 ──
+ * ── 每个 cron 端点从【公网】访问时是否到达我们的代码 ──
  *
- * 【为什么需要这一组:200 不等于跑了】实测 `/api/cron/retention` 返回
- * `HTTP 200 + content-type: text/html` —— 请求被静态产物接住了,函数压根没执行。
- * 而 **Vercel 的 cron 执行历史里 200 就是成功**,所以那条日程可以从 Stage 4 起
- * 每天「成功」一次而一次都没跑过。这与 `assessment-ghl-resync`
- * 「文件头写着由 Cron 定时调、而 vercel.json 里从来没有它」是同一族:
- * **写下的意图没有任何东西检查它成立。**
+ * ⚠️ **这一组证明的是「公网可达」,不是「cron 在跑」。两者不是一回事。**
  *
- * 【判据选「未鉴权时回 401 JSON」】不带 Authorization 时,只有我们自己的代码会回
- * 401 + JSON。所以 401 是「函数执行到了」的证据,而 200 + HTML 是「没执行」的证据。
- * 它同时满足这个脚本的零写入原则:401 走不到任何副作用。
+ * 【为什么必须把这句话写在最前面】这一组的第一版把判据写成「函数有没有执行」,
+ * 并在失败信息里断言「所以这条日程会每天成功而从不运行」——**那个推断被观测推翻了**:
+ * `/api/cron/retention` 从公网 curl 确实回 `200 + text/html`,
+ * 而 Supabase 侧 `assessment-maintenance` 的 Invocations 显示它**连续五天每天准点跑过**
+ * (排期 `17 3 * * *` UTC,记录在 11:17 UTC+8 —— 时区正好对上)。
+ * 所以 Vercel Cron 走的那条路与公网 curl 不是同一条,而当时我们两个都基于那个错推断
+ * 往下走了好几步。见判断标准 14。
+ *
+ * 【那它还有什么用】它捕捉的是一个**差异**:`pdf-sweep` 回 401 JSON,
+ * 而同目录的 `retention` 回 200 HTML。**同一个目录两个函数表现不同不是设计出来的状态** ——
+ * 那本身值得查,即使后果不是「cron 没跑」。而且这是「人手动触发」时会走的那条路,
+ * 我给出的手动验收步骤全靠它。
+ *
+ * 【判据:未鉴权时回 401 JSON】不带 Authorization 时只有我们自己的代码会回 401 + JSON。
+ * 满足零写入原则(401 走不到任何副作用),也不需要任何凭据。
+ *
+ * 【要验「cron 真的在跑」,只有下游效果算证据】Vercel 的 cron 历史里 200 是成功,
+ * 所以那不算;算的是被调用方的调用记录(本例:`assessment-maintenance` 的 Invocations)
+ * 或那个函数自己的日志。**那是观测,这一组是推理。**
  *
  * 【覆盖范围从文件系统推导,不手写】新增一个 cron 函数会自动被这一组覆盖 ——
  * 手写清单的话,下一个 cron 照样会漏(判断标准 12)。
@@ -252,7 +263,7 @@ if (cronFiles.length === 0) {
 for (const file of cronFiles) {
   const route = `/api/cron/${file.replace(/\.ts$/, '')}`;
   checks.push({
-    name: `${route} 真的执行到函数(未鉴权 → 401 JSON,不是 200 HTML)`,
+    name: `${route} 从公网可达(未鉴权 → 401 JSON,不是 200 HTML)`,
     async run() {
       const res = await fetch(`${base}${route}`);
       const ct = res.headers.get('content-type') ?? '';
@@ -260,9 +271,14 @@ for (const file of cronFiles) {
 
       if (res.status === 200 && ct.includes('text/html')) {
         return (
-          `200 + text/html —— 函数没有执行,请求被静态产物接住了。` +
-          `⚠️ Vercel 的 cron 历史里这也是 200,所以这条日程会「每天成功」而从不运行。` +
-          `先看部署的 Functions 列表里有没有 ${route}。body=${JSON.stringify(body.slice(0, 80))}`
+          `200 + text/html —— 这条路径从公网没有到达函数,请求被静态产物接住了。\n` +
+          `      ⚠️ 【这不代表 cron 没在跑】retention 就是反例:它从公网回 HTML,` +
+          `而被调用方的 Invocations 显示它连续五天准点执行。Vercel Cron 走的不是这条路。\n` +
+          `      要判断 cron 死活,看【下游效果】——被调用方的调用记录,或该函数自己的日志。` +
+          `Vercel 的 cron 历史里 200 也是成功,那不算证据。\n` +
+          `      这条红说明的是:同目录其他 cron 回 401 JSON 而这条回 HTML,` +
+          `而那不是设计出来的状态;另外你手动 curl 触发这个端点是行不通的。` +
+          `body=${JSON.stringify(body.slice(0, 60))}`
         );
       }
       if (res.status === 401 && ct.includes('application/json')) return null;
