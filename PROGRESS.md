@@ -4065,17 +4065,27 @@ service_role key 泄露。Legacy 那个 tab **没有 regenerate 按钮** ——
 8. 有一条不过 → 立刻 re-enable,回来看日志;全过 → 删掉 legacy 那几个变量
 ```
 
-**Vercel 要加的 4 个**(legacy 的 3 个先留着当退路):
+**Vercel 要加的是 3 个,不是 4 个**(legacy 那 3 个先留着当退路):
 
 | 变量 | 值 |
 |---|---|
 | `SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…` |
 | `SUPABASE_SECRET_KEY` | `sb_secret_…` |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | 同 publishable(**build-time**) |
-| `SUPABASE_SECRET_KEY`(本地 shell) | 给 `npm run seed:test` |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | 同 publishable。⚠️ **build-time**,改完必须重新构建 |
 
-Edge Function 侧**什么都不用配** —— `SUPABASE_SECRET_KEYS` 是平台注入的。
-但**必须重新部署**:平台注入的变量在旧实例上不会变。
+**本地 shell** 另外要设 `SUPABASE_SECRET_KEY`(给 `npm run seed:test` 与 `npm run smoke`)——
+那是**同一个变量名的另一处位置**,不是第四个变量。
+> 这张表的第一版把它列成了「Vercel 要加的第 4 个」,而它既不在 Vercel、
+> 也和第 2 行同名。数变量的时候按【平台 × 名字】数,不是按行数数。
+
+**Supabase Edge Function 侧一个都不用配。**
+`SUPABASE_SECRET_KEYS`(**复数**,按名字索引的 JSON)与 `SUPABASE_URL` 一样是**平台注入**的 ——
+`check:env --print` 里它标着「平台注入」,而那条豁免的理由就写着「写进 .env.example
+会让下一个人以为要手动配一个平台变量」。
+但**必须重新部署函数**:平台注入的变量在旧实例上不会变。
+
+权威清单以 `node scripts/check-env.mjs --print` 为准 —— 它是**从代码推导**的,
+而这张表是手抄的。两者不一致时信前者(手抄的那份刚刚就错过一次)。
 
 ## Disable 之后的验收清单
 
