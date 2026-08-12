@@ -9,7 +9,6 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run lint:cjk && npm run check:dim && npm run check:dep-sync && npm run check:env && npm run check:api-imports && npm run check:runtime-pin && npm run check:doc-anchors && tsc -b && vite build && npm run check:bundle",
-    "build:ci": "tsc -b && vite build",
     "preview": "vite preview",
     "verify": "npm run build && npm test && npm run check:deno && npm run test:deno && npm run check:cross",
     "deploy:functions": "npm run verify && node scripts/check-env.mjs --print && supabase functions deploy",
