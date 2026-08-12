@@ -4,6 +4,7 @@ import { useT } from '@/lib/i18n';
 import { supabaseAuth } from '@/lib/supabase';
 import AdminLogin from './AdminLogin';
 import Roster from './Roster';
+import CohortDashboard from './CohortDashboard';
 
 /**
  * 后台外壳 + 路由守卫。
@@ -45,6 +46,8 @@ function stripUrlFragment(): void {
 export default function AdminLayout() {
   const { tk } = useT();
   const [checked, setChecked] = useState(false);
+  /** Stage 10 的四个模块会陆续加进这个 tab —— 现在两个 */
+  const [tab, setTab] = useState<'roster' | 'dashboard'>('roster');
   const [signedIn, setSignedIn] = useState(false);
   /** 403:有身份但不在名单。这时【不】该把人弹回登录页 */
   const [forbidden, setForbidden] = useState(false);
@@ -88,12 +91,33 @@ export default function AdminLayout() {
             {tk('admin.signOut')}
           </Button>
         </header>
-        <Roster
-          onAuthLost={(isForbidden) => {
-            if (isForbidden) setForbidden(true);
-            else void supabaseAuth().auth.signOut();
-          }}
-        />
+        <nav className="flex gap-2">
+          {(['roster', 'dashboard'] as const).map((t) => (
+            <Button
+              key={t}
+              size="sm"
+              variant={tab === t ? 'primary' : 'outline'}
+              onClick={() => setTab(t)}
+            >
+              {tk(t === 'roster' ? 'admin.tab.roster' : 'admin.tab.dashboard')}
+            </Button>
+          ))}
+        </nav>
+        {tab === 'roster' ? (
+          <Roster
+            onAuthLost={(isForbidden) => {
+              if (isForbidden) setForbidden(true);
+              else void supabaseAuth().auth.signOut();
+            }}
+          />
+        ) : (
+          <CohortDashboard
+            onAuthLost={(isForbidden) => {
+              if (isForbidden) setForbidden(true);
+              else void supabaseAuth().auth.signOut();
+            }}
+          />
+        )}
       </div>
     </main>
   );

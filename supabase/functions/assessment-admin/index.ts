@@ -17,6 +17,9 @@ import { missingKeys } from '../_shared/env.ts';
 import { generateAccessToken } from '../_shared/token.ts';
 import { sendMagicLink, type SendTarget } from '../_shared/resendLink.ts';
 import { toCsv } from '../_shared/csv.ts';
+import { aggregateCohort } from '../_shared/cohortAggregate.ts';
+import { isTestCohort } from '../_shared/testCohort.ts';
+import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -122,6 +125,28 @@ Deno.serve(async (req: Request) => {
     switch (action) {
       case 'roster':
         return json(await roster(supa));
+
+      case 'cohort_dashboard': {
+        /**
+         * 批次聚合看板(Stage 10)。
+         *
+         * 【`cohort_id` 是必填参数,没有「默认全部」】
+         * 一个聚合数字的正确性取决于「它涵盖了哪些人」,所以那个范围必须由调用方说出来 ——
+         * 默认值出错时结果**看起来仍然正确**(判断标准 15)。
+         * 允许的值:某个 cohort 的 uuid,或字面量 `'all'`。缺参数直接 400。
+         */
+        const scope = typeof body.cohort_id === 'string' ? body.cohort_id : '';
+        if (!scope) {
+          return json(
+            {
+              error: 'missing cohort_id',
+              detail: "expected a cohort uuid or the literal 'all' —— 聚合范围必须显式给出",
+            },
+            400,
+          );
+        }
+        return json(await cohortDashboard(supa, scope));
+      }
 
       case 'export': {
         /**
@@ -263,6 +288,78 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+/**
+ * 批次聚合看板的取数 + 分池。算法在 _shared/cohortAggregate.ts(纯函数,有用例)。
+ *
+ * 【`'all'` 展开成「排除测试批次」,不是「不加过滤」】这两者的差别就是这个模块存在的理由:
+ * 不加过滤会把演示数据混进投影出去的聚合数字里,而那个数字看起来完全正常。
+ *
+ * ⚠️ **`cohort_id` 为 null 的行算真实数据,要留在 `'all'` 里。**
+ * 那是「批次被删了的真实学员」(cohort_id 是 on delete set null)。
+ * 按「所有 is_test = false 的批次」的字面意思去列 id 会把他们**静默丢掉** ——
+ * 所以判据写成「不是测试批次」,而不是「在这批 id 里」。
+ * 少算一个真实学员和多算一个测试学员一样糟,只是更不容易被发现。
+ */
+async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: string) {
+  const { data: cohortRows, error: cErr } = await supa
+    .from('assessment_cohorts')
+    .select('id, name, is_test, event_date')
+    .order('created_at', { ascending: false });
+  if (cErr) throw cErr;
+
+  const { data: resultRows, error: rErr } = await supa
+    .from('assessment_results')
+    .select(
+      'session_id, dim_scores, total, tier, weakest, ' +
+        'session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
+    )
+    .eq('session.status', 'completed');
+  if (rErr) throw rErr;
+
+  // deno-lint-ignore no-explicit-any
+  const rows = (resultRows ?? []) as any[];
+  const inScope = rows.filter((r) => {
+    const ent = r.session?.entitlement;
+    if (scope === 'all') return !isTestCohort(ent?.cohort);
+    return ent?.cohort_id === scope;
+  });
+
+  const sessionIds = inScope.map((r) => r.session_id as string);
+  let answers: { question_id: string; option_index: number }[] = [];
+  if (sessionIds.length) {
+    const { data: ansRows, error: aErr } = await supa
+      .from('assessment_answers')
+      .select('question_id, option_index')
+      .in('session_id', sessionIds);
+    if (aErr) throw aErr;
+    answers = (ansRows ?? []) as { question_id: string; option_index: number }[];
+  }
+
+  const aggregate = aggregateCohort(
+    inScope.map((r) => ({
+      dim_scores: r.dim_scores,
+      total: r.total,
+      tier: r.tier,
+      weakest: r.weakest,
+    })),
+    answers,
+    config.dimensions.map((d) => d.key),
+    config.tiers.map((t) => t.key),
+    config.questions.map((q) => ({ id: q.id, option_count: q.option_count })),
+    config.cohorts.min_n_for_baseline,
+  );
+
+  const selected = (cohortRows ?? []).find((c) => c.id === scope) ?? null;
+  return {
+    scope,
+    /** 选中的是测试批次时前端要显著标出来 —— 否则会忘了自己在看假数据 */
+    selectedIsTest: scope === 'all' ? false : isTestCohort(selected),
+    selectedName: scope === 'all' ? null : (selected?.name ?? null),
+    cohorts: cohortRows ?? [],
+    aggregate,
+  };
+}
 
 /**
  * 名单 + 统计。
