@@ -65,18 +65,38 @@ export default function LiveSlide({
     return d ? L(d.zh, d.en) : key;
   };
 
-  /** 计数条 —— 现场只给人数,不给比例。与看板同一条理由,而这里样本更少 */
+  /**
+   * 计数条 —— 现场只给人数,不给比例。与看板同一条理由,而这里样本更少。
+   *
+   * ─────────────────────────────────────────────────────────────────────────────
+   * 【条形装在一条定宽轨道里,数字因此永远在同一个 x】
+   * 上一版里条形与计数是**同级**,而条形的宽度是整行的百分比 ——
+   * 于是 0 的那几行数字紧贴标签、非 0 的行数字被推到条形末端,x 位置参差。
+   * 而这两屏的用途正是**扫一眼看哪一档最多**,数字不成列时那一眼就得来回找。
+   *
+   * 三段:定宽标签 | `flex-1` 轨道(条形按轨道的百分比伸) | 定宽计数。
+   * 百分比因此是相对**轨道**算的,而不是相对整行 —— 顺带修掉了
+   * 「100% 的条形会把计数挤出去」这个隐患。
+   * ─────────────────────────────────────────────────────────────────────────────
+   */
   const BigBar = ({ label, count, max }: { label: string; count: number; max: number }) => (
     <div className="flex items-center" style={{ gap: '2vmin' }}>
       <span className="shrink-0 text-right font-body" style={{ width: '22vmin', fontSize: '3vmin' }}>
         {label}
       </span>
+      {/* 轨道:它的存在就是「数字在同一列」这件事的载体 —— 去掉它,x 就又跟着数值跑 */}
+      <span className="min-w-0 flex-1">
+        <span
+          className="block bg-accent"
+          style={{
+            height: '5vmin',
+            width: `${max === 0 ? 0 : (count / max) * 100}%`,
+            minWidth: count ? '0.6vmin' : 0,
+          }}
+        />
+      </span>
       <span
-        className="bg-accent"
-        style={{ height: '5vmin', width: `${max === 0 ? 0 : (count / max) * 100}%`, minWidth: count ? '0.6vmin' : 0 }}
-      />
-      <span
-        className="shrink-0 whitespace-nowrap font-head font-bold"
+        className="shrink-0 whitespace-nowrap text-right font-head font-bold"
         style={{ width: '9vmin', fontSize: '3.6vmin' }}
       >
         {count}

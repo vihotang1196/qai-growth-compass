@@ -178,6 +178,75 @@ describe('the headline slide has exactly ONE main number', () => {
   });
 });
 
+describe('the count column is a column — the bar cannot push it around', () => {
+  /**
+   * ─────────────────────────────────────────────────────────────────────────────
+   * 上一版里条形与计数是**同级**、条形宽度是整行的百分比,于是 0 的行数字紧贴标签、
+   * 非 0 的行数字被推到条形末端 —— 而这两屏的用途正是「扫一眼看哪一档最多」。
+   *
+   * 【断言钉的是那条轨道存在,不是像素位置】
+   * jsdom 不做布局(`getBoundingClientRect()` 全是 0),所以「x 是否相同」
+   * 在这个测试环境里**测不了**。轨道元素的存在是那个视觉性质的**结构载体**:
+   * 去掉它,百分比就又回到整行、x 就又跟着数值跑。
+   *
+   * ⚠️ 这仍然是代理指标(判断标准 10)。真实的 x 位置是在浏览器里量过的
+   * (五行的计数左边缘逐像素相同),那次是一次性观测,不在这个套件里。
+   * ─────────────────────────────────────────────────────────────────────────────
+   */
+  const rowsOf = (html: string) => html.split('<div class="flex items-center"').slice(1);
+
+  it('every bar sits inside a flex-1 track, on both bar slides', () => {
+    for (const slide of ['tier', 'weakest'] as const) {
+      const rows = rowsOf(render(slide, 'KL Batch 3', false));
+      expect(rows.length, slide).toBeGreaterThanOrEqual(5);
+      for (const row of rows) {
+        /**
+         * 轨道必须出现在**百分比**宽度之前 —— 顺序反了就说明条形又爬到轨道外面去了。
+         *
+         * 【只匹配百分比,不匹配任意宽度】第一版写的是 `width:\s*\d`,
+         * 它先命中了标签的 `width:22vmin`(位置 70 < 轨道 133),于是断言红在
+         * 一个与被测性质无关的元素上 —— 又一次断言边界错(判断标准 4)。
+         */
+        const track = row.indexOf('flex-1');
+        const pct = row.search(/width:[\d.]+%/);
+        expect(track, `${slide} track`).toBeGreaterThanOrEqual(0);
+        expect(pct, `${slide} pct`).toBeGreaterThan(track);
+      }
+    }
+  });
+
+  it('the count keeps a fixed width and stays last in the row', () => {
+    // 反向锁:轨道在但计数不再定宽的话,列还是会跟着数字宽度跑
+    for (const row of rowsOf(render('tier', 'KL Batch 3', false))) {
+      expect(row).toMatch(/width:9vmin/);
+      expect(row.lastIndexOf('width:9vmin')).toBeGreaterThan(row.indexOf('flex-1'));
+    }
+  });
+
+  it('a zero row draws no bar at all — not a 1px stub', () => {
+    /**
+     * 0 人却有一条一像素的条形,会让空档看起来像「有一点」。
+     * 而 0 的行现在也不再让数字贴到标签上 —— 轨道仍然占着位。
+     *
+     * 【必须用有 0 行的数据】第一版用了 AGG(档位计数全是 3,**一个 0 都没有**),
+     * 于是这条断言在验一个不存在的行 —— 断言与它声称验的数据对不上
+     * (判断标准 8 的近邻:fixture 里没有那个情形,断言就什么都没验)。
+     * 真实批次恰恰全是 0 行:1 个人只落在一档里。
+     */
+    const one = { ...AGG, n: 1, averageTotal: 4.3, tierCounts: { manual: 0, spot: 0, semi_auto: 0, systemic: 1, flywheel: 0 } };
+    const html = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        null,
+        createElement(LiveSlide, { slide: 'tier', aggregate: one, cohortName: 'KL', isTest: false }),
+      ),
+    );
+    expect(html).toContain('width:0%');
+    // 反向锁:那一档【有】人的行必须画出条形来
+    expect(html).toContain('width:100%');
+  });
+});
+
 describe('n=0 says so instead of drawing empty charts', () => {
   it('shows the empty message on every slide', () => {
     const empty = { ...AGG, n: 0, averageTotal: null };
