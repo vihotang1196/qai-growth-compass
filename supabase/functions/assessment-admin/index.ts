@@ -19,6 +19,7 @@ import { sendMagicLink, type SendTarget } from '../_shared/resendLink.ts';
 import { toCsv } from '../_shared/csv.ts';
 import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
+import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
@@ -210,6 +211,53 @@ Deno.serve(async (req: Request) => {
         return json(await funnelData(supa, scope));
       }
 
+      case 'survey_insights': {
+        const scope = typeof body.cohort_id === 'string' ? body.cohort_id : '';
+        if (!scope) {
+          return json({ error: 'missing cohort_id', detail: "expected a cohort uuid or 'all'" }, 400);
+        }
+        return json(await surveyInsights(supa, scope));
+      }
+
+      case 'high_intent_export': {
+        /**
+         * 高意向名单导出。
+         *
+         * 【与 roster 导出同一条:无条件剔测试行,不看任何参数】
+         * 这份 CSV 是拿去做 GHL 分群的 —— 测试行混进去就是给假联系人发消息。
+         */
+        const scope = typeof body.cohort_id === 'string' ? body.cohort_id : '';
+        if (!scope) {
+          return json({ error: 'missing cohort_id', detail: "expected a cohort uuid or 'all'" }, 400);
+        }
+        const data = await surveyInsights(supa, scope);
+        const real = data.rows.filter((r) => !r.isTest && r.highIntent);
+        const dropped = data.rows.filter((r) => r.isTest && r.highIntent).length;
+        if (dropped > 0) {
+          console.log(
+            `admin ${verdict.email} exported ${real.length} high-intent row(s), excluded ${dropped} test row(s)`,
+          );
+        }
+        return json({
+          filename: 'compass-high-intent.csv',
+          csv: toCsv(
+            ['姓名', '手机', '邮箱', '批次', '意向', '90 天目标', '最大阻碍', '想修的', '该修的'],
+            real.map((r) => [
+              r.name,
+              r.phoneE164,
+              r.emailLower,
+              r.cohortName,
+              r.consultInterest,
+              r.goal90d,
+              r.biggestBlocker,
+              r.priorityDimension,
+              r.weakestPrimary,
+            ]),
+          ),
+          excludedTestRows: dropped,
+        });
+      }
+
       case 'export': {
         /**
          * 【导出一律剔掉测试行,而且不接受任何参数来改这件事】
@@ -350,6 +398,82 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+/**
+ * 问卷洞察的取数。判断在 _shared/surveySignals.ts(纯函数,有用例)。
+ *
+ * 【只取已完成的人】问卷是答完 15 题之后才填的,没完成的人没有 S1/S5/S6/S7。
+ * 这一条与看板同向、与漏斗相反 —— **漏斗要看没完成的人掉在哪,洞察要看填过问卷的人说了什么**。
+ * (判断标准 16:该照抄的是范围约束,不是过滤条件。)
+ *
+ * 【开放题原文原样返回】S5/S6 是学员自己写的话,后端销售最有用的就是那两栏。
+ * ⚠️ **但它们绝不进现场模式** —— 那是会被投影给一屋子人的界面,
+ * 而一个学员写「我们现在现金流很紧」被投在屏幕上,他会知道那是自己写的。
+ * 与分享卡不放维度分数是同一条理由。
+ */
+async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: string) {
+  const { data: cohortRows, error: cErr } = await supa
+    .from('assessment_cohorts')
+    .select('id, name, is_test, event_date')
+    .order('created_at', { ascending: false });
+  if (cErr) throw cErr;
+
+  const { data: rowsRaw, error: rErr } = await supa
+    .from('assessment_survey')
+    .select(
+      'session_id, responses, ' +
+        'session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(' +
+        'id, name, phone_e164, email_lower, cohort_id, cohort:assessment_cohorts(name, is_test))), ' +
+        'result:assessment_results!inner(weakest)',
+    )
+    .eq('session.status', 'completed');
+  if (rErr) throw rErr;
+
+  // deno-lint-ignore no-explicit-any
+  const all = (rowsRaw ?? []) as any[];
+  const inScope = all.filter((r) => {
+    const ent = r.session?.entitlement;
+    return scope === 'all' ? !isTestCohort(ent?.cohort) : ent?.cohort_id === scope;
+  });
+
+  const rows = inScope.map((r) => {
+    const ent = r.session?.entitlement ?? {};
+    const resp = (r.responses ?? {}) as Record<string, unknown>;
+    const weakest = (r.result?.weakest ?? null) as string[] | null;
+    const priority = resp.priority_dimension;
+    return {
+      entitlementId: ent.id as string,
+      sessionId: r.session_id as string,
+      name: (ent.name ?? null) as string | null,
+      phoneE164: (ent.phone_e164 ?? null) as string | null,
+      emailLower: (ent.email_lower ?? null) as string | null,
+      cohortName: (ent.cohort?.name ?? null) as string | null,
+      isTest: isTestCohort(ent.cohort),
+      goal90d: (typeof resp.goal_90d === 'string' ? resp.goal_90d : null),
+      biggestBlocker: (typeof resp.biggest_blocker === 'string' ? resp.biggest_blocker : null),
+      consultInterest: (typeof resp.consult_interest === 'string' ? resp.consult_interest : null),
+      priorityDimension: (typeof priority === 'string' ? priority : null),
+      weakestPrimary: weakest?.[0] ?? null,
+      alignment: priorityAlignment(priority, weakest),
+      highIntent: isHighIntent(resp.consult_interest),
+    };
+  });
+
+  const selected = (cohortRows ?? []).find((c) => c.id === scope) ?? null;
+  return {
+    scope,
+    selectedIsTest: scope === 'all' ? false : isTestCohort(selected),
+    cohorts: cohortRows ?? [],
+    rows,
+    counts: {
+      total: rows.length,
+      highIntent: rows.filter((r) => r.highIntent).length,
+      aligned: rows.filter((r) => r.alignment === 'aligned').length,
+      secondWeakest: rows.filter((r) => r.alignment === 'second_weakest').length,
+      mismatched: rows.filter((r) => r.alignment === 'mismatched').length,
+    },
+  };
+}
 
 /**
  * 漏斗的取数。算法在 _shared/funnel.ts(纯函数,有用例)。

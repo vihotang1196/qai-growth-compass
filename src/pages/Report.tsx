@@ -9,6 +9,7 @@ import { useT } from '@/lib/i18n';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
+import { isPriorityMismatch } from '../../api/_lib/surveySignals';
 import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
 import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
 
@@ -183,7 +184,13 @@ export default function Report() {
   const weakSet = new Set(result.weakest);
   const tier = TIER_BY_KEY.get(result.tier);
   const priority = typeof survey.priority_dimension === 'string' ? survey.priority_dimension : null;
-  const mismatch = priority !== null && priority !== result.weakest[0];
+  /**
+   * 【定义在 api/_lib/surveySignals.ts,与问卷洞察页共用】
+   * 原本这里是一句就地比较。问卷洞察页也要这个判断 —— 各写一份的话,
+   * 同一个人可能在后台被标成「不一致」而在他自己的报告里没有,
+   * 而那种不一致没有任何东西会报错。
+   */
+  const mismatch = isPriorityMismatch(priority, result.weakest);
 
   return (
     <Shell>
