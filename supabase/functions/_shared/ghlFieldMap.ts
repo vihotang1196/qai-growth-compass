@@ -23,9 +23,14 @@ let cache: { map: FieldMap; atMs: number } | null = null;
  */
 export async function getFieldMap(
   supa: SupabaseClient,
-  opts: { force?: boolean } = {},
+  /**
+   * `nowMs` **只为可测**:TTL 是一个跟时间有关的分支,而不注入时钟就只能靠
+   * 真的等 10 分钟(或者去 stub 全局 `Date.now`,那会影响同一进程里别的用例)。
+   * 与 `lambdaEnv.fontDir` 那次同一个手法 —— 默认值保持生产行为不变。
+   */
+  opts: { force?: boolean; nowMs?: number } = {},
 ): Promise<FieldMap> {
-  const now = Date.now();
+  const now = opts.nowMs ?? Date.now();
   if (!opts.force && cache && now - cache.atMs < TTL_MS) return cache.map;
 
   if (!opts.force) {
@@ -82,7 +87,15 @@ async function fetchFromGhl(): Promise<FieldMap> {
   return map;
 }
 
-/** 供测试重置内存缓存 */
+/**
+ * 供测试重置内存缓存。
+ *
+ * 【这个函数曾经是一个「为不存在的测试准备的钩子」】入口审计那一轮发现:
+ * 它的注释写着「供测试」,而 `ghlFieldMap` **根本没有测试文件** ——
+ * 于是那句注释在替一份不存在的覆盖作证。补了 `ghlFieldMap_test.ts` 之后
+ * 它才真的有服务对象(判断标准 18:名字听起来是入口但没人引用;
+ * 这一处的处理是**补上被服务的对象**,不是删掉服务者)。
+ */
 export function _resetFieldMapCache(): void {
   cache = null;
 }
