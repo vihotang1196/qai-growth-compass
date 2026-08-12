@@ -13,6 +13,24 @@ export class AdminAuthError extends Error {
   }
 }
 
+/**
+ * 把 500 的响应体拼成一句人能看的错误 —— **纯函数,单独导出是为了能测**。
+ *
+ * 【为什么这一步值得有断言】后端已经在响应体里回了分类,但**只回不显示等于没回**。
+ * 这个函数原本内联在 `adminPost` 里,只取 `error` 一个字段,于是界面上永远是
+ * 光秃秃的 `internal_error` —— 而那正是「每次都得去翻 Supabase 日志」的来源。
+ *
+ * 拼出来的样子:`internal_error (query_failed PGRST200)`。
+ * `query_failed` 说去看那条查询,`config_missing` 说去看环境变量;
+ * 细节(`details` / `hint` / 原始 message)后端没回,也不该回。
+ */
+export function adminErrorMessage(status: number, parsed: unknown): string {
+  const b = (parsed ?? null) as { error?: string; kind?: string; code?: string | null } | null;
+  const base = b?.error ?? `admin failed (${status})`;
+  const hint = [b?.kind, b?.code].filter(Boolean).join(' ');
+  return hint ? `${base} (${hint})` : base;
+}
+
 export async function adminPost<T>(action: string, args: Record<string, unknown> = {}): Promise<T> {
   const token = await adminAccessToken();
   const res = await fetch('/api/assessment-admin', {
@@ -41,7 +59,7 @@ export async function adminPost<T>(action: string, args: Record<string, unknown>
     throw new Error(`non-JSON response from admin (${res.status})`);
   }
   if (!res.ok) {
-    throw new Error((parsed as { error?: string } | null)?.error ?? `admin failed (${res.status})`);
+    throw new Error(adminErrorMessage(res.status, parsed));
   }
   return parsed as T;
 }

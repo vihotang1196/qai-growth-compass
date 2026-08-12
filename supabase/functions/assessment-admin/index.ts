@@ -21,6 +21,7 @@ import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
+import { classifyError } from '../_shared/errorKind.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
@@ -107,7 +108,16 @@ Deno.serve(async (req: Request) => {
       .eq('email', jwtEmail)
       .maybeSingle();
     if (error) {
-      console.error(`allowlist lookup failed: ${error.message}`);
+      /**
+       * 【这一处【不】带分类,响应体保持光秃秃的 `internal_error`】
+       *
+       * 这里还在授权判定**之前** —— `verdict` 要到下面才算出来,此刻只知道
+       * 「有一个能通过 getUser 的 JWT」,不知道这个人在不在名单里。
+       * 「Admin 侧的响应可以带分类」的前提是**对方已经是确认过的管理员**;
+       * 名单外的人拿到 `query_failed` + 错误码,等于免费获得后台内部状态的探针。
+       * 分类只进日志。
+       */
+      console.error(`allowlist lookup failed: ${classifyError(error).log}`);
       return json({ error: 'internal_error' }, 500);
     }
     inAllowlist = data !== null;
@@ -394,8 +404,20 @@ Deno.serve(async (req: Request) => {
         return json({ error: 'unknown_action', action }, 400);
     }
   } catch (err) {
-    console.error(`admin ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
-    return json({ error: 'internal_error' }, 500);
+    /**
+     * 【响应体带分类,细节只进日志】
+     *
+     * 走到这里说明 `verdict.ok` 已经过了 —— 对方是名单里的管理员,
+     * 所以给他一个「去哪找」的指向是合理的:`query_failed` 去看那条查询,
+     * `config_missing` 去看环境变量,两者的排查动作完全不同,
+     * 而光秃秃的 `internal_error` 对它们说的是同一句话。
+     *
+     * 回出去的只有 `kind` 与公开错误码。`details` / `hint` / `message` 留在日志里 ——
+     * 权限类错误的 `hint` 是一句可以直接跑的 GRANT,含表名与角色名。
+     */
+    const c = classifyError(err);
+    console.error(`admin ${action} failed [${c.kind}]: ${c.log}`);
+    return json({ error: 'internal_error', kind: c.kind, code: c.code }, 500);
   }
 });
 
@@ -420,11 +442,21 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
 
   const { data: rowsRaw, error: rErr } = await supa
     .from('assessment_survey')
+    /**
+     * 【`result` 必须嵌在 `session` 里面,不能与它并列】
+     *
+     * `assessment_survey.session_id` 与 `assessment_results.session_id` 都指向
+     * `assessment_sessions(id)` —— 两张表之间**没有 FK**,它们是同一个父表的兄弟。
+     * 写成 `assessment_survey` 下的并列嵌套时 PostgREST 找不到关系,整条查询报错,
+     * 而外层 catch 只回一个 `internal_error`(那也是这次报错什么信息都没有的原因)。
+     * 走父表这条路是真实关系:`assessment_results.session_id` → `assessment_sessions.id`。
+     */
     .select(
       'session_id, responses, ' +
-        'session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(' +
-        'id, name, phone_e164, email_lower, cohort_id, cohort:assessment_cohorts(name, is_test))), ' +
-        'result:assessment_results!inner(weakest)',
+        'session:assessment_sessions!inner(id, status, ' +
+        'result:assessment_results!inner(weakest), ' +
+        'entitlement:assessment_entitlements!inner(' +
+        'id, name, phone_e164, email_lower, cohort_id, cohort:assessment_cohorts(name, is_test)))',
     )
     .eq('session.status', 'completed');
   if (rErr) throw rErr;
@@ -439,7 +471,7 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
   const rows = inScope.map((r) => {
     const ent = r.session?.entitlement ?? {};
     const resp = (r.responses ?? {}) as Record<string, unknown>;
-    const weakest = (r.result?.weakest ?? null) as string[] | null;
+    const weakest = (r.session?.result?.weakest ?? null) as string[] | null;
     const priority = resp.priority_dimension;
     return {
       entitlementId: ent.id as string,

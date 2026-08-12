@@ -5029,10 +5029,122 @@ S5/S6 是学员自己写的话。**一个学员写「我们现在现金流很紧
 
 Node **313**(+11)/ Deno 159,八道门全绿。
 
+# 问卷洞察的 500,以及「`internal_error` 什么都不说」
+
+## 先说清一件事:堆栈**没有被贴进来**
+
+上一条消息里是 `[粘贴堆栈]` 这个占位符。所以下面这个成因是**从迁移文件推出来的,
+不是从报错看出来的** —— 部署后要拿真实的那一行确认。
+([判断标准 14](#14-有直接观测可用时先观测再推理) 的直接后果:我没有观测,就不假装有。)
+
+## 推出来的成因:PostgREST 的嵌套需要一条**真实的**外键
+
+`20260731000000_assessment_init.sql` 里:
+
+| 表 | 外键 |
+|---|---|
+| `assessment_survey.session_id` | → `assessment_sessions(id)` |
+| `assessment_results.session_id` | → `assessment_sessions(id)` |
+
+两张表之间**没有** FK —— 它们只是共用一个父表。而我把 `result` 写成了 `session` 的**兄弟**:
+
+```
+survey → session(...)                 ← 有关系
+       → result:assessment_results(…)  ← ✗ 兄弟之间没有关系,PostgREST 解析不出来
+```
+
+改成嵌进去:
+
+```
+survey → session:assessment_sessions!inner(
+           result:assessment_results!inner(weakest), …)
+```
+
+读取路径跟着变成 `r.session?.result?.weakest`。
+
+## `internal_error` 对两种完全不同的故障说同一句话
+
+这次真正花时间的不是那个嵌套,是**报错什么都没说**。`query_failed` 让人直接去看那条查询,
+`config_missing` 让人去看环境变量 —— 两者的排查动作毫无重叠,
+而光秃秃的 `internal_error` 逼人每次都去翻 Supabase 日志。
+
+做法与 `server_misconfigured` 那次同一条:**细节进日志,响应体只多一个分类**。
+新增 `_shared/errorKind.ts`(纯函数):
+
+| 字段 | 回给客户端? | 理由 |
+|---|---|---|
+| `kind` | ✅ | 我们自己定义的四个词,不含任何库内信息 |
+| `code` | ✅ | `PGRST200` / `42501` 是**公开的错误分类学**,不是数据;而它恰好是「去哪找」最有用的一格 |
+| `details` / `hint` / `message` | ❌ 只进日志 | 权限类错误(`42501`)的 `hint` 是一句**可以直接跑的 GRANT**,含表名与角色名 |
+
+四类:`query_failed` / `config_missing` / `upstream_failed` / `unexpected`。
+认不出的一律 `unexpected` —— **不猜**:猜错的分类比不分类更糟,
+它会把人送到错误的地方,而且送得很有信心。
+
+## 两个 `internal_error` 出口**区别对待**
+
+`index.ts:111` 那一处(名单查询失败)在**授权判定之前** —— `verdict` 要到下面才算出来,
+此刻只知道「有一个能通过 `getUser` 的 JWT」,不知道这个人在不在名单里。
+「Admin 侧可以带分类」的前提是**对方已经是确认过的管理员**;
+名单外的人拿到 `query_failed` + 错误码,等于免费获得一个探后台内部状态的探针。
+**那一处只写日志,响应体保持光秃秃的 `internal_error`。**
+
+⚠️ 这个区别**没有断言守着** —— 它只有注释和代码审查。
+Edge Function 的 `Deno.serve` 入口本地无处可测(与判断标准 4 后半条同一类)。
+
+## 只回不显示等于没回
+
+后端回了分类,但 `adminApi.ts` 那一行原本只取 `error` 字段,
+于是界面上仍然是光秃秃的 `internal_error` —— 而「不用每次翻日志」正是这次的目的。
+抽出纯函数 `adminErrorMessage()` 单独导出(为了能测),拼成
+`internal_error (query_failed PGRST200)`,5 条用例。
+
+## 反向验证:一次变异**证明我自己的断言是空的**
+
+| 变异 | 结果 |
+|---|---|
+| `hint` 塞进 `code`(泄露细节) | 3 条红 ✅ |
+| `log` 丢掉 `details` / `hint` | 1 条红 ✅ |
+| `adminApi` 退回只取 `error` | 2 条红 ✅ |
+| 去掉 `credentials missing` 这个措辞 | 1 条红 ✅ |
+| **把「上游」判断挪到「配置」判断之前** | **168 条全绿 ❌** |
+
+最后那条是重点。我给那段写的注释是「顺序反了会把 GHL 凭证缺失归错类」,
+用例名叫「顺序不能反」—— **两个都是编的**:今天没有任何一条真实消息同时命中两套模式,
+所以顺序怎么排都一样。这正是[判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致)
+说的那种断言:它验的是我脑子里的故事,不是代码的行为。
+
+处理方式不是把用例删掉,而是**改成它真正钉住的东西**:仓库里 grep 出来的两条真实消息
+(`GHL credentials missing (GHL_PRIVATE_TOKEN)` 和 `GHL credentials missing for field-map fetch`)
+都必须归 `config_missing` —— 注意第二条**以 `fetch` 结尾**,而它属于配置。
+顺序留着,但理由降级为**预防**:一旦有人把上游模式放宽成裸 `fetch`,顺序立刻承重。
+
+## 顺带兑现了一小块挂了很久的债
+
+`PostgrestError` 的 `code` / `details` / `hint` 被仓库里 37 处 `.message` 降级一律丢掉。
+这一轮的日志把四个都打出来 —— **但只在这一处**。其余 36 处仍未改,单独一轮。
+
+## 未做
+
+- **`survey_insights` 没有对真环境跑过**,成因也还没被真实堆栈确认
+- **现场模式**未合并,所以这次的 500 与它无关
+
+Node **318**(+5)/ Deno **168**(+9),八道门全绿(`npm run verify` 退出码 0 —— 不看 grep)。
+
 ---
 
 ## 变更日志
 
+- 2026-08-12 — **问卷洞察 500 + Admin 错误分类**:①`survey_insights` 里 `result` 被写成
+  `session` 的兄弟,而 `assessment_survey` 与 `assessment_results` 之间**没有 FK**,
+  PostgREST 解析不出来 —— 改为嵌进 `session` 里(**成因是从迁移推出来的,堆栈没贴进来,待部署确认**)
+  ②新增 `_shared/errorKind.ts`:四类分类,`kind` + 公开错误码回客户端,
+  `details`/`hint`/`message` 只进日志(`42501` 的 hint 是可执行 GRANT)
+  ③**两个 `internal_error` 出口区别对待**:名单查询那一处在授权判定之前,只写日志不带分类
+  ④`adminApi` 原本只取 `error` 字段 —— 只回不显示等于没回,抽出 `adminErrorMessage()`
+  ⑤**五次变异里有一次证明我自己的断言是空的**:那条叫「顺序不能反」的用例对调后仍全绿,
+  注释和用例名都是编的([判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致));
+  改成钉 grep 出来的两条真实消息,顺序保留但理由降级为预防
 - 2026-08-08 — **字形自检的覆盖范围小于渲染范围**:扫描只跑在报告页,分享卡上线后
   `glyph: ok` 一直是不完整的结论。改为 `framenavigated` 运行时采集导航路径,
   末尾比对「访问过 / 扫过」,漏扫 → `severity: 'incomplete'` 并点名页面;
