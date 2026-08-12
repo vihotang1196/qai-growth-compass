@@ -4089,6 +4089,13 @@ service_role key 泄露。Legacy 那个 tab **没有 regenerate 按钮** ——
 
 ## Disable 之后的验收清单
 
+⚠️ **为什么必须在 Disable 之后跑,而不是之前。**
+两代 key 并存时,**你无法分辨流量走的是哪一代** —— legacy 还有效,所以一条请求成功
+既可能是新 key 起了作用,也可能是它悄悄回落到了 legacy。
+Disable 是唯一能把两者区分开的动作([判断标准 7](#7-能不能区分-a-和-b必须两边都有样本):
+要证明「能区分 A 和 B」,另一边必须也有样本)。
+**Disable 之前 smoke 全绿,只证明「有一代能用」,不证明「新的那代能用」。**
+
 **判据不是「代码改了」,是「Disable 之后每一条都真跑过」。**
 每条都写明怎么跑、看什么。⚠️ 任何一条不过,先 re-enable 再排查 —— 别边坏边查。
 
@@ -4100,10 +4107,10 @@ service_role key 泄露。Legacy 那个 tab **没有 regenerate 按钮** ——
 | 4 | **答题 → 报告** | 用一条 seed 的链接打开 `/report` | 报告完整。走 `assessment-report` + 代理链 |
 | 5 | **PDF 渲染** | 对一条 seed 点 Admin「重新生成」 | `pdf_status` 变 `ready`。走 render-pdf 的 secret key + Storage |
 | 6 | **分享卡** | 同上那次渲染 | 报告页出现两张卡(与 PDF 同一次渲染产出) |
-| 7 | **GHL 写回** | `curl -X POST <SUPABASE_URL>/functions/v1/assessment-ghl-resync -H "X-Internal-Secret: …"` | 200。走 `_shared/supa.ts` + GHL |
+| 7 | **GHL 写回** | `curl -X POST <SUPABASE_URL>/functions/v1/assessment-ghl-resync -H "apikey: <publishable>" -H "X-Internal-Secret: …"` | 200。⚠️ **必须带 `apikey`** —— 这个函数不在代理白名单里,要直连,而网关要 apikey。**只放 apikey、不放 Authorization**,所以这一条同时验了网关认不认新 key |
 | 8 | **cron: retention** | `curl <域名>/api/cron/retention -H "Authorization: Bearer $CRON_SECRET"` | 200。**这条专门验 header 那个改动** —— 它是手写 apikey 的两处之一 |
 | 9 | **cron: pdf-sweep** | `curl <域名>/api/cron/pdf-sweep -H "Authorization: Bearer $CRON_SECRET"` | 200 + `scanned` 有数。走 Vercel 侧 secret key |
-| 10 | **seed 脚本** | `SUPABASE_SECRET_KEY=… node scripts/seed-test-data.ts --dry-run` | 15 行照常。**dry-run 不写库**,但会验证 key 能建客户端 |
+| 10 | **seed 脚本** | `SUPABASE_SECRET_KEY=… npm run seed:test`(**不是 --dry-run**) | 15 行 + `cohort … (is_test=true)`。⚠️ **`--dry-run` 验不了 key**:那条路径下 `supa = null`、`requireEnv()` 压根不会被调用。而重跑真实模式是安全的 —— 脚本本来就幂等(固定种子 + upsert),重跑写的是同一批值 |
 
 **第 1、8 条是这次改动的直接靶子**(手写 header 的两处);
 **第 3、5、7 条是 Edge Function 侧 `SUPABASE_SECRET_KEYS` 的靶子**;
