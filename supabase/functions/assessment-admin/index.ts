@@ -18,6 +18,7 @@ import { generateAccessToken } from '../_shared/token.ts';
 import { sendMagicLink, type SendTarget } from '../_shared/resendLink.ts';
 import { toCsv } from '../_shared/csv.ts';
 import { aggregateCohort } from '../_shared/cohortAggregate.ts';
+import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
@@ -197,6 +198,18 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      case 'funnel': {
+        // 范围约束与看板一致(cohort_id 必填、'all' 服务端展开)—— 但取数起点不同,见 funnelData
+        const scope = typeof body.cohort_id === 'string' ? body.cohort_id : '';
+        if (!scope) {
+          return json(
+            { error: 'missing cohort_id', detail: "expected a cohort uuid or the literal 'all'" },
+            400,
+          );
+        }
+        return json(await funnelData(supa, scope));
+      }
+
       case 'export': {
         /**
          * 【导出一律剔掉测试行,而且不接受任何参数来改这件事】
@@ -337,6 +350,78 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+/**
+ * 漏斗的取数。算法在 _shared/funnel.ts(纯函数,有用例)。
+ *
+ * ⚠️⚠️ 【取数起点是 assessment_entitlements,**不是** assessment_results】
+ * 这是这个模块唯一容易写错的地方,而写错的症状是**每一段都 100%**:
+ * 漏斗必须包含连 session 都还没有的人(`pending` / `link_sent` —— 他们没登录过,
+ * `assessment_sessions` 里根本没有行)。从 results 起查只能看到已完成的人。
+ *
+ * **看板那条 `.eq('session.status', 'completed')` 绝对不能照抄过来。**
+ * 该照抄的是范围约束(cohort_id 必填、'all' 展开成「不是测试批次」),
+ * 不是过滤条件 —— 见判断标准 16。
+ *
+ * 【为什么单独查一次 answers】「已开始答题」的判据之一是「有 ≥1 条 answer」,
+ * 而 PostgREST 做不了「存在性聚合」。所以取一次 `assessment_answers` 的 session_id
+ * 建 Set。当前批次规模(几十到一两百人 × 15 题)完全够用;
+ * **上到几千人时要把这一步推回 SQL**(与 roster 那条同一个限制,同一个理由)。
+ */
+async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string) {
+  const { data: cohortRows, error: cErr } = await supa
+    .from('assessment_cohorts')
+    .select('id, name, is_test, event_date')
+    .order('created_at', { ascending: false });
+  if (cErr) throw cErr;
+
+  const { data: entRows, error: eErr } = await supa
+    .from('assessment_entitlements')
+    .select(
+      'id, cohort_id, link_sent_at, first_login_at, ' +
+        'cohort:assessment_cohorts(is_test), ' +
+        'session:assessment_sessions(id, status, profile)',
+    );
+  if (eErr) throw eErr;
+
+  // deno-lint-ignore no-explicit-any
+  const all = (entRows ?? []) as any[];
+  const inScope = all.filter((r) =>
+    scope === 'all' ? !isTestCohort(r.cohort) : r.cohort_id === scope,
+  );
+
+  const sessionIds = inScope.map((r) => r.session?.id).filter((x): x is string => typeof x === 'string');
+  const answered = new Set<string>();
+  if (sessionIds.length) {
+    const { data: ansRows, error: aErr } = await supa
+      .from('assessment_answers')
+      .select('session_id')
+      .in('session_id', sessionIds);
+    if (aErr) throw aErr;
+    for (const a of (ansRows ?? []) as { session_id: string }[]) answered.add(a.session_id);
+  }
+
+  const rows: FunnelRowInput[] = inScope.map((r) => ({
+    linkSentAt: r.link_sent_at ?? null,
+    firstLoginAt: r.first_login_at ?? null,
+    sessionStatus: r.session?.status ?? null,
+    /**
+     * profile 是 jsonb。**空对象要算「没填」** —— quiz 是逐题 merge 写进去的,
+     * 所以中途可能是 `{}`;把 `{}` 当成填过会把「登录了什么都没做」误判成「已开始答题」。
+     */
+    profileFilled: !!r.session?.profile && Object.keys(r.session.profile).length > 0,
+    hasAnswer: r.session?.id ? answered.has(r.session.id) : false,
+  }));
+
+  const selected = (cohortRows ?? []).find((c) => c.id === scope) ?? null;
+  return {
+    scope,
+    selectedIsTest: scope === 'all' ? false : isTestCohort(selected),
+    selectedName: scope === 'all' ? null : (selected?.name ?? null),
+    cohorts: cohortRows ?? [],
+    funnel: buildFunnel(rows),
+  };
+}
 
 /**
  * 批次聚合看板的取数 + 分池。算法在 _shared/cohortAggregate.ts(纯函数,有用例)。

@@ -5,6 +5,7 @@ import { supabaseAuth } from '@/lib/supabase';
 import AdminLogin from './AdminLogin';
 import Roster from './Roster';
 import CohortDashboard from './CohortDashboard';
+import FunnelPanel from './FunnelPanel';
 
 /**
  * 后台外壳 + 路由守卫。
@@ -47,7 +48,7 @@ export default function AdminLayout() {
   const { tk } = useT();
   const [checked, setChecked] = useState(false);
   /** Stage 10 的四个模块会陆续加进这个 tab —— 现在两个 */
-  const [tab, setTab] = useState<'roster' | 'dashboard'>('roster');
+  const [tab, setTab] = useState<'roster' | 'dashboard' | 'funnel'>('roster');
   const [signedIn, setSignedIn] = useState(false);
   /** 403:有身份但不在名单。这时【不】该把人弹回登录页 */
   const [forbidden, setForbidden] = useState(false);
@@ -92,14 +93,14 @@ export default function AdminLayout() {
           </Button>
         </header>
         <nav className="flex gap-2">
-          {(['roster', 'dashboard'] as const).map((t) => (
+          {(['roster', 'dashboard', 'funnel'] as const).map((t) => (
             <Button
               key={t}
               size="sm"
               variant={tab === t ? 'primary' : 'outline'}
               onClick={() => setTab(t)}
             >
-              {tk(t === 'roster' ? 'admin.tab.roster' : 'admin.tab.dashboard')}
+              {tk(`admin.tab.${t}` as Parameters<typeof tk>[0])}
             </Button>
           ))}
         </nav>
@@ -110,8 +111,15 @@ export default function AdminLayout() {
               else void supabaseAuth().auth.signOut();
             }}
           />
-        ) : (
+        ) : tab === 'dashboard' ? (
           <CohortDashboard
+            onAuthLost={(isForbidden) => {
+              if (isForbidden) setForbidden(true);
+              else void supabaseAuth().auth.signOut();
+            }}
+          />
+        ) : (
+          <FunnelPanel
             onAuthLost={(isForbidden) => {
               if (isForbidden) setForbidden(true);
               else void supabaseAuth().auth.signOut();
