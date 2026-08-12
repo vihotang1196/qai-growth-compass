@@ -19,6 +19,7 @@ import { sendMagicLink, type SendTarget } from '../_shared/resendLink.ts';
 import { toCsv } from '../_shared/csv.ts';
 import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
+import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -146,6 +147,54 @@ Deno.serve(async (req: Request) => {
           );
         }
         return json(await cohortDashboard(supa, scope));
+      }
+
+      case 'report_link': {
+        /**
+         * Admin 看学员报告 —— **签一条短命的渲染令牌,不碰学员自己的凭证**。
+         *
+         * 【为什么不用学员的 access_token】那是他的长期凭证、不自动过期、可以被转发。
+         * 把它交到 Admin 手上就等于多了一份可以四处流转的报告链接,
+         * 而它和学员手里那条**完全等价** —— 没法区分谁看过。
+         *
+         * 【为什么用 renderToken】它本来就是给 PDF 渲染器用的:HMAC 签名、
+         * 绑定单个 session、TTL 180 秒。一条只活三分钟的链接**存不住** ——
+         * 复制出去也几乎立刻失效,而这正是「Admin 能看任何人的报告」这件事
+         * 该有的形状:能看,但看的是一次性的,而且这一次被记下来了。
+         *
+         * 【必须留痕】这条 console.log 是这个能力唯一的审计痕迹。
+         * 没有它就是「Admin 能静默看任何人的报告」—— 那种能力不该没有记录。
+         */
+        const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
+        if (!sessionId) return json({ error: 'missing session_id' }, 400);
+
+        const internal = Deno.env.get('INTERNAL_FN_SECRET');
+        if (!internal) {
+          console.error('report_link: INTERNAL_FN_SECRET is not configured');
+          return json({ error: 'server_misconfigured' }, 500);
+        }
+
+        /**
+         * 【报告只在算完之后存在】没有 result 的 session 打开只会看到「还没准备好」。
+         * 与其让人点开一个空页面,不如在这里就说清 —— 而前端那个按钮同样按这个条件禁用。
+         */
+        const { data: res, error: resErr } = await supa
+          .from('assessment_results')
+          .select('session_id')
+          .eq('session_id', sessionId)
+          .maybeSingle();
+        if (resErr) throw resErr;
+        if (!res) return json({ error: 'no_result', detail: '这个 session 还没算出结果' }, 409);
+
+        const rt = await signRenderToken(sessionId, internal, Date.now());
+        console.log(
+          `admin ${verdict.email} opened the report for session ${sessionId} ` +
+            `(render token, ttl ${RENDER_TOKEN_TTL_SEC}s)`,
+        );
+        return json({
+          url: `${env.APP_BASE_URL!.replace(/\/$/, '')}/report?rt=${encodeURIComponent(rt)}&lang=${lang}`,
+          expiresInSec: RENDER_TOKEN_TTL_SEC,
+        });
       }
 
       case 'export': {

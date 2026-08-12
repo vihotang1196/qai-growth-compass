@@ -61,6 +61,7 @@ export interface RosterRowProps {
   onRotate: () => void;
   onRevoke: () => void;
   onRenderPdf: () => void;
+  onOpenReport: () => void;
 }
 
 /**
@@ -78,6 +79,7 @@ export default function RosterRow({
   onRotate,
   onRevoke,
   onRenderPdf,
+  onOpenReport,
 }: RosterRowProps) {
   const { tk } = useT();
   const result = r.session?.result ?? null;
@@ -165,9 +167,24 @@ export default function RosterRow({
 
         <Td>
           <div className="flex gap-1">
-            {/* 查看报告要等 Stage 8 —— 现在禁用而不是隐藏,让人知道它会有 */}
-            <Button size="sm" variant="ghost" disabled title="Stage 8">
-              {tk('admin.action.report')}
+            {/*
+              查看报告。**启用条件是「有 result」,不是 pdf_status** ——
+              报告页读的是 assessment_results,与 PDF 渲染没关系:
+              PDF 失败的人报告照样能看(那正是异步化的取向)。
+              上一版是硬编码 disabled 的 Stage 8 占位,所以点「重新生成 PDF」
+              永远不会让它变 —— 它压根没有启用条件。
+
+              点开走的是**一条 180 秒的渲染令牌**,不是学员的 access_token,
+              而且服务端会记一行日志(见 assessment-admin 的 report_link)。
+            */}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy || !result}
+              title={tk('admin.action.reportHint')}
+              onClick={onOpenReport}
+            >
+              {busy ? tk('admin.report.opening') : tk('admin.action.report')}
             </Button>
             <Button
               size="sm"

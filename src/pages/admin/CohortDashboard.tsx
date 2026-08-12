@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import config from '@/config/assessment-config.json';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/brutalist';
 import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
+import QuestionSpread from './QuestionSpread';
 import { useT } from '@/lib/i18n';
 import { adminPost } from '@/lib/adminApi';
 
 const DIMENSIONS = config.dimensions;
 const TIERS = config.tiers;
 const SCALE = config.meta.score_scale;
-const Q_BY_ID = new Map(config.questions.map((q) => [q.id, q]));
 
 export interface CohortAggregatePayload {
   n: number;
@@ -88,12 +88,23 @@ export default function CohortDashboard({ onAuthLost }: { onAuthLost: (forbidden
   };
   const axes = buildRadarAxes(DIMENSIONS, a.dimensionMeans, {}, dimLabel);
 
-  /** 计数条 —— 只画人数,宽度按本范围最大值归一。不显示百分比 */
+  /**
+   * 档位 / 最弱维度的计数条 —— 这两处的标签是**短标签**(档位名、维度名),
+   * 所以标签留在左侧;每题选项那边是整句话,用 QuestionSpread 的上方布局。
+   *
+   * 人数那一列**定宽 + nowrap**:上一版没定宽,「6 人」被挤成两行 ——
+   * 数字与单位分开就不是一个数了。
+   */
   const Bar = ({ label, count, max }: { label: string; count: number; max: number }) => (
     <div className="flex items-center gap-2 font-body text-sm">
-      <span className="w-40 shrink-0 truncate">{label}</span>
-      <span className="h-4 bg-accent" style={{ width: `${max === 0 ? 0 : (count / max) * 100}%`, minWidth: count ? 2 : 0 }} />
-      <span className="ml-auto font-head font-bold">{tk('dash.people').replace('{n}', String(count))}</span>
+      <span className="w-32 shrink-0 whitespace-normal break-words leading-snug">{label}</span>
+      <span
+        className="h-3 bg-accent"
+        style={{ width: `${max === 0 ? 0 : (count / max) * 100}%`, minWidth: count ? 3 : 0 }}
+      />
+      <span className="w-14 shrink-0 whitespace-nowrap text-right font-head font-bold">
+        {tk('dash.people').replace('{n}', String(count))}
+      </span>
     </div>
   );
 
@@ -203,25 +214,8 @@ export default function CohortDashboard({ onAuthLost }: { onAuthLost: (forbidden
             <CardHeader>
               <CardTitle>{tk('dash.section.questions')}</CardTitle>
             </CardHeader>
-            <CardBody className="space-y-4">
-              <p className="font-body text-xs opacity-60">{tk('dash.questionsHint')}</p>
-              {a.questions.map((q) => {
-                const spec = Q_BY_ID.get(q.id);
-                const options = spec ? L(spec.zh.options, spec.en.options) : [];
-                const max = Math.max(0, ...q.counts);
-                return (
-                  <div key={q.id} className="border-brutal border-line p-3">
-                    <div className="mb-2 font-head text-sm font-bold">
-                      {q.id} · {spec ? L(spec.zh.q, spec.en.q) : q.id}
-                    </div>
-                    <div className="space-y-1">
-                      {q.counts.map((count, i) => (
-                        <Bar key={i} label={options[i] ?? `#${i}`} count={count} max={max} />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+            <CardBody>
+              <QuestionSpread questions={a.questions} />
             </CardBody>
           </Card>
         </>

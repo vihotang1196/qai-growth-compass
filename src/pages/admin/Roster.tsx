@@ -122,6 +122,30 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
     }
   }
 
+  /**
+   * 打开学员报告 —— 服务端签一条 180 秒的渲染令牌并记日志,前端只负责开新标签。
+   * **每次点击都现签**,不缓存 URL:那条链接三分钟就死,存下来用只会拿到失效页
+   * (与报告页下载 PDF 那处同一个取向:把「会过期」变成不存在的问题)。
+   */
+  async function openReport(row: RosterRow) {
+    const sessionId = row.session?.id;
+    if (!sessionId || busyId === row.id) return;
+    setBusyId(row.id);
+    setNotice(null);
+    try {
+      const res = await adminPost<{ url: string }>('report_link', { session_id: sessionId });
+      window.open(res.url, '_blank', 'noopener');
+    } catch (err) {
+      if (err instanceof Error && (err.message === 'unauthorized' || err.message === 'forbidden')) {
+        onAuthLost(err.message === 'forbidden');
+        return;
+      }
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function act(action: 'resend' | 'rotate' | 'revoke', row: RosterRow) {
     if (action === 'rotate' && !window.confirm(tk('admin.confirmRotate'))) return;
     if (action === 'revoke' && !window.confirm(tk('admin.confirmRevoke'))) return;
@@ -302,6 +326,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                   onRotate={() => void act('rotate', r)}
                   onRevoke={() => void act('revoke', r)}
                   onRenderPdf={() => void renderPdf(r)}
+                  onOpenReport={() => void openReport(r)}
                 />
               ))}
             </Tbody>

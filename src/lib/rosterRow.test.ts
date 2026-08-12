@@ -73,6 +73,7 @@ function render(row: RosterRowData, errorOpen = false): string {
             onRotate: noop,
             onRevoke: noop,
             onRenderPdf: noop,
+            onOpenReport: noop,
           }),
         ),
       ),
@@ -157,6 +158,60 @@ describe('a failed PDF must not push the action buttons off screen', () => {
   it('the detail text can wrap — it must beat the nowrap it inherits from Td', () => {
     const html = render(makeRow(), true);
     expect(html).toContain('whitespace-pre-wrap');
+  });
+});
+
+describe('the view-report button is enabled by having a result, not by pdf_status', () => {
+  /**
+   * 上一版是硬编码 `disabled` 的 Stage 8 占位 —— 所以点「重新生成 PDF」永远不会
+   * 让它变,它压根没有启用条件。现在的条件是「有 result」:
+   * 报告页读的是 assessment_results,与 PDF 渲染无关 ——
+   * **PDF 失败的人报告照样能看**,那正是整条异步化的取向。
+   */
+  const withResult = (pdf_status: string, pdf_last_error: string | null = null) =>
+    makeRow({
+      session: {
+        id: 's',
+        status: 'completed',
+        result: {
+          total: 3.4,
+          tier: 'spot',
+          weakest: ['traffic'],
+          pdf_status,
+          pdf_last_error,
+          share_card_error: null,
+        },
+      },
+    });
+
+  /**
+   * 操作区里第一个按钮就是「查看报告」。
+   *
+   * 【断言要看 `disabled=""` 属性,不能搜 "disabled"】className 里有
+   * Tailwind 的 `disabled:pointer-events-none` —— 第一版搜子串 "disabled",
+   * 于是三条断言全部假红。**断言的边界要落在属性上,不是整段字符串上。**
+   */
+  const reportDisabled = (html: string) => {
+    const cell = actionsCell(html);
+    const btn = cell.slice(cell.indexOf('<button'), cell.indexOf('</button>') + 9);
+    return /\sdisabled=""/.test(btn);
+  };
+
+  it('a row with a result can open the report', () => {
+    expect(reportDisabled(render(withResult('ready')))).toBe(false);
+  });
+
+  it('PDF failure does not block the report — that is the whole point of the async split', () => {
+    expect(reportDisabled(render(withResult('failed_permanent', 'boom')))).toBe(false);
+  });
+
+  it('pending PDF does not block it either', () => {
+    expect(reportDisabled(render(withResult('pending')))).toBe(false);
+  });
+
+  it('a row with no result cannot — the report would only say "not ready"', () => {
+    const html = render(makeRow({ session: { id: 's', status: 'in_progress', result: null } }));
+    expect(reportDisabled(html)).toBe(true);
   });
 });
 
