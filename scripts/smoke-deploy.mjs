@@ -26,6 +26,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 
 /**
  * 我们自己签发的 session cookie 名。
@@ -216,6 +217,63 @@ const checks = [
     },
   },
 ];
+
+/**
+ * ── 每个 cron 端点都必须【真的执行到我们的代码】 ──
+ *
+ * 【为什么需要这一组:200 不等于跑了】实测 `/api/cron/retention` 返回
+ * `HTTP 200 + content-type: text/html` —— 请求被静态产物接住了,函数压根没执行。
+ * 而 **Vercel 的 cron 执行历史里 200 就是成功**,所以那条日程可以从 Stage 4 起
+ * 每天「成功」一次而一次都没跑过。这与 `assessment-ghl-resync`
+ * 「文件头写着由 Cron 定时调、而 vercel.json 里从来没有它」是同一族:
+ * **写下的意图没有任何东西检查它成立。**
+ *
+ * 【判据选「未鉴权时回 401 JSON」】不带 Authorization 时,只有我们自己的代码会回
+ * 401 + JSON。所以 401 是「函数执行到了」的证据,而 200 + HTML 是「没执行」的证据。
+ * 它同时满足这个脚本的零写入原则:401 走不到任何副作用。
+ *
+ * 【覆盖范围从文件系统推导,不手写】新增一个 cron 函数会自动被这一组覆盖 ——
+ * 手写清单的话,下一个 cron 照样会漏(判断标准 12)。
+ */
+const cronFiles = readdirSync(new URL('../api/cron/', import.meta.url))
+  .filter((f) => f.endsWith('.ts'))
+  .sort();
+
+if (cronFiles.length === 0) {
+  // 一条都没发现,本身就是问题 —— 而不是「没什么要检查的」
+  checks.push({
+    name: 'cron 端点清单非空',
+    async run() {
+      return 'api/cron/ 下一个 .ts 都没有 —— 要么目录挪了,要么这段发现逻辑坏了';
+    },
+  });
+}
+
+for (const file of cronFiles) {
+  const route = `/api/cron/${file.replace(/\.ts$/, '')}`;
+  checks.push({
+    name: `${route} 真的执行到函数(未鉴权 → 401 JSON,不是 200 HTML)`,
+    async run() {
+      const res = await fetch(`${base}${route}`);
+      const ct = res.headers.get('content-type') ?? '';
+      const body = (await res.text()).slice(0, 200);
+
+      if (res.status === 200 && ct.includes('text/html')) {
+        return (
+          `200 + text/html —— 函数没有执行,请求被静态产物接住了。` +
+          `⚠️ Vercel 的 cron 历史里这也是 200,所以这条日程会「每天成功」而从不运行。` +
+          `先看部署的 Functions 列表里有没有 ${route}。body=${JSON.stringify(body.slice(0, 80))}`
+        );
+      }
+      if (res.status === 401 && ct.includes('application/json')) return null;
+      if (res.status === 500 && ct.includes('application/json')) {
+        // 我们自己的 server_misconfigured 也证明函数执行了,但要说出来
+        return `500 JSON —— 函数执行到了,但配置缺失(多半是 CRON_SECRET 没配):${body}`;
+      }
+      return `期望 401 JSON,实际 ${res.status} ${ct} —— body=${JSON.stringify(body.slice(0, 120))}`;
+    },
+  });
+}
 
 console.log(`\n冒烟检查 → ${base}\n`);
 

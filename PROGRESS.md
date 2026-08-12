@@ -173,7 +173,52 @@ CSV 那边守住了(服务端无条件剔除,不看任何开关),这条路漏了
 GHL 写回(本条)、魔法链接重发(`resendLink` —— seed 行的 `email_lower` 是
 `@seed.invalid`,发不出去,但值得确认它不会去尝试)。
 
-### 6. 一直挂着的
+### 6. ⚠️ `/api/cron/retention` 返回 200 + HTML —— 函数没执行,而 cron 历史里这是「成功」
+
+实测:`curl -i /api/cron/retention` → `HTTP/2 200`、`content-type: text/html`。
+请求被静态产物接住了,**函数压根没执行**。
+
+**排除掉的**(有证据,不是猜):
+
+- **不是 rewrite。** `/((?!api/).*)` 对多层路径成立 —— 本地编译那条 source 逐个试过:
+  `/api/render-pdf`、`/api/cron/retention`、`/api/cron/pdf-sweep` **三条都 pass-through**,
+  只有 `/`、`/report`、`/admin/x/y` 会被改写。而且如果是 rewrite 的问题,
+  `pdf-sweep` 也该被吃掉,可它返回正常 JSON
+- **不是本地文件差异。** 两个文件都被 git 跟踪、都是 `export default async function handler`、
+  都在 `api/cron/` 下、都被 `tsconfig.api.json` 的 `include: ["api"]` 覆盖。
+  `functions` 块里只列了 pdf-sweep 而没有 retention,但 `api/[...path].ts` 同样不在里面
+  却工作正常 —— 所以那不是判据
+
+**剩下的都在部署侧**,要看 Vercel 那次部署的 Functions 列表里到底有没有
+`api/cron/retention`。
+
+## 比这一个实例更要紧的
+
+**Vercel 的 cron 执行历史里 200 就是成功。** 所以这条日程可以从 Stage 4 起
+每天「成功」一次而**一次都没真的跑过** —— 留存清理从来没执行,而没有任何迹象。
+
+**一个便宜的判据**:去看 Supabase 侧 `assessment-maintenance` 的调用次数。
+如果只有手动 curl 那几次、没有每天一次的记录,那就是从来没跑过。
+
+这与 `assessment-ghl-resync`「文件头写着由 Cron 定时调、而 vercel.json 里从来没有它」
+是同一族:**写下的意图没有任何东西检查它成立**。两个都是 cron,两个都「看起来在工作」。
+
+## 已经补上的守卫
+
+`npm run smoke` 现在为 **`api/cron/` 下每一个 `.ts`** 各加一条检查:
+未鉴权请求必须回 **401 + JSON**。理由:
+
+- 不带 Authorization 时**只有我们自己的代码会回 401**,所以 401 是「函数执行到了」的证据,
+  而 `200 + text/html` 是「没执行」的证据
+- 满足 smoke 的零写入原则 —— 401 走不到任何副作用,不需要任何凭据
+- **覆盖范围从文件系统推导**(`readdirSync('api/cron')`),不是手写清单:
+  下一个 cron 函数会自动被覆盖([判断标准 12](#12-覆盖范围是手写的守卫会被代码悄悄长到边界外面--让覆盖由运行时事实驱动))
+- 一条都没发现时**本身报错**,而不是「没什么要检查的」
+
+两个方向都验过:对着「200 + HTML」的服务器两条都红(错误里直接写出
+「Vercel 的 cron 历史里这也是 200」),对着回 401 JSON 的两条都绿。
+
+### 7. 一直挂着的
 
 - **真正的冷启动耗时仍未测准** —— 两次都约 16 秒,但都是热的。要在**新部署之后的第一次调用**才拿得到
 - **`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
