@@ -43,6 +43,10 @@ const SEND_COLS =
 interface RosterRow {
   id: string;
   name: string | null;
+  /** 这个人的语言(zh / en)—— 语言跟着人走,见 _shared/lang.ts */
+  lang?: string | null;
+  /** webhook 最近一次写入时的告警,jsonb 数组。名单页负责让它可见 */
+  warnings?: unknown;
   phone_e164: string | null;
   phone_raw: string | null;
   email_lower: string | null;
@@ -768,7 +772,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
   const { data, error } = await supa
     .from('assessment_entitlements')
     .select(
-      `id, name, phone_e164, phone_raw, email_lower, status,
+      `id, name, phone_e164, phone_raw, email_lower, status, lang, warnings,
        first_login_at, completed_at, link_sent_at, access_revoked_at,
        cohort:assessment_cohorts(id, name, is_test),
        session:assessment_sessions(

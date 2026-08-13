@@ -6,6 +6,7 @@
  * 测试见 webhookPayload_test.ts。
  */
 import { normalizeEmail, normalizePhone, phoneTail } from './phone.ts';
+import type { EntitlementWarning } from './entitlementWarnings.ts';
 
 /** 唯一必填字段。故意不接受 contact_id / contactId 之类的别名 —— 见下方注释 */
 export const REQUIRED_FIELD = 'ghl_contact_id';
@@ -21,11 +22,14 @@ export interface NormalizedEntitlement {
   cohort_tag: string | null;
 }
 
-export type Warning =
-  /** 号码给了但解析不出有效 E.164 —— 记录仍然入库,Admin 标红由人修 */
-  | 'phone_unparseable'
-  /** 既没手机也没邮箱 —— 备用路径永远匹配不到这个人 */
-  | 'no_contact_channel';
+/**
+ * 告警的形状与取值域搬到了 `entitlementWarnings.ts`(写入方与名单页共用一份)。
+ *
+ * 【为什么从字符串换成 `{ code, context }`】一条告警要能说清「去哪改」:
+ * `lang_invalid` 不带上收到的那个值(`EN`),运营只知道「有问题」,不知道
+ * GHL 那边填了什么。原来的字符串形状没有放上下文的地方。
+ */
+export type Warning = EntitlementWarning;
 
 export type ParseResult =
   | { ok: true; value: NormalizedEntitlement; warnings: Warning[] }
@@ -72,8 +76,18 @@ export function parseWebhookPayload(raw: unknown): ParseResult {
   const emailLower = normalizeEmail(str(body.email));
 
   const warnings: Warning[] = [];
-  if (phoneRaw && !phoneE164) warnings.push('phone_unparseable');
-  if (!phoneE164 && !emailLower) warnings.push('no_contact_channel');
+  /**
+   * 【context 里放脏号码的**形状**,不放号码本身】号码是 PII,而 warnings 这一列
+   * 会显示在名单页上、也可能被导出。「11 位、含字母」足够定位「GHL 那边的字段是什么样的」,
+   * 而完整号码在 `phone_raw` 里本来就有。
+   */
+  if (phoneRaw && !phoneE164) {
+    warnings.push({
+      code: 'phone_unparseable',
+      context: `${phoneRaw.length} chars${/[a-zA-Z]/.test(phoneRaw) ? ', has letters' : ''}`,
+    });
+  }
+  if (!phoneE164 && !emailLower) warnings.push({ code: 'no_contact_channel' });
 
   return {
     ok: true,

@@ -73,7 +73,14 @@ Deno.test('degrades on an unparseable phone but keeps the record', () => {
   assertEquals(r.value.phone_tail, null);
   // 原值必须保留 —— Admin 标红后由人来修
   assertEquals(r.value.phone_raw, '0l2-436 l382');
-  assertEquals(r.warnings, ['phone_unparseable']);
+  /**
+   * 【钉 code,不逐字钉 context】context 的作用是「能定位 GHL 那边的字段长什么样」,
+   * 所以断言它提到了长度、而且**不含号码本身**(号码是 PII,而 warnings 会显示在名单页上、
+   * 也可能被导出;完整原值在 phone_raw 里本来就有)。
+   */
+  assertEquals(r.warnings.map((w) => w.code), ['phone_unparseable']);
+  assertEquals(r.warnings[0].context?.includes('12'), true, r.warnings[0].context);
+  assertEquals(r.warnings[0].context?.includes('0l2-436'), false, 'context 不该含号码原值');
 });
 
 Deno.test('full-width digits from a CJK IME still normalise', () => {
@@ -86,12 +93,12 @@ Deno.test('warns when there is no contact channel at all', () => {
   const r = ok({ ghl_contact_id: 'x' });
   assertEquals(r.value.phone_e164, null);
   assertEquals(r.value.email_lower, null);
-  assertEquals(r.warnings, ['no_contact_channel']);
+  assertEquals(r.warnings, [{ code: 'no_contact_channel' }]);
 });
 
 Deno.test('an unparseable phone with no email raises both warnings', () => {
   const r = ok({ ghl_contact_id: 'x', phone: '12345' });
-  assertEquals(r.warnings, ['phone_unparseable', 'no_contact_channel']);
+  assertEquals(r.warnings.map((w) => w.code), ['phone_unparseable', 'no_contact_channel']);
 });
 
 Deno.test('blank and non-string optionals become null, not empty strings', () => {

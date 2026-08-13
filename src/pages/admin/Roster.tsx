@@ -14,6 +14,7 @@ import {
 import { useT } from '@/lib/i18n';
 import { adminPost } from '@/lib/adminApi';
 import RosterRowView, { ROSTER_COLUMNS, type RosterRowData as RosterRow } from './RosterRow';
+import { parseWarnings } from '../../../api/_lib/entitlementWarnings';
 
 interface RosterResponse {
   rows: RosterRow[];
@@ -46,6 +47,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
   const [minScore, setMinScore] = useState('');
   const [maxScore, setMaxScore] = useState('');
   const [badPhoneOnly, setBadPhoneOnly] = useState(false);
+  const [warnOnly, setWarnOnly] = useState(false);
   /**
    * 【默认隐藏测试数据】运营看名单时要的是真实学员。
    * 但要有开关 —— 造完数据得能看见它们,否则只能去数据库里确认,那不算能用。
@@ -88,13 +90,15 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
       if (cohort && r.cohort?.id !== cohort) return false;
       if (status && r.status !== status) return false;
       if (badPhoneOnly && r.phone_e164 !== null) return false;
+      // 「只看有告警的」—— 与「只看号码解析失败的」同一个位置、同一种语义
+      if (warnOnly && parseWarnings(r.warnings).length === 0) return false;
       const total = r.session?.result?.total ?? null;
       // 设了分数区间就意味着「只看已完成的」—— 没分数的人无法参与比较
       if (min !== null && (total === null || total < min)) return false;
       if (max !== null && (total === null || total > max)) return false;
       return true;
     });
-  }, [data, cohort, status, minScore, maxScore, badPhoneOnly, showTest]);
+  }, [data, cohort, status, minScore, maxScore, badPhoneOnly, warnOnly, showTest]);
 
   /**
    * 重新生成 PDF —— 不加确认框(重置只是重渲一次,误点成本很低;确认框会让人形成
@@ -266,6 +270,20 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
               className="h-5 w-5 border-brutal border-line"
             />
             {tk('admin.filter.badPhoneOnly')}
+          </label>
+          {/*
+            只看有告警的 —— 与号码那个开关并列。
+            【为什么放在这里而不是单独一块】告警和「号码解析失败」是同一类东西:
+            都是「这一行需要人看一眼」,而运营的动作是同一个(筛出来、逐行处理)。
+          */}
+          <label className="flex items-center gap-2 font-body text-sm">
+            <input
+              type="checkbox"
+              checked={warnOnly}
+              onChange={(e) => setWarnOnly(e.target.checked)}
+              className="h-5 w-5 border-brutal border-line"
+            />
+            {tk('admin.filter.warnOnly')}
           </label>
           {/*
             测试数据开关 —— 只影响这张表的显示。
