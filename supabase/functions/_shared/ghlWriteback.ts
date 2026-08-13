@@ -220,6 +220,17 @@ async function recordFailure(
 
   const patch: Record<string, unknown> = {
     ghl_sync_attempts: attempts,
+    /**
+     * 【失败时把 ghl_synced 置回 false】⚠️ **这是一条已上线路径的行为改动。**
+     *
+     * 原来只写 error 与 next_retry_at。于是一行已经 synced 的记录被重算、而这次失败时,
+     * `ghl_synced` 还是 true —— sweep 的候选查询要求它是 false,
+     * 所以**那次失败永远不会被重试**,而且不会有任何东西说。
+     * 标签那半是照抄这个形状写的,所以两边同一个洞、一起修。
+     *
+     * 语义上 false 才是对的:我们刚试着写的字段**没有**落在 GHL 上,那就不是「已同步」。
+     */
+    ghl_synced: false,
     ghl_last_error: `${klass}: ${detail}`.slice(0, 1000),
     // CONFIG / AUTH 不排重试;只有 TRANSIENT 设下次重试时间
     ghl_next_retry_at:

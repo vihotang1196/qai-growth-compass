@@ -324,8 +324,21 @@ async function finalize(
    * 反向也一样:标签失败不碰 `ghl_synced`。两组状态列因此是分开的
    * (见 20260812000000_ghl_tags_status.sql)。
    *
-   * 【首次写回时 applied 必然是空】所以传 null:这一行还没有 `ghl_tags_applied`。
-   * 重算走的是同一个函数,那时 sweep / 重算路径会把当前值读进来。
+   * ⚠️ **上一版这里传的是 `null`,理由写着「首次写回时 applied 必然是空」——那个假设是错的。**
+   *
+   * finalize 用的是 `upsert(onConflict: session_id)`,而它只拦「题没答齐」和「没交问卷」;
+   * 两者在第一次 finalize 之后**仍然成立**,而 `assessment-quiz` 也不拦 completed 之后改答案。
+   * 所以「重答 → 再 finalize」这条路是通的,而那时:
+   *   - `applied` 传 null → 差集算出 `toRemove = []` → **旧档位标签永远不会被移除**
+   *   - 紧接着 `ghl_tags_applied` 被覆盖成新的一套 → **那个残留标签的记录被销毁**,
+   *     以后任何一次 sweep 都不可能知道要去移除它
+   * 也就是说,`ghl_tags_applied` 这整个设计要防的那件事,会被这一行悄悄绕过。
+   *
+   * 那句「必然」是一个没有任何东西验证的断言 —— 与判断标准 20 同族,
+   * 只是这次不是「将来会怎样」,而是「这里不可能发生」。
+   * 改成**读当前值**,于是这条路径不再依赖任何关于调用次数的假设。
+   *
+   * 【为什么读得到】上面那次 upsert 不写 `ghl_tags_applied`,所以它保持原值。
    */
   const tagInput = {
     tier: result.tier,
@@ -333,7 +346,26 @@ async function finalize(
     total: result.total,
     responses: survey,
   };
-  const tagSync = await syncTagsToGhl(supa, session.id, ghlContactId, tagInput, null, 'finalize');
+  const { data: appliedRow, error: appliedErr } = await supa
+    .from('assessment_results')
+    .select('ghl_tags_applied')
+    .eq('session_id', session.id)
+    .maybeSingle();
+  if (appliedErr) {
+    // 读不到就当作没有上次记录 —— 但要说出来:那意味着这一次不会移除任何旧标签
+    console.error(
+      `failed to read ghl_tags_applied for ${session.id}: ${appliedErr.message} ` +
+        `— stale tags (if any) will not be removed this round`,
+    );
+  }
+  const tagSync = await syncTagsToGhl(
+    supa,
+    session.id,
+    ghlContactId,
+    tagInput,
+    appliedRow?.ghl_tags_applied ?? null,
+    'finalize',
+  );
 
   // ── PDF 渲染:异步触发,不阻塞返回 ──
   const pdfTriggered = triggerPdfRender(session.id);

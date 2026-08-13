@@ -71,6 +71,15 @@ async function recordTagFailure(
   const { error } = await supa
     .from('assessment_results')
     .update({
+      /**
+       * 【失败时把 synced 置回 false】否则:一行已经 synced 的记录被重算
+       * (重答 → 再 finalize)、而这次同步失败 —— `synced` 还是 true,
+       * 于是 **sweep 永远挑不到它**(候选查询要求 `ghl_tags_synced = false`)。
+       * 一次失败因此变成永久失败,而且没有任何东西会说。
+       *
+       * 语义上也该是 false:我们刚试着写的东西**没有**落在 GHL 上,那就不是「已同步」。
+       */
+      ghl_tags_synced: false,
       ghl_tags_last_error: `${klass}: ${detail}`.slice(0, 1000),
       // CONFIG / AUTH 不排重试;只有 TRANSIENT 设下次时间。与字段那边同一条规则
       ghl_tags_next_retry_at: klass === 'TRANSIENT' ? nextRetryAt(attempts, nowMs) : null,

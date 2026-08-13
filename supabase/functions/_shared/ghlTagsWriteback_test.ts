@@ -177,12 +177,39 @@ Deno.test('测试批次:一个请求都不发,记 CONFIG 而不是标 synced', a
     assertEquals(out.ok, false);
     assertEquals(calls.requests.length, 0);
     const patch = calls.updates.at(-1)!;
-    assertEquals(patch.ghl_tags_synced, undefined);
+    /**
+     * 【钉的是「绝不能是 true」,不是「这个键不出现」】
+     * 第一版写的是 `undefined` —— 那钉的是实现细节(patch 里有没有这个键),
+     * 而要求是**语义**:不能在数据里说「同步成功了」。
+     * 后来失败路径改成显式写 `false`(否则已 synced 的行重算失败后 sweep 永远挑不到),
+     * 这条就红了 —— 而它红的原因不是行为错了,是断言钉在了错的层次上。
+     */
+    assertEquals(patch.ghl_tags_synced, false);
     assertStringIncludes(String(patch.ghl_tags_last_error), 'CONFIG:');
     assertStringIncludes(String(patch.ghl_tags_last_error), 'test cohort');
     assertEquals(patch.ghl_tags_next_retry_at, null); // CONFIG 不排重试
   } finally {
     restore();
+  }
+});
+
+Deno.test('失败一定把 synced 置回 false —— 否则重算失败后 sweep 永远挑不到它', async () => {
+  /**
+   * 这条守的是一个**安静变成永久**的失败:一行已经 `ghl_tags_synced = true` 的记录,
+   * 因为重答被重算、而这次同步失败 —— 如果失败路径不动 `synced`,
+   * 候选查询(`ghl_tags_synced = false`)就永远挑不到它,而它其实一直没同步上。
+   *
+   * 字段那半原本是同一个洞(`recordFailure` 只写 error 与 next_retry_at),已一起修。
+   */
+  for (const status of [429, 403, 400]) {
+    const calls = emptyCalls();
+    const restore = withFetch(calls, status, 'nope');
+    try {
+      await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, null, 'test', 0);
+      assertEquals(calls.updates.at(-1)!.ghl_tags_synced, false, String(status));
+    } finally {
+      restore();
+    }
   }
 });
 
