@@ -16,7 +16,8 @@ function row(over: Partial<PdfSweepRow> = {}): PdfSweepRow {
     pdf_status: 'pending',
     pdf_attempts: 0,
     pdf_status_at: iso(60 * 60_000), // 一小时前,足够陈旧
-    computed_at: iso(60 * 60_000),
+    lang: 'zh',
+    created_at: iso(60 * 60_000),
     ...over,
   };
 }
@@ -93,23 +94,23 @@ describe('staleness is what separates "still running" from "never started"', () 
 });
 
 describe('the timestamp fallback survives the migration landing before the code', () => {
-  it('falls back to computed_at when pdf_status_at is still null', () => {
+  it('falls back to created_at when pdf_status_at is still null', () => {
     // 老行、以及迁移先于代码上线的那段时间
     expect(
-      pdfSweepReason(row({ pdf_status: 'rendering', pdf_status_at: null, computed_at: iso(60 * 60_000) }), NOW),
+      pdfSweepReason(row({ pdf_status: 'rendering', pdf_status_at: null, created_at: iso(60 * 60_000) }), NOW),
     ).toBe('rendering_stuck');
   });
 
   it('a null pdf_status_at on a fresh row still gets the grace period', () => {
     expect(
-      pdfSweepReason(row({ pdf_status: 'pending', pdf_status_at: null, computed_at: iso(5_000) }), NOW),
+      pdfSweepReason(row({ pdf_status: 'pending', pdf_status_at: null, created_at: iso(5_000) }), NOW),
     ).toBeNull();
   });
 
   it('an unparseable timestamp means leave it alone, not sweep it forever', () => {
     // 坏值下宁可漏一条等人发现,也不要反复烧渲染
     expect(
-      pdfSweepReason(row({ pdf_status: 'failed', pdf_status_at: 'not-a-date', computed_at: 'also-bad' }), NOW),
+      pdfSweepReason(row({ pdf_status: 'failed', pdf_status_at: 'not-a-date', created_at: 'also-bad' }), NOW),
     ).toBeNull();
   });
 });

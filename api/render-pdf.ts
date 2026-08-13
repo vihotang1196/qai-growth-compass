@@ -19,6 +19,8 @@ import {
 } from './_lib/glyphCheck.js';
 import { signRenderToken } from './_lib/renderToken.js';
 import { MAX_PDF_ATTEMPTS } from './_lib/pdfState.js';
+import { parseLang, type Lang } from './_lib/lang.js';
+import { pdfObjectPath, shareCardObjectPath } from './_lib/reportFiles.js';
 import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
 import { pickSecretKeyFromPlainEnv } from './_lib/apiKeys.js';
 
@@ -169,6 +171,8 @@ async function renderShareCards(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>['newPage']>>,
   appBase: string,
   rt: string,
+  /** 卡片渲的是报告页的内容(含档位名),所以它跟 PDF 用**同一个** lang —— 不是各自决定 */
+  lang: Lang,
 ): Promise<{
   images: { suffix: string; png: Buffer }[];
   error: string | null;
@@ -181,7 +185,7 @@ async function renderShareCards(
       height: SHARE_CARD_VIEWPORT.height,
       deviceScaleFactor: 1, // 卡片按 CSS 像素就是成品像素,不要 2x 再放大一倍
     });
-    await page.goto(`${appBase}/share-card?rt=${encodeURIComponent(rt)}&lang=zh`, {
+    await page.goto(`${appBase}/share-card?rt=${encodeURIComponent(rt)}&lang=${lang}`, {
       waitUntil: 'networkidle0',
       timeout: 30_000,
     });
@@ -218,7 +222,7 @@ async function renderShareCards(
   }
 }
 
-async function renderReport(sessionId: string): Promise<RenderOutcome> {
+async function renderReport(sessionId: string, lang: Lang): Promise<RenderOutcome> {
   const appBase = env('APP_BASE_URL').replace(/\/$/, '');
   const signedAtMs = Date.now();
   const rt = await signRenderToken(sessionId, env('INTERNAL_FN_SECRET'), signedAtMs);
@@ -377,7 +381,7 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
     });
 
     // 渲染令牌走 query;报告页把它透传给 /api/assessment-report
-    await page.goto(`${appBase}/report?rt=${encodeURIComponent(rt)}&lang=zh`, {
+    await page.goto(`${appBase}/report?rt=${encodeURIComponent(rt)}&lang=${lang}`, {
       waitUntil: 'networkidle0',
       timeout: 45_000,
     });
@@ -458,7 +462,7 @@ async function renderReport(sessionId: string): Promise<RenderOutcome> {
      * `cards.error` 只是一条记录,`pdf` 该怎么返回还怎么返回。
      * 这与整个异步化是同一个取向:主交付不受附属品拖累。
      */
-    const cards = await renderShareCards(page, appBase, rt);
+    const cards = await renderShareCards(page, appBase, rt, lang);
     if (cards.scan) {
       scans.push(cards.scan);
       scannedPaths.add(new URL(page.url()).pathname);
@@ -521,6 +525,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   /**
+   * 【`lang` 是必填,没有默认值】
+   *
+   * 一个 session 会有**两行** report_files(zh / en),而「渲哪一行」这件事只有调用方知道:
+   * sweep 是逐行扫的,学员那个按钮是按他当前语言点的。
+   *
+   * ⚠️ **不能从 `entitlement.lang` 读** —— 那是「这个人现在偏好什么」,
+   * 而这次渲的是「哪一份文件」。学员切到英文之后触发重渲中文版,
+   * 从 entitlement 读会渲出**英文的中文版**:文件名说 zh,内容是 en,
+   * 而两者都不会报错。
+   *
+   * 缺参数一律 400:这个端点只被我们自己的三个调用方打(finalize / sweep / 学员端点),
+   * 而一个默认值会让「调用方忘了传」变成「静默渲成中文」。
+   */
+  const langParse = parseLang(body.lang);
+  if (langParse.kind !== 'set') {
+    return res.status(400).json({
+      error: 'missing lang',
+      detail:
+        langParse.kind === 'invalid'
+          ? `lang must be zh or en, received ${JSON.stringify(langParse.received)}`
+          : 'expected { session_id, lang } — lang has no default: one session has one row per language',
+    });
+  }
+  const lang: Lang = langParse.lang;
+
+  /**
    * 【两代 secret key,新的优先】Disable 之后 legacy 不认;配好新 key 之前 legacy 还要能用。
    * 两个都没有才报错 —— 见 _lib/apiKeys.ts。
    */
@@ -538,23 +568,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // probe 不动数据库 —— 它只回答「这条管线现在健康吗」
   if (!probe) {
     const { data: row } = await supa
-      .from('assessment_results')
+      .from('assessment_report_files')
       .select('pdf_attempts, pdf_status')
       .eq('session_id', sessionId)
+      .eq('lang', lang)
       .maybeSingle();
     const attempts = (row?.pdf_attempts as number) ?? 0;
     if (attempts >= MAX_PDF_ATTEMPTS) {
-      // 已经用完次数 —— 不再自动重试,等 Admin 手动重置
-      return res.status(409).json({ error: 'failed_permanent', attempts });
+      // 已经用完次数 —— 不再自动重试,等 Admin 手动重置。次数是【每种语言各自】的
+      return res.status(409).json({ error: 'failed_permanent', attempts, lang });
     }
-    await supa
-      .from('assessment_results')
-      .update({ pdf_status: 'rendering', pdf_attempts: attempts + 1, pdf_status_at: new Date().toISOString() })
-      .eq('session_id', sessionId);
+    /**
+     * 【upsert 而不是 update】学员点「生成英文版」时那一行**还不存在**;
+     * finalize 那次也是第一次。update 在没有行时是静默的 0 行影响 ——
+     * 于是状态永远停在「什么都没有」,而渲染照常跑完、照常写 ready,
+     * 中间那段「正在生成」对前端不可见。
+     */
+    await supa.from('assessment_report_files').upsert(
+      {
+        session_id: sessionId,
+        lang,
+        pdf_status: 'rendering',
+        pdf_attempts: attempts + 1,
+        pdf_status_at: new Date().toISOString(),
+      },
+      { onConflict: 'session_id,lang' },
+    );
   }
 
   try {
-    const { pdf, glyph, scan, cards } = await renderReport(sessionId);
+    const { pdf, glyph, scan, cards } = await renderReport(sessionId, lang);
 
     if (probe) {
       // 同一条管线,只是不落地。post-deploy 的检查就跑这个
@@ -571,7 +614,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const path = `${sessionId}.pdf`;
+    const path = pdfObjectPath(sessionId, lang);
     const { error: upErr } = await supa.storage
       .from('reports')
       .upload(path, pdf, { contentType: 'application/pdf', upsert: true });
@@ -593,7 +636,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     let cardError = cards.error;
     for (const img of cards.images) {
-      const cardPath = `${sessionId}${img.suffix}`;
+      const cardPath = shareCardObjectPath(sessionId, lang, img.suffix);
       const { error: cardUpErr } = await supa.storage
         .from('reports')
         .upload(cardPath, img.png, { contentType: 'image/png', upsert: true });
@@ -611,7 +654,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      * 让 Admin 看得见 —— 那样问题会被我们主动发现,而不是等学员投诉。
      */
     await supa
-      .from('assessment_results')
+      .from('assessment_report_files')
       .update({
         pdf_path: path,
         pdf_status: 'ready',
@@ -621,7 +664,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // 成功时显式清空,免得上一次的错误一直挂着骗人
         share_card_error: cardError,
       })
-      .eq('session_id', sessionId);
+      .eq('session_id', sessionId)
+      .eq('lang', lang);
 
     if (needsAttention(glyph.severity)) {
       console.error(`PDF rendered for ${sessionId} but ${glyph.message}`);
@@ -639,19 +683,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error(`render-pdf failed for ${sessionId}: ${detail}`);
     if (!probe) {
       const { data: row } = await supa
-        .from('assessment_results')
+        .from('assessment_report_files')
         .select('pdf_attempts')
         .eq('session_id', sessionId)
+        .eq('lang', lang)
         .maybeSingle();
       const attempts = (row?.pdf_attempts as number) ?? 1;
       await supa
-        .from('assessment_results')
+        .from('assessment_report_files')
         .update({
           pdf_status: attempts >= MAX_PDF_ATTEMPTS ? 'failed_permanent' : 'failed',
           pdf_status_at: new Date().toISOString(),
           pdf_last_error: detail.slice(0, 1000),
         })
-        .eq('session_id', sessionId);
+        .eq('session_id', sessionId)
+        .eq('lang', lang);
     }
     return res.status(500).json({ error: 'render_failed', detail: detail.slice(0, 300) });
   }

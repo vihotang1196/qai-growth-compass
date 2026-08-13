@@ -85,15 +85,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      * 已有的部分索引 assessment_results_pdf_status_idx (pdf_status) where pdf_status <> 'ready'
      * 正好覆盖这个查询。
      */
+    /**
+     * 【粒度是 (session, lang),不是 session】一个 session 有两行报告文件(zh / en),
+     * 而它们各自有自己的状态与次数。按 session 挑的话,同一份会被重复渲 ——
+     * 而那不是「多花一次 Lambda」:两次渲染写同一个对象,后一次覆盖前一次,
+     * 中间那一次的 attempts 却已经记上了。
+     *
+     * `created_at` 代替原来的 `computed_at` 排序:那一列在 results 上,而这里查的是新表。
+     */
     const { data, error } = await supa
-      .from('assessment_results')
+      .from('assessment_report_files')
       .select(
-        'session_id, pdf_status, pdf_attempts, pdf_status_at, computed_at, ' +
+        'session_id, lang, pdf_status, pdf_attempts, pdf_status_at, created_at, ' +
           'session:assessment_sessions!inner(entitlement:assessment_entitlements!inner(cohort:assessment_cohorts(is_test)))',
       )
       .neq('pdf_status', 'ready')
       .lt('pdf_attempts', MAX_PDF_ATTEMPTS)
-      .order('computed_at', { ascending: true });
+      .order('created_at', { ascending: true });
     if (error) throw error;
 
     const now = Date.now();
@@ -133,7 +141,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const base = env.APP_BASE_URL!.replace(/\/$/, '');
     const results = await Promise.all(
       batch.map(async ({ row, reason }) => {
-        console.log(`pdf-sweep: re-rendering ${row.session_id} (${reason}, attempts=${row.pdf_attempts})`);
+        console.log(
+          `pdf-sweep: re-rendering ${row.session_id}/${row.lang} (${reason}, attempts=${row.pdf_attempts})`,
+        );
         try {
           const upstream = await fetch(`${base}/api/render-pdf`, {
             method: 'POST',
@@ -141,20 +151,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               'Content-Type': 'application/json',
               'X-Internal-Secret': env.INTERNAL_FN_SECRET!,
             },
-            body: JSON.stringify({ session_id: row.session_id }),
+            // lang 必传:render-pdf 没有默认值,而这里渲的就是这一行那种语言
+            body: JSON.stringify({ session_id: row.session_id, lang: row.lang }),
           });
           const text = await upstream.text().catch(() => '');
           if (!upstream.ok) {
             console.error(
-              `pdf-sweep: ${row.session_id} returned ${upstream.status}: ${text.slice(0, 300)}`,
+              `pdf-sweep: ${row.session_id}/${row.lang} returned ${upstream.status}: ${text.slice(0, 300)}`,
             );
           }
           // render-pdf 自己会把结果写进 pdf_status / pdf_last_error,这里不重复写库 ——
           // 两处都写状态就会出现「谁最后写的」这种没人想查的问题
-          return { session_id: row.session_id, reason, status: upstream.status, ok: upstream.ok };
+          return { session_id: row.session_id, lang: row.lang, reason, status: upstream.status, ok: upstream.ok };
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
-          console.error(`pdf-sweep: ${row.session_id} threw: ${detail}`);
+          console.error(`pdf-sweep: ${row.session_id}/${row.lang} threw: ${detail}`);
           return { session_id: row.session_id, reason, status: 0, ok: false, detail };
         }
       }),

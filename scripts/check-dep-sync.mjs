@@ -82,7 +82,21 @@ function resolveLocal(fromFile, spec) {
     if (!alias) return null;
     base = resolve(spec.replace(alias, SRC_ALIAS[alias]));
   }
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) {
+  /**
+   * `api/**` 的相对导入按约定写成显式 `.js`(Vercel 的 Node ESM 语义:
+   * 运行时看到的是 tsc 产出的 .js),而磁盘上只有 `.ts`。
+   * `check:api-imports` 早就按这条约定解析,而这里没有 ——
+   * 于是第一个「api/_lib 内部互相导入、且被 Deno 再导出」的模块
+   * (`reportFiles.ts`)让这道门报了「解析不到,不当作通过」。
+   *
+   * 它报得对:一个解析不到的 specifier 就是没走完 import 图。缺的是这条映射,
+   * 而不是这道门太严。**两道门必须认同一套约定**,否则同一份代码在一处合法、
+   * 在另一处报错,而人会开始怀疑门而不是代码。
+   */
+  const jsToTs = base.endsWith('.js') ? base.slice(0, -3) : null;
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')];
+  if (jsToTs) candidates.push(`${jsToTs}.ts`, `${jsToTs}.tsx`);
+  for (const candidate of candidates) {
     if (exists(candidate)) return normalize(relative(process.cwd(), candidate));
   }
   return null;

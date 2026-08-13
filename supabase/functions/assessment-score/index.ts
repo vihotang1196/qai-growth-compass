@@ -20,6 +20,7 @@ import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
 import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
 import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { effectiveLang } from '../_shared/lang.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -70,7 +71,7 @@ Deno.serve(async (req: Request) => {
     // 每次都重查准入 —— cookie 有 30 天,中途被 revoke 的人不该还能提交
     const { data: ent, error: entError } = await supa
       .from('assessment_entitlements')
-      .select('id, ghl_contact_id, access_revoked_at')
+      .select('id, ghl_contact_id, access_revoked_at, lang')
       .eq('id', verified.entitlementId)
       .maybeSingle();
     if (entError) throw entError;
@@ -94,7 +95,13 @@ Deno.serve(async (req: Request) => {
       case 'survey':
         return await saveSurvey(supa, session, body.responses);
       case 'finalize':
-        return await finalize(supa, session, ent.id as string, ent.ghl_contact_id as string);
+        return await finalize(
+          supa,
+          session,
+          ent.id as string,
+          ent.ghl_contact_id as string,
+          ent.lang as string | null,
+        );
       default:
         return json({ error: 'unknown_action', action }, 400);
     }
@@ -201,6 +208,15 @@ async function finalize(
   session: SessionRow,
   entitlementId: string,
   ghlContactId: string,
+  /**
+   * `assessment_entitlements.lang` —— 语言跟着人走。
+   *
+   * ⚠️ **不用 `session.locale`**。那一列是「这次会话是从哪种语言的页面进来的」,
+   * 属于跟着链接走的旧模型;两者会分叉(学员用中文链接进来、切成英文、然后交卷)。
+   * 真相源只有 entitlement 那一列 —— 而 `session.locale` 现在没有任何一处读它,
+   * 那正是「名字像入口但没人引用」的形状,已记进未完成清单。
+   */
+  entLang: string | null,
 ): Promise<Response> {
   const { data: answerRows, error: aErr } = await supa
     .from('assessment_answers')
@@ -368,7 +384,7 @@ async function finalize(
   );
 
   // ── PDF 渲染:异步触发,不阻塞返回 ──
-  const pdfTriggered = triggerPdfRender(session.id);
+  const pdfTriggered = triggerPdfRender(session.id, effectiveLang(entLang));
 
   return json({ ok: true, result, writeback, tagSync, pdfTriggered });
 }
@@ -391,7 +407,7 @@ async function finalize(
  * 【渲染耗时约 16 秒,远超响应时间】所以这里只发出请求,不等结果;
  * pdf_status 由 render-pdf 自己写(rendering → ready / failed)。
  */
-function triggerPdfRender(sessionId: string): boolean {
+function triggerPdfRender(sessionId: string, lang: string): boolean {
   const base = Deno.env.get('APP_BASE_URL');
   const secret = Deno.env.get('INTERNAL_FN_SECRET');
   if (!base || !secret) {
@@ -402,7 +418,11 @@ function triggerPdfRender(sessionId: string): boolean {
   const task = fetch(`${base.replace(/\/$/, '')}/api/render-pdf`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': secret },
-    body: JSON.stringify({ session_id: sessionId }),
+    /**
+     * 【lang 必须传,而且传的是「这个人的语言」】第一次生成时那一份就该是他能读的那种。
+     * render-pdf 那边没有默认值 —— 忘了传会 400,而不是静默渲成中文。
+     */
+    body: JSON.stringify({ session_id: sessionId, lang }),
   })
     .then(async (res) => {
       if (!res.ok) {

@@ -33,11 +33,21 @@ export const PDF_RENDERING_STALE_MS = 5 * 60_000;
 
 export interface PdfSweepRow {
   session_id: string;
+  /**
+   * 这一行是哪种语言 —— **候选的粒度是 (session, lang)**。
+   * 按 session 挑的话同一份会被重复渲,而两次渲染写同一个对象:
+   * 后一次覆盖前一次,可中间那一次的 attempts 已经记上了。
+   */
+  lang: string;
   pdf_status: string;
   pdf_attempts: number;
-  /** 状态最后一次变化的时刻;老行可能没有,回落 computed_at */
+  /**
+   * 状态最后一次变化的时刻;新建的行可能还没有,回落 `created_at`。
+   * (原来回落的是 `assessment_results.computed_at` —— 那一列在旧表上,
+   * 而报告文件现在自己有 `created_at`。)
+   */
   pdf_status_at: string | null;
-  computed_at: string;
+  created_at: string;
 }
 
 /** 被挑中的原因 —— 不是布尔值,因为日志里要说清楚「为什么重跑这一条」 */
@@ -62,7 +72,7 @@ export type PdfSweepReason = 'failed_retry' | 'pending_trigger_lost' | 'renderin
 export function pdfSweepReason(row: PdfSweepRow, nowMs: number): PdfSweepReason | null {
   if (row.pdf_attempts >= MAX_PDF_ATTEMPTS) return null;
 
-  const since = Date.parse(row.pdf_status_at ?? row.computed_at);
+  const since = Date.parse(row.pdf_status_at ?? row.created_at);
   // 时间戳读不出来时【不】重跑:宁可漏一条等人发现,也不要因为一个坏值反复烧渲染
   if (Number.isNaN(since)) return null;
   const ageMs = nowMs - since;

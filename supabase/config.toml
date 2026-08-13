@@ -64,6 +64,13 @@ verify_jwt = false
 import_map = "./functions/deno.json"
 
 # 报告页取数。GET,cookie 鉴权,只读(不重算分数、不触发渲染)。
+# 学员自己触发生成某种语言的报告文件。cookie 鉴权,只接受 lang(session 从 cookie 来)。
+# 刻意不复用 Admin 的 render_pdf action —— 那会给一个只有管理员能碰的入口多开一条学员的路,
+# 而以后给它加功能的人不会想到这件事。留痕也分开:Admin 记「谁点的」,这里记「哪个 session」。
+[functions.assessment-report-file]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [functions.assessment-report]
 verify_jwt = false
 import_map = "./functions/deno.json"
