@@ -125,8 +125,28 @@ Deno.serve(async (req: Request) => {
     const capped = all.length > BATCH_CAP;
     const batch = all.slice(0, BATCH_CAP);
 
+    /**
+     * 【为什么每次都回 candidates:上一次排查里,这个响应无法区分「跑的是哪份代码」】
+     *
+     * 加标签之前,空批次回的是**逐字相同**的 `{ok:true, swept:0, note:'nothing due for retry'}`。
+     * 于是「标签一个都没打上」这件事有两种解释,而那次 curl 的输出**对两者都成立**:
+     *   ① 部署的还是旧代码(它只查 ghl_synced=false,而那行已经 true → 根本不挑它)
+     *   ② 新代码在跑,但标签那条查询没挑中
+     * 一个对两种假设都成立的观测,不是观测(判断标准 14)。
+     *
+     * 所以把两条查询各自的原始命中数回出来:
+     *   - 响应里**有没有** `candidates` 这个键 → 直接说明跑的是哪一版;
+     *   - `candidates.tags.raw` → 说明是查询没挑中,还是挑中了又被过滤掉。
+     * 这一格是这次排查里唯一能一次分辨的东西,所以它常驻,不是临时探针。
+     */
+    const candidates = {
+      fields: { raw: fieldRows.length, due: dueFields.length },
+      tags: { raw: tagRows.length, due: dueTags.length },
+      merged: all.length,
+    };
+
     if (batch.length === 0) {
-      return json({ ok: true, swept: 0, note: 'nothing due for retry' });
+      return json({ ok: true, swept: 0, note: 'nothing due for retry', candidates });
     }
 
     // 一次拉齐这批 session 的问卷,避免逐条查库
@@ -203,16 +223,30 @@ Deno.serve(async (req: Request) => {
     const tagsOk = results.filter((r) => r.tags?.ok).length;
     const fieldsTried = results.filter((r) => r.fields).length;
     const tagsTried = results.filter((r) => r.tags).length;
+    /**
+     * 【测试批次被跳过的条数单独数出来】seed 那 15 条会被标签查询挑中
+     * (它们 ghl_tags_synced=false),而收口在传输层把它们拦下。
+     * 拦下的事实必须在响应里**数得出来** —— 否则「一个请求都没发」与
+     * 「发了但都失败了」在这个返回值里长得一样,而两者的后果差别是
+     * GHL 的全局标签选择器里会不会多出一堆 assessment_* 挂在假联系人身上。
+     */
+    const skippedTestCohort = results.filter(
+      (r) => r.fields?.detail === 'skipped: test cohort' || r.tags?.detail === 'skipped: test cohort',
+    ).length;
+
     // 到批上限时明说还有剩,别让「swept 50」被误读成「全清了」
     if (capped) console.log(`resync: hit batch cap ${BATCH_CAP}, more remain — run again`);
     console.log(
-      `resync: swept ${batch.length} — fields ${fieldsOk}/${fieldsTried}, tags ${tagsOk}/${tagsTried}`,
+      `resync: swept ${batch.length} — fields ${fieldsOk}/${fieldsTried}, tags ${tagsOk}/${tagsTried}, ` +
+        `skippedTestCohort ${skippedTestCohort}; candidates ${JSON.stringify(candidates)}`,
     );
     return json({
       ok: true,
       swept: batch.length,
+      candidates,
       fields: { tried: fieldsTried, synced: fieldsOk },
       tags: { tried: tagsTried, synced: tagsOk },
+      skippedTestCohort,
       capped,
       results,
     });

@@ -2858,7 +2858,7 @@ synced=true。**注释承认了风险,代码没照做** —— 跟「打印一�
 
 ## 触发命令(手动重跑一次)
 
-直接 curl Supabase 函数,带 apikey(anon)+ X-Internal-Secret。Vercel Cron 的定时 wiring
+直接 curl Supabase 函数,带 apikey(anon)+ X-Internal-Secret(**apikey 在这条路径上不被网关校验,带着只是习惯**)。Vercel Cron 的定时 wiring
 (api/cron/ghl-retry.ts + vercel.json)是 D2 剩下的一步,不阻塞这次手动重跑。
 
 ---
@@ -4586,7 +4586,7 @@ Disable 是唯一能把两者区分开的动作([判断标准 7](#7-能不能区
 | 4 | **答题 → 报告** | 用一条 seed 的链接打开 `/report` | 报告完整。走 `assessment-report` + 代理链 |
 | 5 | **PDF 渲染** | 对一条 seed 点 Admin「重新生成」 | `pdf_status` 变 `ready`。走 render-pdf 的 secret key + Storage |
 | 6 | **分享卡** | 同上那次渲染 | 报告页出现两张卡(与 PDF 同一次渲染产出) |
-| 7 | **GHL 写回** | `curl -X POST <SUPABASE_URL>/functions/v1/assessment-ghl-resync -H "apikey: <publishable>" -H "X-Internal-Secret: …"` | 200。⚠️ **必须带 `apikey`** —— 这个函数不在代理白名单里,要直连,而网关要 apikey。**只放 apikey、不放 Authorization**,所以这一条同时验了网关认不认新 key |
+| 7 | **GHL 写回** | `curl -X POST <SUPABASE_URL>/functions/v1/assessment-ghl-resync -H "apikey: <publishable>" -H "X-Internal-Secret: …"` | 200。⚠️ **这一条【验不了】key** —— 已实测推翻:apikey 写成没替换的占位符,请求照样通、照样回我们函数的 JSON。原因是所有函数都 `verify_jwt = false`,**网关不校验那个头**(鉴权全在函数内部:这里是 `X-Internal-Secret`)。原文写着「同时验了网关认不认新 key」,那是错的。key 对不对由 `npm run smoke` 的**字符串比对**和 Admin 登录(走 Supabase Auth)验 |
 | 8 | **cron: retention** | `curl <域名>/api/cron/retention -H "Authorization: Bearer $CRON_SECRET"` | 200。**这条专门验 header 那个改动** —— 它是手写 apikey 的两处之一 |
 | 9 | **cron: pdf-sweep** | `curl <域名>/api/cron/pdf-sweep -H "Authorization: Bearer $CRON_SECRET"` | 200 + `scanned` 有数。走 Vercel 侧 secret key |
 | 10 | **seed 脚本** | `SUPABASE_SECRET_KEY=… npm run seed:test`(**不是 --dry-run**) | 15 行 + `cohort … (is_test=true)`。⚠️ **`--dry-run` 验不了 key**:那条路径下 `supa = null`、`requireEnv()` 压根不会被调用。而重跑真实模式是安全的 —— 脚本本来就幂等(固定种子 + upsert),重跑写的是同一批值 |
@@ -5971,10 +5971,113 @@ CONFIG/AUTH 的跳过判据改成**各看自己那一列**:字段因为「字段
 
 Node 334 / Deno **207**(+15),十一道门全绿。
 
+# 标签一个都没打上 —— 而那次 curl **无法区分两种解释**
+
+## 先排除掉猜测,再给仪器
+
+猜测是「标签那条查询要求 `ghl_tags_next_retry_at` 非 null,而历史行是 null」。
+**代码本身就能排除它**:
+
+```ts
+.eq('ghl_tags_synced', false)
+.or(`ghl_tags_next_retry_at.is.null,ghl_tags_next_retry_at.lte.${'{nowIso}'}`)
+```
+
+`is.null` 在 or 里 —— 「从没试过」是被**包含**的。所以那行不是被这个条件排掉的。
+
+## 那次 curl 的输出对两种假设**都成立**
+
+加标签之前,空批次回的是:
+
+```json
+{"ok":true,"swept":0,"note":"nothing due for retry"}
+```
+
+而加标签之后,空批次回的**逐字相同**(git 对比确认过)。于是:
+
+| 解释 | 与观测一致? |
+|---|---|
+| ① 部署的还是旧代码 —— 它只查 `ghl_synced = false`,而那行已经 `true`,**根本不挑它** | ✅ 完全自洽 |
+| ② 新代码在跑,但标签那条查询没挑中 | ✅ 也说得通 |
+
+**一个对两种假设都成立的观测,不是观测**([判断标准 14](#14-有直接观测可用时先观测再推理))。
+所以这一轮**不改逻辑** —— 先把这个响应变成能分辨的东西。
+
+顺带一个推断(**是推断,不是结论**):迁移已经应用了(你读到了 `ghl_tags_synced=false`),
+而如果新代码在跑,那行必然被标签查询挑中;而如果标签查询报错,外层 catch 会回 500 而不是 200。
+三者合起来,①的可能性大得多。**但仍然要用观测确认,不要用这段推理代替它。**
+
+## 装的仪器:`candidates` 常驻响应
+
+```json
+{"ok":true,"swept":0,"note":"nothing due for retry",
+ "candidates":{"fields":{"raw":0,"due":0},"tags":{"raw":16,"due":16},"merged":16}}
+```
+
+- **响应里有没有 `candidates` 这个键** → 直接说明跑的是哪一版,不用去猜;
+- `tags.raw` vs `tags.due` → 分开「查询没挑中」与「挑中了又被 CONFIG/AUTH 前缀过滤掉」。
+
+它**常驻**,不是临时探针:这次排查缺的正是这一格,而下一个人会再缺一次。
+
+非空路径还多两样:`skippedTestCohort`(被传输层收口拦下的条数)与那行 `console.log`。
+**「一个请求都没发」与「发了但都失败了」在原来的返回值里长得一样** ——
+而两者的差别是 GHL 的全局标签选择器里会不会多出一堆 `assessment_*` 挂在假联系人身上。
+
+## 收口在标签路径上生效吗 —— 这次要**跑**,不靠推理
+
+seed 那 15 条 `ghl_tags_synced=false` / `applied=null`,所以标签查询会挑中它们。
+上一轮我说「`ghlContact.ts` 是唯一出口,判断在它里面」——那是**结构上**的论证,
+而这次的经历正好说明结构论证不够(上一次的结构论证是
+「收在 `syncToGhl` 里,将来 tags 会自动被覆盖」,而那句是假的,见判断标准 20)。
+
+判据定死:`skippedTestCohort` **必须等于被挑中的 seed 行数**,
+且那 15 个 session 的 `ghl_tags_applied` **仍然是 null**、
+`ghl_tags_last_error` 是 `CONFIG: test cohort — tags intentionally skipped`。
+
+## 顺带:`apikey` 头在这条路径上确实是装饰品
+
+你那条 curl 里 `SUPABASE_PUBLISHABLE_KEY` 是没替换的占位符,而请求照样通了。
+本地能查证的那一半:`supabase/config.toml` 里**所有函数都是 `verify_jwt = false`** ——
+鉴权全在函数内部(`X-Internal-Secret` / cookie / `X-Admin-Token`),
+所以网关不校验那个头,你的观测正是它的证据。
+
+**但边界要说清,别把它当成「key 无所谓」:**
+
+| 路径 | `apikey` 有用吗 |
+|---|---|
+| Edge Function(`verify_jwt = false`) | ❌ 网关不校验 —— 这条路径上是装饰品 |
+| Supabase **Auth**(Admin 的 magic link 登录) | ✅ GoTrue 会校验;key 错了 Admin 登录就坏,那才是换 key 时会炸的地方 |
+
+而**换 key 那轮的结论没有塌**:`npm run smoke` 那条守的是
+「线上 bundle 里烘的公开 key **字符串等于**本地那把」—— 它是字符串比对,
+不是「请求通了就算」,所以它不依赖网关校验任何东西。
+
+要改的是文档口径:验收步骤里那个头**不是一层保护**,写成必需会让下一个人
+以为它在挡什么。已改。
+
+## 未做
+
+- **没有改任何取数逻辑**。要等 `candidates` 的实际值回来再决定改什么
+- 收口在标签路径上的真实验证(见上面那条判据)
+
+Node 334 / Deno 207,十一道门全绿。
+
 ---
 
 ## 变更日志
 
+- 2026-08-12 — **标签一个都没打上;而那次 curl 无法区分两种解释,所以先装仪器不改逻辑**。
+  猜测(「标签查询要求 next_retry_at 非 null」)被代码排除:`is.null` 就在 or 里。
+  真正的问题是**空批次的响应在新旧两版里逐字相同**,于是
+  「部署的是旧代码」与「新代码但查询没挑中」都与观测一致 —— 一个对两种假设都成立的观测
+  不是观测(判断标准 14)。给 resync 的响应加**常驻**的 `candidates`
+  (两条查询各自的 raw / due + merged):**有没有这个键**就说明跑的是哪一版,
+  raw 与 due 的差说明是没挑中还是被 CONFIG/AUTH 前缀过滤掉。
+  非空路径加 `skippedTestCohort` —— 「一个请求都没发」与「发了但都失败了」
+  在原来的返回值里长得一样。
+  顺带查清 `apikey`:所有函数 `verify_jwt = false`,网关不校验它,
+  在 Edge Function 这条路径上确实是装饰品(Supabase Auth 那条路径上有用);
+  而换 key 那轮的结论没塌 —— smoke 守的是 bundle 里 key 的**字符串相等**,不是「请求通了」
 - 2026-08-12 — **Stage 11 标签外发 + 第十一道门 `check:ghl-transport`**:
   ①收口从函数级挪到**传输级**(`_shared/ghlContact.ts` 是所有 contact 级 GHL 调用的唯一出口),
   字段 PUT 也改走它;门禁止 GHL 域名**与 `GHL_API_HOST` 常量**出现在别处
