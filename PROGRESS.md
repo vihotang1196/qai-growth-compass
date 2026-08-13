@@ -1659,14 +1659,28 @@ GHL 里九个字段全部建成单行文本(Single Line Text)。
 | `assessment_tier_{tier_key}` | 无条件;`{tier_key}` → `semi_auto` 等,如 `assessment_tier_semi_auto` |
 | `assessment_weak_{weakest_1}` | 无条件;`{weakest_1}` → 维度 key,如 `assessment_weak_capture` |
 | `assessment_hot_lead` | `consult_interest in ['asap','later']` |
-| `assessment_priority_high` | `total < 55 and monthly_marketing_budget >= 3000` |
+| `assessment_priority_high` | `total < 2.9 and monthly_marketing_budget >= 2000` |
 | `assessment_mismatch` | `priority_dimension != weakest_1` |
 
-`monthly_marketing_budget` 取 S2 `value_map`(0 / 1500 / 4000 / 12000 / 30000),「≥ 3000」实际命中第 3 档及以上。
+`monthly_marketing_budget` 取 S2 `value_map`(**0 / 700 / 2000 / 5500 / 15000**),
+「≥ 2000」实际命中**第 3 档及以上**(2000 / 5500 / 15000 三档)。
 
-**在 GHL 后台要建的 tag**:上表六个,其中三个带变量的要按实际取值展开 ——
-`assessment_tier_*` 五个、`assessment_weak_*` 六个,加上四个固定标签,共 **15 个**。
+**在 GHL 后台要建的 tag**:`assessment_tier_*` **5 个**(tiers[].key)、
+`assessment_weak_*` **5 个**(dimensions[].key),加上 4 个固定标签
+(`assessment_completed` / `hot_lead` / `priority_high` / `mismatch`),共 **14 个**。
 或者允许 API 自动创建标签,就只建固定的那几个。
+
+> ⚠️ **这张表上面四个数字曾经是错的,是 Stage 11 开工前对着 config 逐项核出来的**:
+> 阈值写着 `total < 55 and >= 3000`(55 是 v2 改小数计分之前的 0–100 分制遗留)、
+> `value_map` 写着 `0 / 1500 / 4000 / 12000 / 30000`、
+> `assessment_weak_*` 写着「六个」(维度只有 5 个)、总数写着 15。
+> **而这张表正是要照着去 GHL 建标签、配 workflow 条件的那一份** ——
+> 照错的建,症状是 workflow 永远不触发,或者触发在错的人身上。
+>
+> 所以真相源换成**可推导的**:`_shared/ghlTags.ts` 的 `tagUniverse()` 由
+> `tiers[].key` / `dimensions[].key` / `tags_conditional` 推出全集,
+> 有用例钉住「清单 = config 推出来的东西」。手写的清单会漂,而漂的方向没人盯着
+> ([判断标准 12](#12-覆盖范围是手写的守卫会被代码悄悄长到边界外面--让覆盖由运行时事实驱动))。
 
 ---
 
@@ -5696,10 +5710,141 @@ create index assessment_results_tier_idx on public.assessment_results (tier);
 
 Node **334** / Deno **178**(+10),十道门全绿。
 
+# Stage 11 标签:先做纯派生,外发那半**等确认**
+
+## ⚠️ 你点名要我先确认的那件:**收口不覆盖标签**
+
+`syncToGhl` 里那道测试批次收口的注释写着:
+
+> 收在这里,将来 Stage 11 的 tags 一写出来就自动被覆盖
+
+**这句话是假的**,而它是我自己写的。查证:
+
+| 事实 | 后果 |
+|---|---|
+| `syncToGhl` 是**字段写回专用**:它 PUT `{customFields}` 到 `/contacts/{id}`、用字段映射核对响应、把结果记进 `ghl_synced` | 标签走它就等于把标签的成败塞进字段的状态列 —— 那正是 D9「标签独立于字段写入」要避免的 |
+| 所以标签必须是**另一条出站路径** | 那条路径上**没有**那道收口 |
+
+也就是说:收口是**按函数**收的,而不是按**出站传输**收的。
+一个新的外发功能只要不从那个函数走,就绕过了它 ——
+**而绕过的方式是「什么都不做」,不是「做错什么」。**
+
+### 我建议的修法:把收口挪到传输层
+
+一个 `ghlContactRequest(supa, sessionId, ...)`,**所有 contact 级的 GHL 调用都必须经它**,
+测试批次判断在它里面。这样新增外发功能时,绕过它需要**自己写一个 fetch** ——
+那是个显式动作,而不是一次遗忘。
+
+配套的门(**没做,等你点头**):禁止 `services.leadconnectorhq.com/contacts` 出现在
+那个模块之外。`getFieldMap` 打的是 `/locations/{id}/customFields`(位置级元数据、
+不带任何客户数据、与标签污染无关),所以那条要显式豁免。
+
+⚠️ **在这件事落地之前,标签的外发代码一行都不该写。** 给假 contact 打标签的后果比
+字段写回失败重:GHL 的标签是**全局的**,`seed-test-*` 那类值会污染整个标签选择器,
+而那比清一条失败记录难得多。
+
+## 已做:纯派生 `_shared/ghlTags.ts`(13 条用例,5 次变异)
+
+### 三件你要的,逐条
+
+**① 前缀从 config 推导。** 读 `tags_always` 的模板并填占位符,代码里没有第二份格式串。
+占位符登记表把 `{tier_key}` 绑到 `tiers[].key`、`{weakest_1}` 绑到 `dimensions[].key`;
+**取值不在域内就不产出那个标签**并报 problem ——
+因为拼错的后果不是「字符串不好看」,是在 GHL 里创建一个**永久的全局标签**。
+
+**② mismatch 复用 `isPriorityMismatch`。** 报告页第 7 板块、问卷洞察名单、这个标签
+是同一个定义。各写一份的失败形态:同一个人在报告里没被高亮、却被打上了 mismatch 标签,
+于是销售拿着一份和学员看到的不一样的判断去沟通,**而没有任何东西会报错**。
+`hot_lead` 同理复用 `isHighIntent`。
+
+**③ 旧标签怎么处理 —— 我的判断:要移除,但要有前提。**
+
+一个人身上挂两个互斥的档位标签会让两条 workflow 都触发,所以必须移。成本上:
+
+| 做法 | 代价 | 问题 |
+|---|---|---|
+| 先 GET contact 的现有标签再算差集 | **多一次读** | 而且拿回来的是客户全部标签,包含大量与本系统无关的 |
+| **存我们上次打了什么,只对自己的做差集** | **0 次额外读**,差集非空时才多一次 DELETE | 需要一列 `ghl_tags_applied` |
+
+选后者。两条硬规则:
+1. **只移除 `assessment_` 前缀且在上次记录里的标签** —— 客户在 GHL 里有大量别的标签,
+   误删不可逆;
+2. 差集为空就**不发** DELETE(重答但档位没变的人最常见,那种情况不该多一次 API 调用)。
+
+`TAG_NAMESPACE` 与「全集在命名空间内」那条用例就是这条规则的前提。
+
+### `when` 那些表达式**不求值**
+
+config 里的 `when` 是给人看的(`"total < 2.9 and monthly_marketing_budget >= 2000"`)。
+写一个表达式求值器等于在项目里引入一门小语言,而它与那句话的语义会悄悄分叉。
+改成**每个条件标签一个具名判定**,外加一条用例断言
+「config 里每个 `tags_conditional` 都有对应判定」——
+以后有人只在 config 里加一条标签、忘了写代码,**测试会红**,
+而不是那个标签静默地永远不打。
+
+阈值那两个数**另有一条用例把 config 的 `when` 与代码里的常量对上**
+(从 `when` 里抠出数字来比)。我在注释里写了「有一条用例把两者对上」,
+所以那条用例必须真的存在 —— 这个项目栽过太多次「注释声称了一件没人验证的事」。
+
+## 顺带核出来的:PROGRESS 里那份标签清单**四个数字都是错的**
+
+| 文档写的 | config 实际 |
+|---|---|
+| `total < 55 and >= 3000` | `total < 2.9 and >= 2000`(55 是 0–100 分制的遗留) |
+| value_map `0/1500/4000/12000/30000` | `0/700/2000/5500/15000` |
+| `assessment_weak_*` **六个** | 5 个(维度只有 5 个) |
+| 共 **15 个** | **14 个** |
+
+**而这正是要照着去 GHL 建标签、配 workflow 条件的那一份。** 照错的建,
+症状是 workflow 永远不触发、或者触发在错的人身上。已改正,并把真相源换成可推导的
+`tagUniverse()`(有用例钉住「清单 = config 推出来的东西」)。
+
+## 反向验证:五次变异
+
+| 变异 | 红的用例 |
+|---|---|
+| mismatch 自己写一个比较(不复用 surveySignals) | 1 条 |
+| 阈值改成旧文档的 55 / 3000 | 2 条,含「与 config 的 when 对上」 |
+| 去掉取值域检查(脏值直接拼进标签) | 1 条 |
+| 删掉一个条件标签的判定 | 5 条,含「每个 conditional 都要有判定」 |
+| 前缀在代码里硬写、不读 config | 2 条,含 `tagUniverse` |
+
+写用例时我自己还栽了一条:最后那条「多占位符要抛」的第一版**在测试里重写了一遍那个判断**
+(自己拼 names、自己 throw)—— 验的是我在测试里写的代码,与 `tagUniverse` 会不会抛毫无关系
+([判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致))。
+给 `tagUniverse` 加了可注入的 templates 参数,那条分支才真的被走过。
+
+## 未做(等确认)
+
+- **传输层收口 + 配套的门** —— 见上。这件不落地,外发代码不写
+- **`ghl_tags_*` 状态列的迁移**:字段有 `ghl_synced` / `ghl_last_error`,标签要自己一组
+  (`ghl_tags_synced` / `ghl_tags_last_error` / `ghl_tags_applied` / `ghl_tags_next_retry_at`)。
+  **是一次生产 schema 变更,应用前先确认**
+- **GHL 标签 API 的形状没实测过**:按文档假设 `POST/DELETE /contacts/{id}/tags`,
+  body `{ tags: [...] }`。与 `customFields` 那次同一个处境 ——
+  ⚠️ **绝不能用 contact 的 PUT 带 `tags` 数组**:那是**整体替换**,会抹掉客户其它标签
+
+Node 334 / Deno **192**(+14),十道门全绿。
+
 ---
 
 ## 变更日志
 
+- 2026-08-12 — **Stage 11 标签:纯派生已做,外发等确认**。
+  ⚠️ **先确认出来一件要紧的**:`syncToGhl` 里那道测试批次收口的注释写着
+  「将来 tags 一写出来就自动被覆盖」——**那句话是假的**。`syncToGhl` 是字段写回专用
+  (PUT customFields、按字段映射核对、记 `ghl_synced`),而 D9 要求标签独立,
+  所以标签必然是**另一条出站路径**,那条路径上没有收口。收口是按**函数**收的,
+  不是按**出站传输**收的,而绕过它的方式是「什么都不做」。
+  建议挪到传输层(`ghlContactRequest`)+ 一道禁止裸 GHL contact fetch 的门 ——
+  **在那之前标签外发一行都不写**(给假 contact 打标签会污染 GHL 的全局标签选择器)。
+  已做:`_shared/ghlTags.ts` 纯派生,前缀与取值域全从 config 推导、
+  `when` 不求值改成具名判定 + 一条「每个 conditional 都要有判定」的断言、
+  mismatch/hot_lead 复用 surveySignals、`tagUniverse()` 让清单可推导。13 条用例,5 次变异。
+  旧标签移除的判断:**要移**,但只碰 `assessment_` 前缀且在 `ghl_tags_applied` 里的,
+  差集为空不发请求(0 次额外读)。
+  顺带核出 PROGRESS 那份标签清单**四个数字都是错的**(阈值 55/3000、value_map、
+  weak 六个、共 15 个)—— 而那正是要照着去 GHL 建标签的一份
 - 2026-08-12 — **三件收尾**:①`ghlFieldMap` 补 10 条用例 —— `_resetFieldMapCache` 那句
   「供测试」的注释原本在替一份不存在的覆盖作证,处理是**补上被服务的对象**而不是删掉服务者;
   为可测加了 `nowMs` 参数(默认 `Date.now()`),test task 按名字放开两个 GHL 环境变量、
