@@ -250,7 +250,47 @@ if (needed.size === 0 && errors.length === 0) {
 // 这跟 vercel.json 给尚未存在的函数配 maxDuration 是同一类问题:
 // 配置提前于实现,要么直接炸(Vercel 那样),要么静默腐烂(这里)。
 if (roots.length > 0) {
-  const unused = Object.keys(imports).filter((spec) => !needed.has(spec));
+  /**
+   * imports 里有**两类**条目,判据不同:
+   *
+   *   ① 裸 specifier(`@std/assert`、`libphonenumber-js/max`)—— 依赖版本钉子。
+   *      判据是「有文件 import 它」,而且版本要与 package.json 一致(上面那段)。
+   *
+   *   ② **相对路径重映射**(`../../api/_lib/lang.js` → `.ts`)—— 跨运行时的路径事实,
+   *      不是依赖。它存在的原因是同一个文件被两个打包器消费而两者对扩展名要求相反:
+   *      Vercel 那条链要 `.js`(tsc 会直接 TS5097 拦住 `.ts`),
+   *      而 Deno / Supabase 打包器读的是磁盘上真实的 `.ts`。
+   *
+   * 【为什么不给②开白名单】那会让它「不受本守卫校验、静默腐烂」——
+   * 正是这段代码原本要防的事。所以给它一套**自己的**判据:
+   *   目标文件必须真的存在,而且那个 `.js` specifier 必须真的被某个 api 文件 import。
+   * 两条任一不成立就报 —— 与①同样严,只是问的问题不同。
+   */
+  const relKeys = Object.keys(imports).filter((k) => k.startsWith('.'));
+  const apiSrc = walkTs(resolve('api'))
+    .map((f) => readFileSync(f, 'utf8'))
+    .join('\n');
+  for (const key of relKeys) {
+    const targetAbs = resolve(dirname(resolve(IMPORT_MAP)), imports[key]);
+    if (!exists(targetAbs)) {
+      errors.push(
+        `${IMPORT_MAP} 的重映射 "${key}" → "${imports[key]}" 指向一个不存在的文件。` +
+          `跨运行时的路径映射指错了,受影响的是 Supabase 的打包(本地 deno check 也会红)。`,
+      );
+      continue;
+    }
+    const specifier = './' + key.split('/').pop();
+    if (!apiSrc.includes(`'${specifier}'`)) {
+      errors.push(
+        `${IMPORT_MAP} 的重映射 "${key}" 没有任何 api 文件在 import "${specifier}" —— ` +
+          `没人用的映射会静默腐烂。等真的有文件 import 它时再加。`,
+      );
+    }
+  }
+
+  const unused = Object.keys(imports).filter(
+    (spec) => !spec.startsWith('.') && !needed.has(spec),
+  );
   if (unused.length) {
     errors.push(
       `${IMPORT_MAP} 里有 ${unused.length} 个没人用的 imports 条目:` +

@@ -2,10 +2,12 @@
   "imports": {
     "libphonenumber-js/max": "npm:libphonenumber-js@1.13.9/max",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.110.8",
-    "@std/assert": "jsr:@std/assert@1.0.10"
+    "@std/assert": "jsr:@std/assert@1.0.10",
+    "../../api/_lib/lang.js": "../../api/_lib/lang.ts",
+    "../../api/_lib/pdfState.js": "../../api/_lib/pdfState.ts"
   },
   "tasks": {
-    "test": "deno test --allow-read --allow-env=GHL_PRIVATE_TOKEN,GHL_LOCATION_ID --sloppy-imports _shared/",
-    "check": "deno check --sloppy-imports **/*.ts"
+    "test": "deno test --allow-read --allow-env=GHL_PRIVATE_TOKEN,GHL_LOCATION_ID _shared/",
+    "check": "deno check **/*.ts"
   }
 }

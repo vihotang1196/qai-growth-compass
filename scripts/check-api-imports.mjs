@@ -97,8 +97,26 @@ for (const file of walk(API_DIR)) {
 
     checked.push(`${rel} → ${spec}`);
 
-    // 规则 2:ESM 要求显式扩展名
-    if (!/\.(js|mjs|cjs|json)$/.test(spec)) {
+    /**
+     * 规则 2:ESM 要求显式扩展名,而且必须是 `.js`(不能是 `.ts`)。
+     *
+     * ⚠️ **这条消息以前是错的。** 它把「不以 .js 结尾」一律说成「没有扩展名」,
+     * 于是写了 `./lang.ts` 的人会看到「没有扩展名 —— 写成 ./lang.ts.js」——
+     * 两句都不对,而后一句照做会得到一个不存在的路径。
+     * 一道门的**提示错了比不提示更糟**:它把人推向一个更深的坑
+     * (判断标准 14 推论三:守卫只写机械事实 + 下一步去哪看)。
+     * 现在按实际情形分两种说法。
+     */
+    if (/\.tsx?$/.test(spec)) {
+      errors.push(
+        `${rel}: 相对导入 "${spec}" 用了 .ts 扩展名 —— **写成 "${spec.replace(/\.tsx?$/, '.js')}"**。\n` +
+          `      理由不是风格:tsc 会直接报 TS5097(要开 allowImportingTsExtensions),` +
+          `而那个选项要求 noEmit —— 与 Vercel「要产出 JS」冲突。\n` +
+          `      运行时看到的是 tsc 产出的 .js,所以源码里写 .js 才是那条链上唯一自洽的写法。\n` +
+          `      (Deno 侧读的是 .ts 源文件,靠 supabase/functions/deno.json 的 imports 映射解决,` +
+          `不靠改这里的扩展名。)`,
+      );
+    } else if (!/\.(js|mjs|cjs|json)$/.test(spec)) {
       errors.push(
         `${rel}: 相对导入 "${spec}" 没有扩展名 —— package.json 是 "type": "module",` +
           `ESM 在运行时要求显式扩展名。写成 "${spec}.js"(.js 会映射到同名 .ts 源文件)。` +
