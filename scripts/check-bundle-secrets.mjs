@@ -21,6 +21,7 @@ const FORBIDDEN = [
   'LOGIN_HASH_PEPPER',
   'GHL_PRIVATE_TOKEN',
   'GHL_RESEND_WEBHOOK_URL',
+  // ghl-transport-exempt: 这道门的工作就是在 dist 里 grep 这个域名,字面量是它的输入
   'services.leadconnectorhq.com',
   'hooks.leadconnectorhq.com',
 ];

@@ -19,6 +19,7 @@ import { isComplete } from '../_shared/quizFlow.ts';
 import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
 import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
+import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -312,10 +313,32 @@ async function finalize(
   const payload = buildWritebackPayload(result, survey);
   const writeback = await syncToGhl(supa, session.id, ghlContactId, payload, 'finalize');
 
+  /**
+   * ── GHL 标签(D9:**独立于**字段写入)──
+   *
+   * 【为什么不看 writeback 的成败就打标签】D9 定的就是这一条:标签驱动 workflow 分支,
+   * 字段只是给人看的。字段炸了(比如某个自定义字段还没在 GHL 里建)不该连带
+   * 「这个人答完了、他是 semi_auto 档」这件事也传不过去 ——
+   * 那会让整条自动化停在原地,而原因只是一个展示字段。
+   *
+   * 反向也一样:标签失败不碰 `ghl_synced`。两组状态列因此是分开的
+   * (见 20260812000000_ghl_tags_status.sql)。
+   *
+   * 【首次写回时 applied 必然是空】所以传 null:这一行还没有 `ghl_tags_applied`。
+   * 重算走的是同一个函数,那时 sweep / 重算路径会把当前值读进来。
+   */
+  const tagInput = {
+    tier: result.tier,
+    weakestPrimary: result.weakest?.[0] ?? null,
+    total: result.total,
+    responses: survey,
+  };
+  const tagSync = await syncTagsToGhl(supa, session.id, ghlContactId, tagInput, null, 'finalize');
+
   // ── PDF 渲染:异步触发,不阻塞返回 ──
   const pdfTriggered = triggerPdfRender(session.id);
 
-  return json({ ok: true, result, writeback, pdfTriggered });
+  return json({ ok: true, result, writeback, tagSync, pdfTriggered });
 }
 
 

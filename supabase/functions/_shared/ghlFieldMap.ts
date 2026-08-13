@@ -61,6 +61,8 @@ async function fetchFromGhl(): Promise<FieldMap> {
   const locationId = Deno.env.get('GHL_LOCATION_ID');
   if (!token || !locationId) throw new Error('GHL credentials missing for field-map fetch');
 
+  // ghl-transport-exempt: 位置级元数据(字段【定义】,不是任何一个 contact 的数据),
+  // 既没有 sessionId 可判批次,也不会往客户身上写任何东西 —— 测试批次收口在这里无意义
   const url = `https://services.leadconnectorhq.com/locations/${locationId}/customFields`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}`, Version: '2021-07-28' },

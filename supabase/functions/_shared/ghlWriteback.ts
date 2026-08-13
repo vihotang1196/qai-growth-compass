@@ -19,7 +19,7 @@ import { checkFields, type FieldSpec } from './ghlDomain.ts';
 import { classifyGhlError, verifyWrittenFields, type GhlErrorClass } from './ghlVerify.ts';
 import { getFieldMap } from './ghlFieldMap.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
-import { isTestSessionCohort } from './testCohort.ts';
+import { ghlContactRequest, type ContactRequestResult } from './ghlContact.ts';
 
 export interface WritebackResult {
   total: number;
@@ -90,12 +90,8 @@ export async function syncToGhl(
    * (这一点在真实数据上验过:第二次调用回 `nothing due for retry`)。
    * 所以既跳过了,又留下了原因,而且没有新增状态。
    */
-  if (await isTestSessionCohort(supa, sessionId)) {
-    await recordFailure(supa, sessionId, 'CONFIG', 'test cohort — writeback intentionally skipped', logTag);
-    return { attempted: false, ok: false, detail: 'skipped: test cohort' };
-  }
-
-  // 写回前按 domain 校验(值域)。不在域内是 CONFIG —— 同样的 payload 重试无意义
+  // 写回前按 domain 校验(值域)。不在域内是 CONFIG —— 同样的 payload 重试无意义。
+  // 【放在出站之前】它是纯判断,比一次 DB 读 + 一次 HTTP 都便宜
   const specs = config.ghl_writeback.custom_fields as unknown as FieldSpec[];
   const domainFailures = checkFields(payload, specs);
   if (domainFailures.length) {
@@ -104,33 +100,16 @@ export async function syncToGhl(
     return { attempted: false, ok: false, detail };
   }
 
-  const ghlEnv = {
-    GHL_PRIVATE_TOKEN: Deno.env.get('GHL_PRIVATE_TOKEN'),
-    GHL_LOCATION_ID: Deno.env.get('GHL_LOCATION_ID'),
-  };
-  const missing = Object.entries(ghlEnv).filter(([, v]) => !v).map(([k]) => k);
-  if (missing.length) {
-    // 缺凭证是配置问题,但重发 token 后重试有意义 —— 归 TRANSIENT,别永久放弃
-    await recordFailure(supa, sessionId, 'TRANSIENT', `GHL credentials missing (${missing.join(', ')})`, logTag);
-    return { attempted: false, ok: false, detail: `missing ${missing.join(', ')}` };
-  }
-
-  const url = `https://services.leadconnectorhq.com/contacts/${ghlContactId}`;
   const customFields = Object.entries(payload).map(([key, value]) => ({ key, field_value: value }));
 
-  let res: Response;
-  let text: string;
+  let sent: ContactRequestResult;
   try {
-    res = await fetch(url, {
+    // 【测试批次判断与凭证检查都在这个出口里面】—— 见 ghlContact.ts 文件头:
+    // 收口从函数级挪到了传输级,因为新写一条出站路径「什么都不做」就绕过了函数级的收口
+    sent = await ghlContactRequest(supa, sessionId, ghlContactId, '', {
       method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${ghlEnv.GHL_PRIVATE_TOKEN}`,
-        'Content-Type': 'application/json',
-        Version: '2021-07-28',
-      },
-      body: JSON.stringify({ customFields }),
+      body: { customFields },
     });
-    text = await res.text().catch(() => '');
   } catch (err) {
     // 网络层失败 —— TRANSIENT
     const detail = err instanceof Error ? err.message : String(err);
@@ -138,11 +117,35 @@ export async function syncToGhl(
     return { attempted: true, ok: false, detail };
   }
 
-  if (!res.ok) {
-    const klass = classifyGhlError(res.status);
+  if (!sent.sent) {
+    if (sent.skipped === 'test_cohort') {
+      /**
+       * 【为什么归 CONFIG,而不是置 ghl_synced = true】
+       * `ghl_synced = true` 表示「同步成功了」—— 那是在数据里说谎。
+       * CONFIG 的语义本来就是「重试一万次也没用」,而 sweep 已经会跳过 CONFIG
+       * (这一点在真实数据上验过:第二次调用回 `nothing due for retry`)。
+       * 所以既跳过了,又留下了原因,而且没有新增状态。
+       */
+      await recordFailure(supa, sessionId, 'CONFIG', 'test cohort — writeback intentionally skipped', logTag);
+      return { attempted: false, ok: false, detail: 'skipped: test cohort' };
+    }
+    // 缺凭证是配置问题,但重发 token 后重试有意义 —— 归 TRANSIENT,别永久放弃
+    await recordFailure(
+      supa,
+      sessionId,
+      'TRANSIENT',
+      `GHL credentials missing (${sent.missing.join(', ')})`,
+      logTag,
+    );
+    return { attempted: false, ok: false, detail: `missing ${sent.missing.join(', ')}` };
+  }
+
+  const { status, text } = sent;
+  if (!sent.ok) {
+    const klass = classifyGhlError(status);
     // 错误响应体是 GHL 的报错文本,PII 风险低,但仍截断
-    await recordFailure(supa, sessionId, klass, `HTTP ${res.status} — ${text.slice(0, 300)}`, logTag);
-    return { attempted: true, ok: false, detail: `${klass} ${res.status}` };
+    await recordFailure(supa, sessionId, klass, `HTTP ${status} — ${text.slice(0, 300)}`, logTag);
+    return { attempted: true, ok: false, detail: `${klass} ${status}` };
   }
 
   // ── 200:不信状态码,验响应体 ──
