@@ -15,6 +15,7 @@
  * 那个「停用」就只是停了入口没停人。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { effectiveLang } from '../_shared/lang.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
@@ -38,9 +39,17 @@ const QUESTION_IDS = config.questions.map((q) => q.id);
 
 interface SessionRow {
   id: string;
-  locale: string;
   profile: Record<string, number> | null;
   status: string;
+  /**
+   * 这个人的语言 —— 从 `assessment_entitlements.lang` 嵌进来。
+   *
+   * 【原来读的是 `assessment_sessions.locale`】那一列是「这次会话从哪种语言的页面进来的」,
+   * 属于跟着链接走的旧模型:同一个人用中文链接进来、切成英文,两者就分叉了。
+   * 而 `bootstrap` 返回的 `locale` 是前端用来决定渲染语言的 ——
+   * 读错了的表现是「切了语言,刷新之后又回去了」。
+   */
+  entitlement: { lang: string | null } | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -85,7 +94,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: sessionRow, error: sessionError } = await supa
       .from('assessment_sessions')
-      .select('id, locale, profile, status')
+      .select('id, profile, status, entitlement:assessment_entitlements(lang)')
       .eq('entitlement_id', ent.id)
       .maybeSingle();
     if (sessionError) throw sessionError;
@@ -95,7 +104,12 @@ Deno.serve(async (req: Request) => {
       console.error(`no session for entitlement ${ent.id} — assessment-auth should have created it`);
       return json({ error: 'no_session' }, 409);
     }
-    const session = sessionRow as SessionRow;
+    /**
+     * 【经 `unknown` 转】supabase-js 把嵌套关系一律推断成**数组**,
+     * 而 `entitlement_id` 是 to-one,PostgREST 实际返回的是**对象**。
+     * 类型与运行时在这一点上对不上,而对不上的那一侧是类型推断。
+     */
+    const session = sessionRow as unknown as SessionRow;
 
     const action = typeof body.action === 'string' ? body.action : '';
 
@@ -216,5 +230,9 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
     else status = 'survey';
   }
 
-  return { locale: session.locale, profile, answers, status, complete };
+  /**
+   * 【payload 的键名仍叫 `locale`,值换成了这个人的 lang】
+   * 键名不改是为了不牵动前端;而值的来源换了 —— 那才是这次要修的东西。
+   */
+  return { locale: effectiveLang(session.entitlement?.lang), profile, answers, status, complete };
 }

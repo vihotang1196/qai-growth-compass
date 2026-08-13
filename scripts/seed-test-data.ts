@@ -359,7 +359,7 @@ for (const p of plan) {
     .upsert(
       {
         entitlement_id: ent.id,
-        locale: 'zh',
+        // locale 不再写 —— 真相源是 entitlement.lang(见 check:legacy-columns)
         profile: p.profile,
         status: 'completed',
         completed_at: completedAt,

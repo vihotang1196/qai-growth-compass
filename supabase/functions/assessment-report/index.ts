@@ -9,6 +9,7 @@
  * 都在这里定好,前端不猜(PROGRESS 0.9)。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { effectiveLang } from '../_shared/lang.ts';
 import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { verifyRenderToken } from '../_shared/renderToken.ts';
@@ -119,12 +120,12 @@ Deno.serve(async (req: Request) => {
     const { data: session, error: sErr } = renderSessionId
       ? await supa
           .from('assessment_sessions')
-          .select('id, locale, profile, status, entitlement_id')
+          .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
           .eq('id', renderSessionId)
           .maybeSingle()
       : await supa
           .from('assessment_sessions')
-          .select('id, locale, profile, status, entitlement_id')
+          .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
           .eq('entitlement_id', verified!.entitlementId)
           .maybeSingle();
     if (sErr) throw sErr;
@@ -139,6 +140,12 @@ Deno.serve(async (req: Request) => {
     // 渲染令牌也要过这一关 —— 被停用的人不该还能被渲出报告
     if (!ent || ent.access_revoked_at) return json({ error: 'revoked' }, 403);
 
+    /**
+     * legacy-column-exempt: 报告页的下载按钮还在读旧列,而这条路径是**学员面向**的 ——
+     * 半改会让生产上的下载按钮坏掉(Admin 那个按钮坏掉可以接受、已明说,学员这个不行)。
+     * 改法已经定死:读 `assessment_report_files` 的全部语言行,payload 回
+     * `[{ lang, availability, url }]`,前端渲两个按钮。下一轮第一件事,见 PROGRESS 未完成。
+     */
     const { data: result, error: rErr } = await supa
       .from('assessment_results')
       .select('dim_scores, total, tier, weakest, strongest, pdf_status, pdf_path, share_card_path, share_card_tall_path')
@@ -241,7 +248,12 @@ Deno.serve(async (req: Request) => {
     const profile = (session.profile ?? {}) as Record<string, unknown>;
 
     return json({
-      locale: session.locale,
+      /**
+       * 【键名不变,值换成这个人的 `entitlement.lang`】
+       * 原来读 `assessment_sessions.locale`(跟着链接走),那与「语言跟着人走」会分叉。
+       * PDF 渲染器也走这个端点,所以这一处读错会让**渲出来的那份**语言不对。
+       */
+      locale: effectiveLang((session as { entitlement?: { lang?: string | null } | null }).entitlement?.lang),
       result: {
         dimensions: myDims,
         total: result.total,

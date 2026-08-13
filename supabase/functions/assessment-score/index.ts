@@ -39,7 +39,6 @@ const OPTION_COUNT = new Map(config.questions.map((q) => [q.id, q.option_count])
 
 interface SessionRow {
   id: string;
-  locale: string;
   status: string;
 }
 
@@ -82,7 +81,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: sRow, error: sErr } = await supa
       .from('assessment_sessions')
-      .select('id, locale, status')
+      .select('id, status')
       .eq('entitlement_id', ent.id)
       .maybeSingle();
     if (sErr) throw sErr;

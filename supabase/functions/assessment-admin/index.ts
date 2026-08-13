@@ -22,6 +22,7 @@ import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 import { classifyError } from '../_shared/errorKind.ts';
+import { parseLang } from '../_shared/lang.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
@@ -412,18 +413,45 @@ Deno.serve(async (req: Request) => {
         const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
         if (!sessionId) return json({ error: 'missing session_id' }, 400);
 
+        /**
+         * 【`lang` 必填,**刻意没有默认值**】一个 session 现在有两份报告文件
+         * (`assessment_report_files` 按语言分行),所以「重新生成」必须说清重渲哪一份。
+         *
+         * 给一个默认值的话,Admin 点下去会重渲**中文那份**,而他看着的可能是英文那一行 ——
+         * 那种错不会报错:一次 Chromium 冷启动之后,他想修的那份还是坏的,
+         * 而另一份被无谓地重渲了一遍。名单页那一格显示的是 `zh ✓ / en —`,
+         * 所以「他在看哪一份」这件事界面上本来就是分开的,参数也该分开。
+         */
+        const langParse = parseLang(body.lang);
+        if (langParse.kind !== 'set') {
+          return json(
+            {
+              error: 'missing lang',
+              detail:
+                langParse.kind === 'invalid'
+                  ? `lang must be zh or en, received ${JSON.stringify(langParse.received)}`
+                  : 'expected { session_id, lang } — 一个 session 有两份报告文件,必须说清重渲哪一份',
+            },
+            400,
+          );
+        }
+        const targetLang = langParse.lang;
+
         // 先把计数与错误清掉,否则 render-pdf 会因为 attempts >= 3 直接拒。
         // pdf_status_at 一并盖上 —— 定时 sweep 用它算「这个状态放了多久」,
-        // 不写的话这条刚重置的 pending 会带着旧时间戳,下一次 sweep 立刻又抢着重跑一遍
-        const { error: resetErr } = await supa
-          .from('assessment_results')
-          .update({
+        // 不写的话这条刚重置的 pending 会带着旧时间戳,下一次 sweep 立刻又抢着重跑一遍。
+        // 【upsert】那一行可能还不存在(Admin 也可以为一种从没生成过的语言点「生成」)
+        const { error: resetErr } = await supa.from('assessment_report_files').upsert(
+          {
+            session_id: sessionId,
+            lang: targetLang,
             pdf_status: 'pending',
             pdf_attempts: 0,
             pdf_last_error: null,
             pdf_status_at: new Date().toISOString(),
-          })
-          .eq('session_id', sessionId);
+          },
+          { onConflict: 'session_id,lang' },
+        );
         if (resetErr) throw resetErr;
 
         const base = Deno.env.get('APP_BASE_URL');
@@ -438,12 +466,14 @@ Deno.serve(async (req: Request) => {
         const res = await fetch(`${base.replace(/\/$/, '')}/api/render-pdf`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': secret },
-          body: JSON.stringify({ session_id: sessionId }),
+          body: JSON.stringify({ session_id: sessionId, lang: targetLang }),
         }).catch((e) => e as Error);
 
         if (res instanceof Error) return json({ ok: false, detail: res.message }, 502);
         const text = await res.text().catch(() => '');
-        console.log(`admin ${verdict.email} re-rendered PDF for session ${sessionId}: ${res.status}`);
+        console.log(
+          `admin ${verdict.email} re-rendered the ${targetLang} PDF for session ${sessionId}: ${res.status}`,
+        );
         return json({ ok: res.ok, status: res.status, detail: text.slice(0, 300) });
       }
 

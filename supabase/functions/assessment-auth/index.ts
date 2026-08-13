@@ -93,7 +93,13 @@ Deno.serve(async (req: Request) => {
     } else {
       const { error: insError } = await supa
         .from('assessment_sessions')
-        .insert({ entitlement_id: ent.id, locale: lang });
+        /**
+         * 【不再写 `locale`】那一列的真相源已经搬到 `assessment_entitlements.lang`
+         * (语言跟着人走)。它 `not null default 'zh'`,所以不传就是让默认值填 ——
+         * 而**写一个没人读的列**只会让「哪个才是真的」这个问题一直存在
+         * (`check:legacy-columns` 守这件事)。
+         */
+        .insert({ entitlement_id: ent.id });
       if (insError) {
         // 并发首次登录(客户连点两次链接):另一边刚建好。重查一次即可
         const { data: raced, error: raceError } = await supa
