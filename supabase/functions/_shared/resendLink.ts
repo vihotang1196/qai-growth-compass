@@ -14,6 +14,7 @@ import { magicLink } from './token.ts';
 import { buildResendPayload } from './resendPayload.ts';
 import { triggerAccepted } from './ghlTriggerResponse.ts';
 import { isTestEntitlement } from './testCohort.ts';
+import { effectiveLang } from './lang.ts';
 
 export interface SendTarget {
   id: string;
@@ -23,6 +24,18 @@ export interface SendTarget {
   phone_e164: string | null;
   email_lower: string | null;
   status: string;
+  /**
+   * 这个人的语言(`assessment_entitlements.lang`)。
+   *
+   * ⚠️ **上一版这个参数是调用方传进来的,而 Admin 传的是【操作者界面的语言】** ——
+   * 也就是「谁在后台点,决定客户收到什么语言的消息」。
+   * 一个英文客户,运营在中文界面点了重发,他收到中文消息 ——
+   * 而运营不会知道,因为他看到的是「已发送」。
+   *
+   * 与 `coalesce(p_lang,'zh')` 那个坑同一族:**系统的某个无关状态覆盖了本该属于用户的属性**。
+   * 只是这次覆盖它的不是重试,是操作者的界面语言 —— 那个值跟收件人毫无关系。
+   */
+  lang: string | null;
 }
 
 export type SendOutcome =
@@ -41,10 +54,15 @@ export type SendOutcome =
 export async function sendMagicLink(
   supa: SupabaseClient,
   target: SendTarget,
-  lang: 'zh' | 'en',
   resendUrl: string,
   appBaseUrl: string,
 ): Promise<SendOutcome> {
+  /**
+   * 【语言只从 `target.lang` 来,没有第二个来源】签名里刻意**没有** lang 参数 ——
+   * 有那个参数就还会有人从别处传一个进来(上一版就是这么坏的)。
+   * 库里是脏值 / null 时回落默认,见 `effectiveLang`。
+   */
+  const lang = effectiveLang(target.lang);
   /**
    * ── 测试 / 演示批次一律不外发 ──
    *

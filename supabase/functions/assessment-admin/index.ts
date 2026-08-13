@@ -33,8 +33,11 @@ function json(body: unknown, status = 200): Response {
 
 // access_revoked_at 必须在里面 —— resend 分支要读它来拒绝已停用的记录。
 // 第一版漏了,deno check 抓到:漏 select 的话运行时是 undefined,那个检查会静默失效
+// lang 必须在里面 —— sendMagicLink 现在从这一行读收件人的语言。
+// 漏 select 的话运行时是 undefined,而 effectiveLang 会静默回落成中文:
+// 一个英文客户收到中文消息,而没有任何东西会说
 const SEND_COLS =
-  'id, ghl_contact_id, access_token, name, phone_e164, email_lower, status, access_revoked_at';
+  'id, ghl_contact_id, access_token, name, phone_e164, email_lower, status, access_revoked_at, lang';
 
 interface RosterRow {
   id: string;
@@ -388,7 +391,6 @@ Deno.serve(async (req: Request) => {
         const outcome = await sendMagicLink(
           supa,
           target,
-          lang,
           env.GHL_RESEND_WEBHOOK_URL!,
           env.APP_BASE_URL!,
         );

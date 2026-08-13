@@ -1,7 +1,7 @@
 /**
  * assessment-login-request —— 备用路径:重发魔法链接。
  *
- * POST { identifier, lang }  identifier = 手机号或邮箱
+ * POST { identifier }  identifier = 手机号或邮箱(旧前端会带 lang,被忽略 —— 发信语言取 entitlement.lang)
  *   → 200 { status: 'sent' }    命中、命中但被 60s 节流、完全未命中 —— 三种情况【完全一样】
  *   → 200 { status: 'locked' }  该 IP 触发限流
  *
@@ -47,10 +47,12 @@ interface Matched {
   email_lower: string | null;
   link_sent_at: string | null;
   status: string;
+  /** 这个人的语言 —— 发信语言只从这里来(见 SendTarget.lang 上的注释) */
+  lang: string | null;
 }
 
 const SELECT_COLS =
-  'id, ghl_contact_id, access_token, access_revoked_at, name, phone_e164, email_lower, link_sent_at, status';
+  'id, ghl_contact_id, access_token, access_revoked_at, name, phone_e164, email_lower, link_sent_at, status, lang';
 
 /**
  * 三级回退匹配。命中多于 1 条一律【视为未命中】。
@@ -152,7 +154,20 @@ Deno.serve(async (req: Request) => {
   }
 
   const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : '';
-  const lang = body.lang === 'en' ? 'en' : 'zh';
+  /**
+   * 【这个端点【不再】读请求体里的 lang,一个字都不用】
+   *
+   * 它是「我丢了链接」那条未鉴权路径:调用方只提供一个手机号 / 邮箱,
+   * 此刻**还不能确认他就是那个人**。所以:
+   *   - 不据此写库 —— 那等于让任何人都能翻掉一个陌生人的语言设置;
+   *   - 也不据此决定发信语言 —— 发信语言一律取 `entitlement.lang`(在 sendMagicLink 里读)。
+   *
+   * ⚠️ 我上一版在这里留了 `const lang = ...` 并注释说「仍然用于这次响应的措辞」——
+   * **那句是错的**:这个端点的响应体是恒定的(措辞在前端),没有任何一处用得上它。
+   * 第九道门(`eslint .` 的 no-unused-vars)当场抓了那个变量,而**抓到的其实是那句注释**。
+   *
+   * 请求体里还允许带 lang(前端旧版本会带),但它被忽略 —— 文件头的协议说明已改。
+   */
   // 代理钉的 X-Client-Ip 优先;直连时退回 x-forwarded-for 的第一段
   const ip =
     req.headers.get('X-Client-Ip')?.trim() ||
@@ -225,7 +240,7 @@ Deno.serve(async (req: Request) => {
       } else {
         // 发送逻辑抽到 _shared/resendLink.ts —— Stage 5 的后台「重发链接」要用同一份。
         // 两份 GHL POST 的话,以后改 payload 字段只改一处就成了静默的半修。
-        await sendMagicLink(supa, sendable, lang, resendUrl, appBaseUrl);
+        await sendMagicLink(supa, sendable, resendUrl, appBaseUrl);
       }
     }
 
