@@ -211,6 +211,39 @@ export const UI_STRINGS = {
   'admin.filter.status': { zh: '全部状态', en: 'All statuses' },
   'admin.filter.minScore': { zh: '最低分', en: 'Min score' },
   'admin.filter.maxScore': { zh: '最高分', en: 'Max score' },
+  /**
+   * 告警文案。**每个 WARNING_CODE 都必须有一条** —— 有一条用例钉住这件事,
+   * 因为漏一条的表现是名单页上那一格显示成 key 本身(或者空白),
+   * 而那正是「有告警但看不懂」——比没有告警更容易被忽略。
+   */
+  'warn.phone_unparseable': {
+    zh: '号码解析不出来(原值已保留,可人工修)',
+    en: 'Phone could not be parsed (raw value kept for manual fixing)',
+  },
+  'warn.no_contact_channel': {
+    zh: '既没手机也没邮箱 —— 备用登录路径找不到这个人',
+    en: 'No phone and no email — the fallback login can never match this person',
+  },
+  'warn.cohort_tag_unknown': {
+    zh: '批次 tag 在库里没有对应的启用批次,已回落到默认批次',
+    en: 'Cohort tag matched no active cohort — fell back to the default cohort',
+  },
+  'warn.no_default_cohort': {
+    zh: '连默认批次都不存在 —— 这一行没有批次,基线统计不会工作',
+    en: 'No default cohort exists — this row has no cohort and baselines will not work',
+  },
+  'warn.lang_invalid': {
+    zh: 'GHL 传来的语言码不合法,已回落到中文 —— 去 workflow 里改那个字段',
+    en: 'GHL sent an invalid language code; fell back to Chinese — fix that field in the workflow',
+  },
+  'admin.col.warnings': { zh: '告警', en: 'Warnings' },
+  'admin.warnCount': { zh: '{n} 条', en: '{n}' },
+  'admin.warnNone': { zh: '—', en: '—' },
+  'admin.filter.warnOnly': { zh: '只看有告警的', en: 'Only rows with warnings' },
+  'admin.warnHint': {
+    zh: '告警不阻塞客户(付款入口不能因为一个配置问题拒收),但必须看得见 —— 点开看具体是什么。',
+    en: 'Warnings never block a customer, but they must be visible — expand a row to see the detail.',
+  },
   'admin.filter.badPhoneOnly': { zh: '只看号码异常', en: 'Unparseable phones only' },
   'admin.col.name': { zh: '姓名', en: 'Name' },
   'admin.col.phone': { zh: '手机', en: 'Phone' },

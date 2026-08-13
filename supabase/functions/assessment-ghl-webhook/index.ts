@@ -14,6 +14,8 @@
 import { secretMatches } from '../_shared/secret.ts';
 import { serviceClient } from '../_shared/supa.ts';
 import { generateAccessToken, magicLink } from '../_shared/token.ts';
+import { parseLang } from '../_shared/lang.ts';
+import type { EntitlementWarning } from '../_shared/entitlementWarnings.ts';
 import { parseWebhookPayload } from '../_shared/webhookPayload.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -32,7 +34,7 @@ interface UpsertRow {
 interface CohortResolution {
   cohort_id: string | null;
   source: 'tag' | 'default' | 'none';
-  warning?: string;
+  warning?: EntitlementWarning;
 }
 
 /**
@@ -69,15 +71,14 @@ async function resolveCohort(
     return {
       cohort_id: null,
       source: 'none',
-      warning: 'no default cohort exists — cohort_id left null, baselines will not work',
+      warning: { code: 'no_default_cohort' },
     };
   }
   return {
     cohort_id: def.id,
     source: 'default',
-    warning: cohortTag
-      ? `cohort_tag "${cohortTag}" matched no active cohort — fell back to the default cohort`
-      : undefined,
+    // context 放那个拼错的 tag —— 没有它,这条告警只能说明「有问题」,不能说明「去改哪里」
+    warning: cohortTag ? { code: 'cohort_tag_unknown', context: cohortTag } : undefined,
   };
 }
 
@@ -125,6 +126,28 @@ Deno.serve(async (req: Request) => {
     // ── 3. 批次 ───────────────────────────────────────────────
     const cohort = await resolveCohort(supa, value.cohort_tag);
 
+    /**
+     * ── 3b. 语言 ─────────────────────────────────────────────
+     *
+     * 【不合法时回落 + warning,**不** 400】这是付款入口:
+     * GHL 的 workflow webhook 对 4xx 不会有意义地重试(payload 不变,重试永远同样失败),
+     * 所以一个字段映射里的拼写错误会让**经那条 workflow 付款的每一个人**都没有准入记录。
+     * 用「客户付了钱系统里没有他」去防「英文客户收到中文链接」,方向反了 ——
+     * 后者能补发,前者要等投诉,而且钱已经收了。
+     *
+     * 与 cohort_tag 拼错、号码解析不出是同一条规则(只有 `ghl_contact_id` 能让整条 payload 被拒)。
+     * **而这一次那句「Admin 能看到」是真的了** —— warnings 落库并显示在名单页上。
+     */
+    const langParse = parseLang((raw as Record<string, unknown> | null)?.lang);
+    const langWarning: EntitlementWarning[] =
+      langParse.kind === 'invalid' ? [{ code: 'lang_invalid', context: langParse.received }] : [];
+
+    const allWarnings = [
+      ...warnings,
+      ...(cohort.warning ? [cohort.warning] : []),
+      ...langWarning,
+    ];
+
     // ── 4. 幂等写入 ───────────────────────────────────────────
     // 一条 insert ... on conflict do update,原子、无竞态。
     // 可变列白名单唯一定义在那个 SQL 函数里(migration 20260731000300),
@@ -142,6 +165,14 @@ Deno.serve(async (req: Request) => {
       p_phone_raw: value.phone_raw,
       p_email_lower: value.email_lower,
       p_name: value.name,
+      /**
+       * 【`p_lang` 在「没给」与「给了但不合法」两种情况下都传 null】
+       * RPC 那边 insert 分支落 `coalesce(p_lang,'zh')`、update 分支落
+       * `coalesce(p_lang, 现值)` —— 所以 null 的含义是「这次不改语言」,
+       * 而不是「设成中文」。后者会把学员自己切过的语言被一次无关的重复触发打回默认。
+       */
+      p_lang: langParse.kind === 'set' ? langParse.lang : null,
+      p_warnings: allWarnings.length ? allWarnings : null,
     });
     if (error) throw error;
 
@@ -152,10 +183,14 @@ Deno.serve(async (req: Request) => {
     const accessToken = row.token;
     const created = row.was_created;
 
-    const allWarnings = [...warnings, ...(cohort.warning ? [cohort.warning] : [])];
     if (allWarnings.length) {
+      /**
+       * 日志仍然打 —— 而且**先看日志再看响应**(判断标准 14 推论五):
+       * 响应体会被 GHL 吞掉,日志不会。
+       */
       console.warn(
-        `entitlement ${entitlementId} (${created ? 'created' : 'updated'}) warnings: ${allWarnings.join('; ')}`,
+        `entitlement ${entitlementId} (${created ? 'created' : 'updated'}) warnings: ` +
+          allWarnings.map((w) => (w.context ? `${w.code}(${w.context})` : w.code)).join('; '),
       );
     }
 
@@ -168,6 +203,7 @@ Deno.serve(async (req: Request) => {
       cohort_source: cohort.source,
       phone_parsed: value.phone_e164 !== null,
       warnings: allWarnings,
+      lang: langParse.kind === 'set' ? langParse.lang : undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

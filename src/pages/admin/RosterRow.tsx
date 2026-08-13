@@ -1,9 +1,14 @@
 import { useT } from '@/lib/i18n';
+import { parseWarnings, warningLabelKey } from '../../../api/_lib/entitlementWarnings';
 import { Badge, Button, Td, Tr } from '@/components/brutalist';
 
 export interface RosterRowData {
   id: string;
   name: string | null;
+  /** 这个人的语言(zh / en)—— 语言跟着人走,见 _shared/lang.ts */
+  lang?: string | null;
+  /** webhook 最近一次写入时的告警(jsonb 数组)。名单页负责让它可见 */
+  warnings?: unknown;
   phone_e164: string | null;
   phone_raw: string | null;
   email_lower: string | null;
@@ -44,6 +49,7 @@ export const ROSTER_COLUMNS = [
   'admin.col.total',
   'admin.col.tier',
   'admin.col.weakest',
+  'admin.col.warnings',
   'admin.col.pdf',
   'admin.col.actions',
 ] as const;
@@ -91,6 +97,12 @@ export default function RosterRow({
    */
   const anyError = pdfError ?? cardError;
   const pdfReady = result?.pdf_status === 'ready';
+  /**
+   * 【坏值不该让名单页打不开】`parseWarnings` 把认不出的项丢掉而不抛 ——
+   * 这一列是 jsonb、历史行是 null、以后也可能被手工改过,
+   * 而名单页是运营每天都要用的东西。
+   */
+  const warnings = parseWarnings(r.warnings);
 
   return (
     <>
@@ -127,6 +139,33 @@ export default function RosterRow({
         <Td>{result?.total ?? '—'}</Td>
         <Td>{result?.tier ?? '—'}</Td>
         <Td>{result?.weakest?.join(' / ') ?? '—'}</Td>
+
+        {/*
+          告警列 —— **一眼看出「这行有」,点开看「是什么」**。
+
+          【为什么不是一个感叹号图标】图标会变成装饰:它每天都在那里,而看它一眼
+          得不到任何可行动的信息,于是一周之后没人再看它。这里放条数 + 可点开 ——
+          「2 条」是个会变的数字,而数字变了人会注意到。
+
+          【为什么详情走那个已有的展开行】它要整行铺开(告警文本里带着 GHL 那边填错的值,
+          是要被复制走的),而单元格宽度不该被最坏情况决定 —— 与 pdf_last_error
+          那次同一个教训:失败是少数,不该让少数情况决定常态布局。
+        */}
+        <Td>
+          {warnings.length === 0 ? (
+            tk('admin.warnNone')
+          ) : (
+            <button
+              type="button"
+              onClick={onToggleError}
+              aria-expanded={errorOpen}
+              aria-controls={`row-detail-${r.id}`}
+              className="border-brutal border-line px-2 py-0.5 font-head text-xs font-bold underline"
+            >
+              {tk('admin.warnCount').replace('{n}', String(warnings.length))}
+            </button>
+          )}
+        </Td>
 
         {/*
           PDF 列:只放徽章和一个定宽的开关,**错误文本一个字都不进这一列**。
@@ -246,9 +285,25 @@ export default function RosterRow({
         url / FONTCONFIG_PATH / HOME / dirBefore 和三个常见成因,是要被整段复制走的。
         所以要能选中、要换行(覆盖掉 Td 继承下来的 whitespace-nowrap)。
       */}
-      {errorOpen && anyError && (
+      {errorOpen && (anyError || warnings.length > 0) && (
         <Tr>
           <Td colSpan={ROSTER_COLUMNS.length} className="whitespace-normal bg-line-soft/20">
+            {warnings.length > 0 && (
+              <div id={`row-detail-${r.id}`} className="mb-2 max-w-3xl">
+                <div className="font-head text-xs font-bold uppercase tracking-wider">
+                  {tk('admin.col.warnings')}
+                </div>
+                <ul className="list-disc pl-5 font-body text-xs">
+                  {warnings.map((w, i) => (
+                    <li key={`${w.code}-${i}`} className="whitespace-normal break-words">
+                      {tk(warningLabelKey(w.code) as never)}
+                      {/* context 是「去哪改」的那一格:GHL 那边到底填了什么 */}
+                      {w.context && <span className="font-mono"> — {w.context}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div
               id={`pdf-error-${r.id}`}
               className="max-w-3xl whitespace-pre-wrap break-words font-mono text-xs"
