@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run lint:cjk && npm run lint && npm run check:dim && npm run check:dep-sync && npm run check:env && npm run check:api-imports && npm run check:runtime-pin && npm run check:doc-anchors && npm run check:crons && npm run check:ghl-transport && npm run check:legacy-columns && tsc -b && vite build && npm run check:bundle",
+    "build": "npm run lint:cjk && npm run lint && npm run check:dim && npm run check:dep-sync && npm run check:env && npm run check:api-imports && npm run check:runtime-pin && npm run check:doc-anchors && npm run check:crons && npm run check:ghl-transport && npm run check:legacy-columns && npm run check:rpc-contract && tsc -b && vite build && npm run check:bundle",
     "preview": "vite preview",
     "verify": "npm run build && npm test && npm run check:deno && npm run test:deno && npm run check:cross",
     "deploy:functions": "npm run verify && node scripts/check-env.mjs --print && supabase functions deploy",
@@ -33,6 +33,7 @@
     "check:crons": "node scripts/check-crons.mjs",
     "check:ghl-transport": "node scripts/check-ghl-transport.mjs",
     "check:legacy-columns": "node scripts/check-legacy-columns.mjs",
+    "check:rpc-contract": "node scripts/check-rpc-contract.mjs",
     "tags:list": "deno run --allow-read --config supabase/functions/deno.json scripts/print-ghl-tags.ts",
     "seed:test": "node scripts/seed-test-data.ts",
     "seed:test:clean": "node scripts/seed-test-data.ts --clean --yes"
