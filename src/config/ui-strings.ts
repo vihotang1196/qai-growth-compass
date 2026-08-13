@@ -161,6 +161,22 @@ export const UI_STRINGS = {
   'report.pdf.print': { zh: '用浏览器打印 / 存 PDF', en: 'Print / save as PDF' },
   'report.pdf.rendering': { zh: 'PDF 正在生成…', en: 'Generating your PDF…' },
   'report.pdf.download': { zh: '下载 PDF 报告', en: 'Download the PDF report' },
+  /**
+   * 【按语言的下载 / 生成】按钮上**写出语言的名字,不用图标**。
+   *
+   * 一个语言图标每天都在那里,看它一眼得不到可行动的信息,一周之后没人再看它 ——
+   * 而这里要传达的恰恰是「你正在下载的是哪一种语言」。文字不会被眼睛过滤掉。
+   * (与名单页显示条数而不是感叹号是同一条:什么东西会被眼睛过滤掉。)
+   */
+  'report.pdf.downloadIn': { zh: '下载 PDF({lang}版)', en: 'Download the PDF ({lang})' },
+  'report.pdf.generateIn': { zh: '生成{lang}版', en: 'Generate the {lang} version' },
+  'report.pdf.generatingIn': { zh: '正在生成{lang}版…', en: 'Generating the {lang} version…' },
+  'report.pdf.exhaustedIn': {
+    zh: '{lang}版生成失败,已达重试上限 —— 我们会处理,你可以先用浏览器打印。',
+    en: 'The {lang} version failed after the retry limit — we are on it; you can print from the browser meanwhile.',
+  },
+  'lang.name.zh': { zh: '中文', en: 'Chinese' },
+  'lang.name.en': { zh: '英文', en: 'English' },
   'report.pdf.opening': { zh: '正在打开…', en: 'Opening…' },
   'report.pdf.failed': {
     zh: 'PDF 自动生成没成功。用下面的浏览器打印同样能存成 PDF。',

@@ -10,6 +10,7 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { effectiveLang } from '../_shared/lang.ts';
+import { langStates, type ReportFileRow } from '../_shared/reportFiles.ts';
 import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { verifyRenderToken } from '../_shared/renderToken.ts';
@@ -140,20 +141,38 @@ Deno.serve(async (req: Request) => {
     // 渲染令牌也要过这一关 —— 被停用的人不该还能被渲出报告
     if (!ent || ent.access_revoked_at) return json({ error: 'revoked' }, 403);
 
-    /**
-     * legacy-column-exempt: 报告页的下载按钮还在读旧列,而这条路径是**学员面向**的 ——
-     * 半改会让生产上的下载按钮坏掉(Admin 那个按钮坏掉可以接受、已明说,学员这个不行)。
-     * 改法已经定死:读 `assessment_report_files` 的全部语言行,payload 回
-     * `[{ lang, availability, url }]`,前端渲两个按钮。下一轮第一件事,见 PROGRESS 未完成。
-     */
     const { data: result, error: rErr } = await supa
       .from('assessment_results')
-      .select('dim_scores, total, tier, weakest, strongest, pdf_status, pdf_path, share_card_path, share_card_tall_path')
+      .select('dim_scores, total, tier, weakest, strongest')
       .eq('session_id', session.id)
       .maybeSingle();
     if (rErr) throw rErr;
+    /**
+     * 这个人的语言 —— `locale`、当前那份文件、兼容投影三处都用它。
+     * 【算一遍就够】算两遍的话,以后有人改其中一处,另一处会静默不同步。
+     */
+    const currentLang = effectiveLang(
+      (session as { entitlement?: { lang?: string | null } | null }).entitlement?.lang,
+    );
+
     // 结果还没算出来 —— 报告没准备好(还没走完 finalize)
     if (!result) return json({ error: 'not_ready' }, 404);
+
+    /**
+     * 每种语言一行(`assessment_report_files` 的主键就是 `(session_id, lang)`)。
+     * 一行都没有是正常的:finalize 之后那次异步渲染还没落库,或者这个人从没请求过任何语言。
+     */
+    const { data: fileRowsRaw, error: fErr } = await supa
+      .from('assessment_report_files')
+      .select('lang, pdf_status, pdf_path, pdf_attempts, pdf_last_error, share_card_path, share_card_tall_path')
+      .eq('session_id', session.id);
+    if (fErr) throw fErr;
+    const fileRows = (fileRowsRaw ?? []) as unknown as (ReportFileRow & {
+      share_card_path: string | null;
+      share_card_tall_path: string | null;
+    })[];
+    const byLang = new Map(fileRows.map((r) => [r.lang, r]));
+    const currentFile = byLang.get(currentLang) ?? null;
 
     // ── 徽章:每题归一化分,按维度 + submodule_index 归位 ──
     const { data: answerRows, error: aErr } = await supa
@@ -253,7 +272,7 @@ Deno.serve(async (req: Request) => {
        * 原来读 `assessment_sessions.locale`(跟着链接走),那与「语言跟着人走」会分叉。
        * PDF 渲染器也走这个端点,所以这一处读错会让**渲出来的那份**语言不对。
        */
-      locale: effectiveLang((session as { entitlement?: { lang?: string | null } | null }).entitlement?.lang),
+      locale: currentLang,
       result: {
         dimensions: myDims,
         total: result.total,
@@ -271,19 +290,42 @@ Deno.serve(async (req: Request) => {
       // 诊断:本人是否在基准池里、本人 session 的实际状态
       diagnostics: { baselineIncludesSelf: selfInPool, sessionStatus: session.status },
       cohort,
-      pdfStatus: result.pdf_status,
       /**
-       * 【每次请求现签,不缓存】ready 时签一条 1 小时有效的 signed URL。
+       * ── 每种语言一份文件 ──
        *
-       * 客户问「过期后再点会怎样」—— 答案是:**不会遇到过期**。前端在【点击那一刻】重新
-       * 取一次报告数据、拿一条新签的 URL 再打开,而不是把页面加载时那条存着用。
-       * 那样把「URL 会过期」这件事从错误处理变成了不存在的问题;否则页面开着超过一小时
-       * 再点,拿到的是 Storage 的 403,而那对客户完全无法解释。
+       * 【为什么整个数组都回,而不是只回当前语言那份】报告页要渲**两个按钮**:
+       * 「下载 PDF(中文版)」和「生成英文版」。后者的存在与否取决于**另一种语言**的状态,
+       * 所以前端必须看得到全部语言 —— 只回当前那份的话,那个按钮该不该出现就无从判断。
+       *
+       * 【每次请求现签,不缓存】ready 时签一条 1 小时有效的 signed URL。
+       * 客户问「过期后再点会怎样」—— 答案是**不会遇到过期**:前端在【点击那一刻】
+       * 重新取一次报告数据、拿一条新签的 URL 再打开,而不是把页面加载时那条存着用。
        */
-      pdfUrl: await signedPdfUrl(supa, result.pdf_status as string, result.pdf_path as string | null),
-      // 分享卡:两个尺寸各一条,没出来就是 null,前端据此整块不渲
-      cardUrl: await signedObjectUrl(supa, result.share_card_path as string | null),
-      cardTallUrl: await signedObjectUrl(supa, result.share_card_tall_path as string | null),
+      files: await Promise.all(
+        langStates(fileRows).map(async (st) => ({
+          lang: st.lang,
+          availability: st.availability,
+          url: st.availability === 'ready' ? await signedObjectUrl(supa, st.path) : null,
+          cardUrl: await signedObjectUrl(supa, byLang.get(st.lang)?.share_card_path ?? null),
+          cardTallUrl: await signedObjectUrl(supa, byLang.get(st.lang)?.share_card_tall_path ?? null),
+        })),
+      ),
+      /**
+       * ── 兼容投影:老前端还在读这四个键 ──
+       *
+       * 它们**从 `files` 派生**,不是第二个来源 —— 同一份数据的两个视图。
+       * 【为什么留着】部署是前后端一起上,但用户的浏览器里可能还挂着上一版的 JS
+       * (报告页一开就是几十分钟)。删掉这四个键会让那些页面的下载按钮当场消失,
+       * 而那是学员面向的路径。等一个版本之后再删。
+       */
+      pdfStatus: currentFile?.pdf_status ?? 'pending',
+      pdfUrl: await signedPdfUrl(
+        supa,
+        (currentFile?.pdf_status as string) ?? 'pending',
+        (currentFile?.pdf_path as string | null) ?? null,
+      ),
+      cardUrl: await signedObjectUrl(supa, (currentFile?.share_card_path as string | null) ?? null),
+      cardTallUrl: await signedObjectUrl(supa, (currentFile?.share_card_tall_path as string | null) ?? null),
     });
   } catch (err) {
     console.error(`report failed: ${err instanceof Error ? err.message : String(err)}`);

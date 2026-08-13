@@ -6,8 +6,9 @@ import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleM
 import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
+import ReportFileActions from './ReportFileActions';
 import { QuizAuthError } from '@/lib/quizApi';
-import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload } from '@/lib/reportApi';
+import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload, requestReportFile} from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
 import { isPriorityMismatch } from '../../api/_lib/surveySignals';
 import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
@@ -52,6 +53,8 @@ export default function Report() {
   const [pdf, setPdf] = useState<{ status: string; url: string | null }>({ status: 'pending', url: null });
   const [pollDone, setPollDone] = useState(false);
   const [opening, setOpening] = useState(false);
+  /** 正在为哪种语言触发生成 —— 按钮据此禁用并改文案。null = 没有在触发 */
+  const [generating, setGenerating] = useState<'zh' | 'en' | null>(null);
 
   const onAuthLost = useCallback(() => navigate(`/expired?lang=${locale}`, { replace: true }), [navigate, locale]);
   /** 按当前语言取 config 字段(zh/en);config 是允许出现中文的源 */
@@ -130,16 +133,45 @@ export default function Report() {
    * 页面开着超过一小时再点,存下来的那条会拿到 Storage 的 403 —— 那对客户无法解释。
    * 每次点击现取一条新的,「URL 会过期」这件事就不存在,而不是变成一个要处理的错误。
    */
-  async function openPdf() {
+  /**
+   * 打开某种语言那一份。
+   *
+   * 【点击那一刻重新取一次,而不是用页面加载时那条 URL】signed URL 只活 1 小时,
+   * 而报告页一开就是几十分钟。重新取把「URL 会过期」从错误处理变成不存在的问题。
+   */
+  async function openPdfIn(lang: 'zh' | 'en') {
     setOpening(true);
     try {
-      const st = await fetchPdfState();
-      setPdf({ status: st.pdfStatus, url: st.pdfUrl });
-      if (st.pdfUrl) window.open(st.pdfUrl, '_blank', 'noopener');
+      const fresh = await fetchReport();
+      setData(fresh);
+      setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
+      const file = fresh.files?.find((f) => f.lang === lang);
+      if (file?.url) window.open(file.url, '_blank', 'noopener');
     } finally {
       setOpening(false);
     }
   }
+
+  /**
+   * 触发生成某种语言。
+   *
+   * 【这是一个显式动作,不是我们替他决定的】学员切了语言之后旧 PDF **不自动重渲** ——
+   * 一次点击触发一次 Lambda,而大多数人切了语言并不会立刻要 PDF。
+   * 所以按钮上写清「生成英文版」,他知道自己在触发一次生成。
+   */
+  async function generateIn(lang: 'zh' | 'en') {
+    setGenerating(lang);
+    try {
+      await requestReportFile(lang);
+      // 服务端是同步等渲染完的,所以回来之后直接重取一次就能拿到新状态
+      const fresh = await fetchReport();
+      setData(fresh);
+      setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
+    } finally {
+      setGenerating(null);
+    }
+  }
+
 
   const costs = useMemo(() => {
     if (!data || data.leadsPerMonth === null || data.dealValue === null) return [];
@@ -452,19 +484,16 @@ export default function Report() {
 
       {/* 8. PDF / 打印 */}
       <Section title={tk('report.section.share')}>
-        {pdf.status === 'ready' ? (
-          <Button variant="primary" onClick={() => void openPdf()} disabled={opening}>
-            {opening ? tk('report.pdf.opening') : tk('report.pdf.download')}
-          </Button>
-        ) : pdf.status === 'failed' || pdf.status === 'failed_permanent' ? (
-          // 渲染失败只是少一个按钮 —— 报告本身能看,打印那条路仍然通
-          <p className="font-body text-sm">{tk('report.pdf.failed')}</p>
-        ) : pollDone ? (
-          // 轮到上限还没好 —— 回到静态兜底文案,不无限转圈
-          <p className="font-body text-sm opacity-70">{tk('report.pdf.pending')}</p>
-        ) : (
-          <p className="font-body text-sm opacity-70">{tk('report.pdf.rendering')}</p>
-        )}
+        <ReportFileActions
+          files={data?.files ?? []}
+          current={locale}
+          currentStatus={pdf.status}
+          pollDone={pollDone}
+          opening={opening}
+          generating={generating}
+          onOpen={(l) => void openPdfIn(l)}
+          onGenerate={(l) => void generateIn(l)}
+        />
         {/* 打印保底(print.css)—— 自动 PDF 失败时这条路仍然可用,所以永远保留 */}
         <div className="mt-3">
           <Button className="no-print" variant="outline" onClick={() => window.print()}>

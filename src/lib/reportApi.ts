@@ -30,6 +30,19 @@ export interface ReportPayload {
   } | null;
   /** 诊断:本人是否在基准样本池里 + 本人 session 的实际状态 */
   diagnostics?: { baselineIncludesSelf: boolean; sessionStatus: string };
+  /**
+   * 每种语言一份文件。**总是包含全部语言**,没有的那种 availability 是 `absent` ——
+   * 「生成英文版」这个按钮该不该出现,取决于**另一种语言**的状态,
+   * 所以前端必须看得到全部,而不是只看当前那份。
+   */
+  files: {
+    lang: 'zh' | 'en';
+    availability: 'ready' | 'working' | 'failed' | 'exhausted' | 'absent';
+    url: string | null;
+    cardUrl: string | null;
+    cardTallUrl: string | null;
+  }[];
+  /** ⚠️ 兼容投影,从 `files` 派生 —— 不是第二个来源。等一个版本之后删 */
   pdfStatus: string;
   /** ready 时服务端现签的 signed URL(1 小时);其余为 null */
   pdfUrl: string | null;
@@ -85,4 +98,24 @@ export async function fetchReport(): Promise<ReportPayload> {
 export async function fetchPdfState(): Promise<{ pdfStatus: string; pdfUrl: string | null }> {
   const d = await fetchReport();
   return { pdfStatus: d.pdfStatus, pdfUrl: d.pdfUrl };
+}
+
+/**
+ * 请求生成某种语言的报告文件 —— POST /api/assessment-report-file,cookie 鉴权。
+ *
+ * 【幂等在服务端】已经 ready 就直接回 ready(不重渲),正在渲就回 working。
+ * 所以前端不需要自己记「我点过了吗」—— 那种本地状态一刷新就丢,
+ * 而丢了之后人会再点一次,于是又是一次 Lambda。
+ */
+export async function requestReportFile(lang: 'zh' | 'en'): Promise<{ status: string }> {
+  const res = await fetch('/api/assessment-report-file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lang }),
+  });
+  // 403 = 已停用(revoked),401 = 没登录 —— 与答题 / 报告取数同一套跳转
+  if (res.status === 401) throw new QuizAuthError('unauthorized');
+  if (res.status === 403) throw new QuizAuthError('revoked');
+  const body = (await res.json().catch(() => null)) as { status?: string } | null;
+  return { status: body?.status ?? 'failed' };
 }
