@@ -72,6 +72,25 @@ Deno.test('【拼错的 ?lang= 不改库、也不让页面打不开】', () => {
   assertEquals(shouldPersistLang(null, invalid), null);
 });
 
+Deno.test('渲染器传来的 ?lang= 必须赢过库里那一列 —— 英文 PDF 嵌中文卡就是这么来的', () => {
+  /**
+   * PDF 渲染器打开 `/report?rt=…&lang=en`,它渲的是**那一份文件**;
+   * 而 `entitlement.lang` 是**这个人偏好什么**。两者可以不同,最常见的一种是
+   * 运营在 Admin 点「重新生成 en」而学员自己还是 zh。
+   *
+   * 报告端点上一版只读那一列,于是正文英文、而 `cardUrl` 取的是 zh 那一行的分享卡 ——
+   * **英文 PDF 里嵌着一张中文卡**,而那张卡是给客户发朋友圈用的。
+   *
+   * 这一条钉的就是「incoming 赢」这件事:它是那个 bug 的判定,
+   * 而不是一句「记得让 query 优先」。
+   */
+  assertEquals(effectiveLang('zh', parseLang('en')), 'en');
+  assertEquals(effectiveLang('en', parseLang('zh')), 'zh');
+  // 而没带 / 带了脏值时仍然用库里那一列 —— 不能反过来把人的语言弄丢
+  assertEquals(effectiveLang('en', parseLang(null)), 'en');
+  assertEquals(effectiveLang('en', parseLang('EN')), 'en');
+});
+
 Deno.test('shouldPersistLang:只有「合法且与库里不同」才写', () => {
   /**
    * 每次页面打开都写一次的话,`updated_at` 那个 trigger 会把

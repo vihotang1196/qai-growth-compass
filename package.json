@@ -34,6 +34,7 @@
     "check:ghl-transport": "node scripts/check-ghl-transport.mjs",
     "check:legacy-columns": "node scripts/check-legacy-columns.mjs",
     "check:rpc-contract": "node scripts/check-rpc-contract.mjs",
+    "check:i18n-parity": "node scripts/check-i18n-parity.mjs",
     "check:migrations": "node scripts/check-migrations-applied.mjs",
     "tags:list": "deno run --allow-read --config supabase/functions/deno.json scripts/print-ghl-tags.ts",
     "seed:test": "node scripts/seed-test-data.ts",

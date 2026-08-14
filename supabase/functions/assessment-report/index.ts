@@ -9,7 +9,7 @@
  * 都在这里定好,前端不猜(PROGRESS 0.9)。
  */
 import { serviceClient } from '../_shared/supa.ts';
-import { effectiveLang } from '../_shared/lang.ts';
+import { effectiveLang, parseLang } from '../_shared/lang.ts';
 import { langStates, type ReportFileRow } from '../_shared/reportFiles.ts';
 import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
@@ -148,11 +148,27 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
     if (rErr) throw rErr;
     /**
-     * 这个人的语言 —— `locale`、当前那份文件、兼容投影三处都用它。
+     * 这一次响应用哪个语言 —— `locale`、当前那份文件、兼容投影三处都用它。
      * 【算一遍就够】算两遍的话,以后有人改其中一处,另一处会静默不同步。
+     *
+     * ⚠️ **必须让 `?lang=` 赢过 `entitlement.lang`,而这一处上一版是错的。**
+     *
+     * PDF 渲染器打开的是 `/report?rt=…&lang=en`,它渲的是**那一份文件**;
+     * 而 `entitlement.lang` 是**这个人偏好什么**。两者可以不同 ——
+     * 最常见的一种:运营在 Admin 点「重新生成 en」,而学员自己的语言还是 zh。
+     *
+     * 上一版只读 `entitlement.lang`,后果是:页面正文是英文(前端 i18n 读 query),
+     * 而 payload 里的 `cardUrl` 取的是 **zh 那一行**的分享卡 ——
+     * **英文 PDF 里嵌着一张中文卡**,而那张卡是给客户发朋友圈用的。
+     *
+     * 而我在下面兼容投影那段的注释里写着「这一处读错会让渲出来的那份语言不对」——
+     * 写了警告,然后实现了它警告的那件事。
+     *
+     * `effectiveLang(stored, incoming)` 本来就是为这件事写的:合法的 incoming 赢。
      */
     const currentLang = effectiveLang(
       (session as { entitlement?: { lang?: string | null } | null }).entitlement?.lang,
+      parseLang(new URL(req.url).searchParams.get('lang')),
     );
 
     // 结果还没算出来 —— 报告没准备好(还没走完 finalize)
