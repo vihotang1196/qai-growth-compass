@@ -1,6 +1,19 @@
 import { QuizAuthError } from '@/lib/quizApi';
 
 /**
+ * 这一次请求用哪个语言 —— 与 `i18n` 同一个来源(`?lang=` → localStorage → zh)。
+ * 【不 import i18n 的 hook】那是 React 上下文,而这里是普通函数;
+ * 读同一份东西即可,而 `?lang=` 正是 PDF 渲染器唯一能传进来的那个信号。
+ */
+function currentLang(): 'zh' | 'en' {
+  if (typeof window === 'undefined') return 'zh';
+  const q = new URLSearchParams(window.location.search).get('lang');
+  if (q === 'en' || q === 'zh') return q;
+  const stored = window.localStorage?.getItem('compass_lang');
+  return stored === 'en' ? 'en' : 'zh';
+}
+
+/**
  * 报告取数 —— GET /api/assessment-report,cookie 鉴权。
  * 401/403 复用 QuizAuthError(与答题/问卷一致,都跳 /expired)。
  */
@@ -69,7 +82,17 @@ export async function fetchReport(): Promise<ReportPayload> {
    * 令牌用另一个密钥、只活几分钟,不能当登录态用,见 lib/renderToken.ts。
    */
   const rt = new URLSearchParams(window.location.search).get('rt');
-  const url = rt ? `/api/assessment-report?rt=${encodeURIComponent(rt)}` : '/api/assessment-report';
+  /**
+   * 【必须带 `lang`】上一轮给报告端点加了「`?lang=` 赢过 `entitlement.lang`」,
+   * 而**这里从来没传过它** —— 于是那个修复一次都没被走到,
+   * 分享卡继续按 `entitlement.lang` 取(英文报告里嵌中文卡)。
+   *
+   * 一个修好了但调用方不传参数的分支,与没修没有区别。
+   */
+  const params = new URLSearchParams();
+  if (rt) params.set('rt', rt);
+  params.set('lang', currentLang());
+  const url = `/api/assessment-report?${params.toString()}`;
   const res = await fetch(url, {
     method: 'GET',
     credentials: 'same-origin',

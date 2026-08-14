@@ -3,6 +3,7 @@ import { MAX_PDF_ATTEMPTS } from '../../api/_lib/pdfState';
 import { LANGS } from '../../api/_lib/lang';
 import {
   availabilityOf,
+  cardsFor,
   downloadableIn,
   langStates,
   offerableLangs,
@@ -135,5 +136,35 @@ describe('object paths keep the two languages apart', () => {
     // 分享卡渲的是报告页的内容(含档位名),所以它同样跟语言有关
     expect(shareCardObjectPath('s1', 'en', '-card.png')).toBe('s1-en-card.png');
     expect(shareCardObjectPath('s1', 'zh', '-card-tall.png')).toBe('s1-zh-card-tall.png');
+  });
+});
+
+describe('cardsFor: the page picks its own language, never falls back', () => {
+  const files = [
+    { lang: 'zh', cardUrl: 's1-zh-card.png', cardTallUrl: 's1-zh-card-tall.png' },
+    { lang: 'en', cardUrl: 's1-en-card.png', cardTallUrl: null },
+  ];
+
+  it('picks the cards of the requested language', () => {
+    expect(cardsFor(files, 'en')).toEqual({ cardUrl: 's1-en-card.png', cardTallUrl: null });
+    expect(cardsFor(files, 'zh')).toEqual({
+      cardUrl: 's1-zh-card.png',
+      cardTallUrl: 's1-zh-card-tall.png',
+    });
+  });
+
+  it('never falls back to the other language', () => {
+    /**
+     * 【这一条是那个 bug 的判定】分享卡的语言错了三次,而每次的表现都一样:
+     * 英文报告里嵌着一张中文卡 —— 那张图确实能打开,只是语言不对,
+     * 而它是客户拿去发朋友圈的东西。所以宁可这一块整个不渲。
+     */
+    expect(cardsFor([files[0]], 'en')).toEqual({ cardUrl: null, cardTallUrl: null });
+    expect(cardsFor([], 'zh')).toEqual({ cardUrl: null, cardTallUrl: null });
+  });
+
+  it('a missing tall card does not hide the square one', () => {
+    // 两个尺寸各自独立 —— 一个没出来不该把另一个也藏掉
+    expect(cardsFor(files, 'en').cardUrl).toBe('s1-en-card.png');
   });
 });

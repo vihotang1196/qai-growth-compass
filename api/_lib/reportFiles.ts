@@ -126,6 +126,49 @@ export function offerableLangs(rows: readonly ReportFileRow[]): Lang[] {
 }
 
 /**
+ * 这一次该显示**哪种语言**的分享卡。
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 【为什么把这一步做成纯函数,而不是继续靠端点的兼容投影】
+ *
+ * 分享卡的语言错了三次,每次原因都在**不同的一层**:
+ *   ① `render-pdf` 硬编码 `lang=zh`(改了)
+ *   ② 报告端点的 `currentLang` 只读 `entitlement.lang`、不读 `?lang=`(改了)
+ *   ③ **前端调那个端点时压根没带 `lang`** —— 所以 ② 那个修复从来没被走到
+ *
+ * 三次都是「谁决定语言」这件事散在多层里。所以这一次换取向:
+ * **页面自己知道自己的语言,而 `files` 里两种语言都在** ——
+ * 选哪一张因此是一次**纯计算**,不依赖端点猜对。
+ *
+ * 【为什么这一步值得可测】它是那类「接线」的典型:
+ * `Deno.serve` 入口与 React 页面本地都难测,而**把「从请求取 lang」与
+ * 「用 lang 选文件」拆开之后,后者就是纯函数** —— 而后者恰恰是错过三次的那一半。
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export interface CardUrls {
+  cardUrl: string | null;
+  cardTallUrl: string | null;
+}
+
+/**
+ * 【参数只写它真正读的三个字段】要求完整的 `ReportFileRow` 会把两个调用方
+ * (payload 里的 `files` 与库里的行)硬绑成同一个形状,而它们本来就不同 ——
+ * 而多要的那些字段一个都不会被用到。
+ */
+export function cardsFor(
+  files: readonly { lang: string; cardUrl?: string | null; cardTallUrl?: string | null }[],
+  lang: Lang,
+): CardUrls {
+  const row = files.find((f) => f.lang === lang);
+  /**
+   * 【找不到就都是 null,**绝不退回另一种语言**】
+   * 递一张别的语言的卡出去,那张图确实能打开 —— 只是语言不对,
+   * 而它是客户拿去发朋友圈的东西。宁可这一块整个不渲。
+   */
+  return { cardUrl: row?.cardUrl ?? null, cardTallUrl: row?.cardTallUrl ?? null };
+}
+
+/**
  * Storage 里的对象路径。**语言进文件名** —— 两种语言各自一份,互不覆盖。
  *
  * 【为什么不是 `${sessionId}.pdf` 加一列语言】那样两种语言会写同一个对象,

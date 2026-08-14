@@ -7,6 +7,7 @@ import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
 import ReportFileActions from './ReportFileActions';
+import { cardsFor } from '../../api/_lib/reportFiles';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload, requestReportFile} from '@/lib/reportApi';
 import { badgeForScore } from '@/lib/scoring';
@@ -172,6 +173,16 @@ export default function Report() {
     }
   }
 
+
+  /**
+   * 分享卡按**这个页面自己的语言**从 `files` 里选,不再用端点的兼容投影
+   * (`data.cardUrl`)。语言错了三次都是因为「谁决定语言」散在多层里 ——
+   * 页面自己知道自己的语言,而 `files` 里两种都在,所以这一步是纯计算。
+   */
+  const cards = useMemo(
+    () => cardsFor(data?.files ?? [], locale),
+    [data, locale],
+  );
 
   const costs = useMemo(() => {
     if (!data || data.leadsPerMonth === null || data.dealValue === null) return [];
@@ -450,14 +461,14 @@ export default function Report() {
         没出来就当它不存在:这是附属品的附属品,为它显示一句「生成失败」
         只会让客户去操心一件与他的报告无关的事。失败要被看见的地方是 Admin 名单页。
       */}
-      {(data.cardUrl || data.cardTallUrl) && (
+      {(cards.cardUrl || cards.cardTallUrl) && (
         <Section title={tk('report.card.title')}>
           <p className="mb-3 font-body text-sm opacity-70">{tk('report.card.hint')}</p>
           <div className="flex flex-wrap gap-4">
-            {data.cardUrl && (
+            {cards.cardUrl && (
               <figure className="w-52">
                 <img
-                  src={data.cardUrl}
+                  src={cards.cardUrl}
                   alt={tk('report.card.square')}
                   className="w-full border-brutal border-line"
                 />
@@ -466,10 +477,10 @@ export default function Report() {
                 </figcaption>
               </figure>
             )}
-            {data.cardTallUrl && (
+            {cards.cardTallUrl && (
               <figure className="w-36">
                 <img
-                  src={data.cardTallUrl}
+                  src={cards.cardTallUrl}
                   alt={tk('report.card.tall')}
                   className="w-full border-brutal border-line"
                 />
