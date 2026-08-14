@@ -7330,6 +7330,70 @@ Node 367 / Deno 217,**十四道门**全绿。
 
 Node 367 / Deno 217,十四道门全绿。
 
+# 删掉旧列 —— 按第 0 条的顺序,先验门抓不抓得到起因
+
+## ① 先把起因造回去,三种形状都验
+
+起因已经被前几轮修好了,所以**必须刻意改回去** —— 而那一步最容易被省掉
+([第 0 条](#0-造一个检测器时第一条断言是它能抓到那个促使它诞生的东西))。
+
+| 造回去的形状 | 门的反应 |
+|---|---|
+| 顶层 `.from('assessment_results').select(… pdf_status, share_card_path)` | ✗ 报出来,点名两列 |
+| **嵌套** `result:assessment_results(… pdf_status, pdf_last_error)`(名单页那次的形状) | ✗ 报出来,并说明是嵌套 |
+| `.from('assessment_sessions').select('… locale …')` | ✗ 报出来 |
+| 三处都复原 | 绿 |
+
+三种都红之后才写迁移。
+
+## ② 那条迁移只 drop 列,而「没有信息会丢」是**断言**,不是保证
+
+```sql
+-- 有没有哪一行带着信息、却没有对应的新行
+where (pdf_path is not null or pdf_status <> 'pending')
+  and not exists (select 1 from assessment_report_files f where f.session_id = r.session_id)
+```
+
+非零就 `raise exception`,整条迁移回滚并**点名那些 session_id**。
+
+【为什么不断言「两表行数相等」】那是错的:seed 那批从没渲过 PDF
+(`pdf_status='pending'`、`pdf_path is null`),所以 `20260812300000` 当初就没迁它们 ——
+**它们身上本来就没有信息**。行数相等的断言会红在一个正确的状态上,
+而那种断言最后一定会被人注释掉。
+
+真正要问的是:**有没有哪一行带着信息、却没有对应的新行。**
+
+另外 `raise notice` 把「这次丢掉了多少条非空的历史值」记进迁移日志 ——
+删列之后这个数字**永远问不出来了**。
+
+## ③ 依赖清点(你问的第 2 件)
+
+| 依赖 | 处理 |
+|---|---|
+| `assessment_results_pdf_status_idx`(部分索引,建在 `pdf_status` 上) | **显式 `drop index`**。Postgres 本来会随列删掉它,但写出来才让「这个索引也没了」出现在迁移文件里 |
+| `check (pdf_status in (…))`、`check (locale in ('zh','en'))` | 列级约束,随列一起删 |
+| 视图 / 触发器 | **没有**(`touch_updated_at` 装在 entitlements 上,与这两组列无关) |
+| 代码 | 门绿且无豁免,而且刚验过它抓得到重新引入 |
+| **全新重放这套迁移** | 仍然成立 —— `20260812300000` 那条要读 `pdf_*` 把存量迁进新表,而它在这条**之前**执行 |
+
+## ④ 这道门在删列之后语义变了,而它**更强了**
+
+之前旧列还在,读它只是「读了第二个真相源」;现在那些列**不存在**,
+读它 = PostgREST 报 42703 → 端点 500。**判据一个字没改,而它拦住的后果严重了一档。**
+
+⚠️ 所以**不要**因为「列已经删了」就把这道门撤掉:那些列名在
+`assessment_report_files` 里**依然同名存在**,所以「习惯性写回
+`.from('assessment_results').select('pdf_status')`」是一个仍然会发生、
+而且现在会 500 的错误。
+
+## 未做 / 你那边要做的
+
+- **迁移未应用**(第六条)。你说会先在 SQL Editor 里 select 一次那几列存快照 ——
+  成本是零,而且那是唯一还能取到那些值的时刻
+- 顺序仍然是 `db push` → `deploy:functions`(那道 preflight 会拦反了的顺序)
+
+Node 370 / Deno 217,十四道门全绿。
+
 ---
 
 ## 变更日志
