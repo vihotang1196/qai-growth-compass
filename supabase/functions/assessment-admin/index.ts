@@ -22,7 +22,7 @@ import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 import { classifyError } from '../_shared/errorKind.ts';
-import { parseLang } from '../_shared/lang.ts';
+import { LANGS, parseLang } from '../_shared/lang.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
@@ -63,11 +63,21 @@ interface RosterRow {
       total: number;
       tier: string;
       weakest: string[];
+    } | null;
+    /**
+     * 每种语言一行报告文件。**PDF 的状态从这里来,不再从 result 上来** ——
+     * 一个 session 有两份,而 result 只有一行,放不下两个状态。
+     * 一行都没有是正常的(finalize 之后那次异步渲染还没落库,或者根本还没答完)。
+     */
+    files: {
+      lang: string;
       pdf_status: string;
+      pdf_path: string | null;
+      pdf_attempts: number | null;
       pdf_last_error: string | null;
       /** 分享卡失败原因。【非空不代表 PDF 失败】—— 两者分开,CSV 里也是两列 */
       share_card_error: string | null;
-    } | null;
+    }[];
   } | null;
 }
 
@@ -778,7 +788,8 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
        session:assessment_sessions(
          id,
          status,
-         result:assessment_results(total, tier, weakest, pdf_status, pdf_last_error, share_card_error)
+         result:assessment_results(total, tier, weakest),
+         files:assessment_report_files(lang, pdf_status, pdf_path, pdf_attempts, pdf_last_error, share_card_error)
        )`,
     )
     .order('created_at', { ascending: false });
@@ -811,9 +822,39 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
   };
 }
 
+/**
+ * 报告文件那几列 —— **按语言展开,列名由 `LANGS` 推导**。
+ *
+ * 【为什么不合成一列】一个 session 现在有两份 PDF,而这份 CSV 是拿去做分群和人工排查的。
+ * 合成 `zh=ready; en=absent` 这种字符串之后,「筛出英文版没好的人」就得靠人眼解析 ——
+ * 而那正是导出要替人做的事。
+ *
+ * 【为什么列名从 LANGS 推导】以后加一种语言,列会自动出现;
+ * 手写列名的话新语言的数据会**静默不出现在导出里**(判断标准 12)。
+ */
+function fileColumns(): string[] {
+  return [...LANGS.flatMap((l) => [`PDF 状态(${l})`, `PDF 错误(${l})`]), '分享卡错误'];
+}
+
+function fileCells(r: RosterRow): (string | null)[] {
+  const byLang = new Map((r.session?.files ?? []).map((f) => [f.lang, f]));
+  const cells: (string | null)[] = [];
+  for (const l of LANGS) {
+    const f = byLang.get(l);
+    // 【没有那一行就写 absent,不写空】空单元格分不清「没有」与「导出漏了」
+    cells.push(f?.pdf_status ?? 'absent', f?.pdf_last_error ?? null);
+  }
+  // 分享卡的错误哪种语言的都算 —— 它是附属品,分两列反而让人以为要分别处理
+  const cardErrors = (r.session?.files ?? [])
+    .filter((f) => f.share_card_error)
+    .map((f) => `${f.lang}: ${f.share_card_error}`);
+  cells.push(cardErrors.length ? cardErrors.join(' | ') : null);
+  return cells;
+}
+
 function rosterCsv(rows: RosterRow[]): string {
   return toCsv(
-    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', 'PDF 状态', 'PDF 最后错误', '分享卡错误'],
+    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', ...fileColumns()],
     rows.map((r) => [
       r.name,
       r.phone_e164,
@@ -828,10 +869,8 @@ function rosterCsv(rows: RosterRow[]): string {
       r.session?.result?.tier ?? null,
       r.session?.result?.weakest?.join(' / ') ?? null,
       r.access_revoked_at ? 'yes' : null,
-      r.session?.result?.pdf_status ?? null,
-      r.session?.result?.pdf_last_error ?? null,
-      // 分享卡失败不影响 PDF,所以它必须单独一列 —— 混进 PDF 那列会让人以为 PDF 也坏了
-      r.session?.result?.share_card_error ?? null,
+      // 分享卡失败不影响 PDF,所以它仍然单独一列 —— 混进 PDF 那列会让人以为 PDF 也坏了
+      ...fileCells(r),
     ]),
   );
 }

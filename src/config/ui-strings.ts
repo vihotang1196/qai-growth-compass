@@ -252,6 +252,21 @@ export const UI_STRINGS = {
     zh: 'GHL 传来的语言码不合法,已回落到中文 —— 去 workflow 里改那个字段',
     en: 'GHL sent an invalid language code; fell back to Chinese — fix that field in the workflow',
   },
+  /**
+   * 报告文件那一格的记号。**每种状态一个短记号,而不是一个图标** ——
+   * 名单页是用来扫的,记号要能一眼分出「好了 / 在生成 / 出错 / 没有」。
+   */
+  'admin.file.ready': { zh: '✓', en: '✓' },
+  'admin.file.working': { zh: '…', en: '…' },
+  'admin.file.failed': { zh: '!', en: '!' },
+  'admin.file.exhausted': { zh: '✗', en: '✗' },
+  'admin.file.absent': { zh: '—', en: '—' },
+  'admin.col.files': { zh: '报告文件', en: 'Report files' },
+  'admin.file.regen': { zh: '重新生成 {lang}', en: 'Regenerate {lang}' },
+  'admin.file.legend': {
+    zh: '✓ 已生成 · … 正在生成 · ! 失败(可重试)· ✗ 次数用完 · — 还没有',
+    en: '✓ ready · … generating · ! failed (retryable) · ✗ out of retries · — none yet',
+  },
   'admin.col.warnings': { zh: '告警', en: 'Warnings' },
   'admin.warnCount': { zh: '{n} 条', en: '{n}' },
   'admin.warnNone': { zh: '—', en: '—' },

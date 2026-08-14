@@ -31,7 +31,7 @@ interface RosterResponse {
  * 这条限制写在 assessment-admin 的 roster() 注释里,不是随口一提。
  */
 export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean) => void }) {
-  const { tk, locale } = useT();
+  const { tk } = useT();
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -106,13 +106,23 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
    * Admin 这边【等】结果,与 finalize 那边异步不同:那边客户在等分数不该被拖住,
    * 这边是人主动点的,要的就是结果。
    */
-  async function renderPdf(row: RosterRow) {
+  /**
+   * 重新生成某一种语言的报告文件。
+   *
+   * 【`lang` 是必填参数,前端也不给默认值】后端那个 action 缺 lang 会 400 ——
+   * 而那是刻意的:一个 session 有两份文件,「重渲哪一份」只有点按钮的人知道。
+   * 名单页那一格显示的是 `zh ✓ / en —`,所以界面上本来就是分开的,参数也该分开。
+   */
+  async function renderPdf(row: RosterRow, lang: 'zh' | 'en') {
     const sessionId = row.session?.id;
     if (!sessionId || busyId === row.id) return;
     setBusyId(row.id);
     setNotice(null);
     try {
-      const res = await adminPost<{ ok: boolean; detail?: string }>('render_pdf', { session_id: sessionId });
+      const res = await adminPost<{ ok: boolean; detail?: string }>('render_pdf', {
+        session_id: sessionId,
+        lang,
+      });
       if (!res.ok) setNotice(res.detail ?? 'render failed');
       await load();
     } catch (err) {
@@ -156,9 +166,14 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
     setBusyId(row.id);
     setNotice(null);
     try {
+      /**
+       * 【不再传 `lang`】上一版传的是 `locale`,也就是**操作者界面的语言** ——
+       * 而后端早就改成从 `entitlement.lang` 读收件人的语言了(那次的 bug 是
+       * 「谁在后台点,决定客户收到什么语言的消息」)。留着这个参数会让下一个人
+       * 以为它还有用,而它已经被忽略 —— 一个没人读的参数与一个没人读的列是同一类东西。
+       */
       const res = await adminPost<{ ok: boolean; queued: boolean }>(action, {
         entitlement_id: row.id,
-        lang: locale,
       });
       // queued=false 意味着 GHL 收下了但没进执行队列(多半是 workflow 还是 Draft)。
       // 不说出来的话它就是一次静默的「以为发了」
@@ -343,7 +358,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                   onResend={() => void act('resend', r)}
                   onRotate={() => void act('rotate', r)}
                   onRevoke={() => void act('revoke', r)}
-                  onRenderPdf={() => void renderPdf(r)}
+                  onRenderPdf={(lang) => void renderPdf(r, lang)}
                   onOpenReport={() => void openReport(r)}
                 />
               ))}

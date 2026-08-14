@@ -24,6 +24,39 @@ const LONG_ERROR =
 const escapeHtml = (t: string) =>
   t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/**
+ * 报告文件那几行 —— **每种语言一行**(`assessment_report_files` 的粒度)。
+ *
+ * 【为什么 fixture 必须换成这个形状】组件读的是 `session.files`,
+ * 而这份 fixture 之前还挂在 `result.pdf_status` 上 —— 那些字段 roster 的查询
+ * **已经不再 select**,所以它们恒为 undefined。
+ * 断言还在,但它们验的是一个组件根本不读的东西
+ * (判断标准 1 推论三里的第三种绿:**前提在 fixture 里不成立**)。
+ * 这一批 9 条红就是这么暴露的 —— 而它们之前被一个 lint 错误挡在 verify 后面。
+ */
+function makeFiles(
+  over: Partial<{
+    lang: string;
+    pdf_status: string;
+    pdf_path: string | null;
+    pdf_attempts: number | null;
+    pdf_last_error: string | null;
+    share_card_error: string | null;
+  }> = {},
+) {
+  return [
+    {
+      lang: 'zh',
+      pdf_status: 'ready',
+      pdf_path: 'ses-1-zh.pdf',
+      pdf_attempts: 0,
+      pdf_last_error: null,
+      share_card_error: null,
+      ...over,
+    },
+  ];
+}
+
 function makeRow(over: Partial<RosterRowData> = {}): RosterRowData {
   return {
     id: 'ent-1',
@@ -39,14 +72,8 @@ function makeRow(over: Partial<RosterRowData> = {}): RosterRowData {
     session: {
       id: 'ses-1',
       status: 'completed',
-      result: {
-        total: 3.4,
-        tier: 'spot',
-        weakest: ['traffic', 'value'],
-        pdf_status: 'failed',
-        pdf_last_error: LONG_ERROR,
-        share_card_error: null,
-      },
+      result: { total: 3.4, tier: 'spot', weakest: ['traffic', 'value'] },
+      files: makeFiles({ pdf_status: 'failed', pdf_path: null, pdf_attempts: 1, pdf_last_error: LONG_ERROR }),
     },
     ...over,
   };
@@ -86,14 +113,8 @@ const ready = () =>
     session: {
       id: 'ses-1',
       status: 'completed',
-      result: {
-        total: 3.4,
-        tier: 'spot',
-        weakest: ['traffic'],
-        pdf_status: 'ready',
-        pdf_last_error: null,
-        share_card_error: null,
-      },
+      result: { total: 3.4, tier: 'spot', weakest: ['traffic'] },
+      files: makeFiles(),
     },
   });
 
@@ -173,14 +194,13 @@ describe('the view-report button is enabled by having a result, not by pdf_statu
       session: {
         id: 's',
         status: 'completed',
-        result: {
-          total: 3.4,
-          tier: 'spot',
-          weakest: ['traffic'],
+        result: { total: 3.4, tier: 'spot', weakest: ['traffic'] },
+        files: makeFiles({
           pdf_status,
+          pdf_path: pdf_status === 'ready' ? 'ses-1-zh.pdf' : null,
+          pdf_attempts: pdf_status === 'ready' ? 0 : 1,
           pdf_last_error,
-          share_card_error: null,
-        },
+        }),
       },
     });
 
@@ -222,7 +242,10 @@ describe('the re-generate button keeps its place instead of appearing and disapp
      * ready 行右侧多出一块空档,整列看起来在抖。留空则按钮永远在同一个横坐标上。
      */
     const html = render(ready());
-    expect(html).toContain(zh('admin.action.renderPdf'));
+    // 【每种语言一个按钮】文案带语言名 —— 一个 session 现在有两份文件
+    expect(html).toContain(zh('admin.file.regen').replace('{lang}', 'zh'));
+    expect(html).toContain(zh('admin.file.regen').replace('{lang}', 'en'));
+    // zh 那份是 ready,所以它那颗占位隐形(en 那颗是实的)
     expect(actionsCell(html)).toContain('invisible');
   });
 
@@ -235,7 +258,8 @@ describe('the re-generate button keeps its place instead of appearing and disapp
 
   it('a failed row shows the same button, visible and live', () => {
     const html = render(makeRow());
-    expect(html).toContain(zh('admin.action.renderPdf'));
+    expect(html).toContain(zh('admin.file.regen').replace('{lang}', 'zh'));
+    // 两种语言都不是 ready(zh failed / en absent),所以一颗占位的都没有
     expect(actionsCell(html)).not.toContain('invisible');
   });
 
@@ -244,7 +268,8 @@ describe('the re-generate button keeps its place instead of appearing and disapp
     // 只数操作区那一格 —— PDF 列的「看错误」开关本来就只在有错误时才有
     const count = (html: string) => (actionsCell(html).match(/<button/g) ?? []).length;
     expect(count(render(ready()))).toBe(count(render(makeRow())));
-    expect(count(render(ready()))).toBe(5);
+    // 【6 而不是 5】重新生成按钮从一颗变成每种语言一颗 —— 这个数字要跟着语言数走
+    expect(count(render(ready()))).toBe(6);
   });
 
   it('a test-cohort row is labelled so, once it is shown at all', () => {
@@ -271,29 +296,52 @@ describe('the re-generate button keeps its place instead of appearing and disapp
         session: {
           id: 's',
           status: 'completed',
-          result: {
-            total: 3.4,
-            tier: 'spot',
-            weakest: ['traffic'],
-            pdf_status: 'ready',
-            pdf_last_error: null,
-            share_card_error: 'share card element #share-card-tall not found',
-          },
+          result: { total: 3.4, tier: 'spot', weakest: ['traffic'] },
+          files: makeFiles({ share_card_error: 'share card element #share-card-tall not found' }),
         },
       }),
       true,
     );
-    // PDF 那颗徽章仍然是 ready,且重新生成按钮仍然是占位的隐形态
-    expect(mainRow(html)).toContain('ready');
+    /**
+     * PDF 那一格仍然是「zh ✓」——【断言换成新的记号,不是旧的状态字面量】
+     * 上一版这里断言的是 HTML 里出现字符串 `ready`(那时格子里渲的是 pdf_status 本身)。
+     * 新的一格渲的是记号,所以旧断言只会假红/假绿 —— 它验的是一个不再存在的表示法。
+     */
+    expect(mainRow(html)).toContain(`zh ${zh('admin.file.ready')}`);
     expect(actionsCell(html)).toContain('invisible');
     // 而分享卡的错误确实可见,并且带着「不影响 PDF」这句话
     expect(html).toContain('share-card-tall');
     expect(html).toContain(zh('admin.card.errorLabel'));
   });
 
+  it('with a result but no files yet, the cell shows both languages as absent', () => {
+    /**
+     * 【为什么不是空白】空白会让人以为那一列坏了。
+     * 而「答完了却一份文件都没有」恰恰是要动手的那种 —— finalize 那次异步触发可能丢了,
+     * sweep 会捡回来,但看得见比看不见好。
+     */
+    const html = mainRow(
+      render(makeRow({ session: { id: 's', status: 'completed', result: { total: 3.4, tier: 'spot', weakest: ['traffic'] }, files: [] } })),
+    );
+    expect(html).toContain(`zh ${zh('admin.file.absent')}`);
+    expect(html).toContain(`en ${zh('admin.file.absent')}`);
+  });
+
+  it('a row with no result shows a plain dash, NOT two absent languages', () => {
+    /**
+     * 【这一条钉的是那个区分】没答完的人本来就不可能有 PDF ——
+     * 给他显示「zh — / en —」是噪音,而名单页是用来**扫**的:
+     * 每多一格没有行动含义的东西,真正要动手的那几行就更难被看见。
+     * 其余空列(总分 / 档位 / 最弱)也都是一个普通破折号,这一格跟它们一致。
+     */
+    const html = mainRow(render(makeRow({ session: { id: 's', status: 'in_progress', result: null } })));
+    expect(html).not.toContain(`zh ${zh('admin.file.absent')}`);
+    expect(html).toContain('—');
+  });
+
   it('a row with no result at all renders neither the badge nor the button', () => {
     // 反向锁:上面两条不是恒真 —— 没答完的人本来就没有 PDF 可言
     const html = render(makeRow({ session: { id: 's', status: 'in_progress', result: null } }));
-    expect(html).not.toContain(zh('admin.action.renderPdf'));
+    expect(html).not.toContain(zh('admin.pdf.rendering'));
   });
 });

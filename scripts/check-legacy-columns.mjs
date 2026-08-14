@@ -100,6 +100,56 @@ for (const abs of files) {
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/(^|[^:])\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
 
+  /**
+   * ── 规则二:**嵌套 select 里的表**(`alias:table(col, …)`)──
+   *
+   * 【为什么必须单独一条】规则一只看 `.from('<旧表>')` 之后那条查询的参数。
+   * 而 PostgREST 的嵌套写法长这样:
+   *
+   *     .from('assessment_entitlements').select(`… session:assessment_sessions(
+   *        result:assessment_results(total, tier, pdf_status, pdf_last_error) )`)
+   *
+   * 那也是**对旧表旧列的读**,但它不出现在任何 `.from('assessment_results')` 后面 ——
+   * 于是规则一整个漏掉了它。名单页就是这么在门绿着的情况下一直读旧列的,
+   * 而发现它的方式是**改那段代码时顺手看了一眼 select**,不是门报出来。
+   *
+   * 这正是[判断标准 12]那个形状:**覆盖范围是手写的守卫,会被代码悄悄长到边界外面** ——
+   * 我写规则一时脑子里只有「顶层 select」这一种形状。
+   */
+  for (const m of text.matchAll(/(\w+)\s*:\s*(\w+)\s*\(/g)) {
+    const moved = MOVED.find((x) => x.table === m[2]);
+    if (!moved) continue;
+    // 括号配平,取这个嵌套块自己的内容
+    let depth = 0;
+    let i = m.index + m[0].length - 1;
+    for (; i < text.length; i++) {
+      if (text[i] === '(') depth += 1;
+      else if (text[i] === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const inner = text.slice(m.index + m[0].length, i);
+    const hits = moved.columns.filter((c) => new RegExp(`\\b${c}\\b`).test(inner));
+    if (!hits.length) continue;
+    const lineNo = text.slice(0, m.index).split('\n').length;
+    let reason = null;
+    for (let k = Math.max(0, lineNo - 1 - MARKER_LOOKBACK); k < lineNo; k++) {
+      const at = lines[k].indexOf(EXEMPT_MARKER);
+      if (at !== -1) reason = lines[k].slice(at + EXEMPT_MARKER.length).trim();
+    }
+    if (reason === null) {
+      errors.push(
+        `${rel}:${lineNo} 在**嵌套 select** \`${m[1]}:${m[2]}(…)\` 里读了已经搬走的列:${hits.join(', ')}\n` +
+          `      新家:${moved.movedTo}`,
+      );
+    } else if (reason.length < MIN_REASON_LEN) {
+      errors.push(`${rel}:${lineNo} 的豁免理由太短(“${reason}”)—— 至少 ${MIN_REASON_LEN} 个字符。`);
+    } else {
+      accepted.push(`${rel}:${lineNo} 嵌套 (${hits.join(', ')}) — ${reason}`);
+    }
+  }
+
   for (const { table, columns, movedTo } of MOVED) {
     const needle = `.from('${table}')`;
     let idx = 0;

@@ -1,5 +1,6 @@
 import { useT } from '@/lib/i18n';
 import { parseWarnings, warningLabelKey } from '../../../api/_lib/entitlementWarnings';
+import { langStates } from '../../../api/_lib/reportFiles';
 import { Badge, Button, Td, Tr } from '@/components/brutalist';
 
 export interface RosterRowData {
@@ -20,14 +21,25 @@ export interface RosterRowData {
   session: {
     id: string;
     status: string;
+    /** 每种语言一行报告文件;一行都没有是正常的(还没答完 / 渲染还没落库) */
+    files?: {
+      lang: string;
+      pdf_status: string;
+      pdf_path: string | null;
+      pdf_attempts: number | null;
+      pdf_last_error: string | null;
+      share_card_error: string | null;
+    }[];
+    /**
+     * 【只剩三个字段】`pdf_status` / `pdf_last_error` / `share_card_error` 已经搬到
+     * `files`(按语言分行),而 roster 的查询**也不再 select 它们** ——
+     * 留在类型里的话它们恒为 `undefined`,而读它们的代码不会报错、只会静默拿到空值。
+     * 类型里的死字段 `check:legacy-columns` 扫不到(它看的是查询参数),所以只能靠删。
+     */
     result: {
       total: number;
       tier: string;
       weakest: string[];
-      pdf_status: string;
-      pdf_last_error: string | null;
-      /** 分享卡渲染失败的原因。【非空不代表 PDF 失败】—— 两者是分开的 */
-      share_card_error: string | null;
     } | null;
   } | null;
 }
@@ -50,7 +62,7 @@ export const ROSTER_COLUMNS = [
   'admin.col.tier',
   'admin.col.weakest',
   'admin.col.warnings',
-  'admin.col.pdf',
+  'admin.col.files',
   'admin.col.actions',
 ] as const;
 
@@ -66,7 +78,8 @@ export interface RosterRowProps {
   onResend: () => void;
   onRotate: () => void;
   onRevoke: () => void;
-  onRenderPdf: () => void;
+  /** 重新生成某一种语言 —— **必须带 lang**,后端没有默认值 */
+  onRenderPdf: (lang: 'zh' | 'en') => void;
   onOpenReport: () => void;
 }
 
@@ -89,14 +102,19 @@ export default function RosterRow({
 }: RosterRowProps) {
   const { tk } = useT();
   const result = r.session?.result ?? null;
-  const pdfError = result?.pdf_last_error ?? null;
-  const cardError = result?.share_card_error ?? null;
   /**
-   * 两种错误共用同一个展开行。分开做两个开关会让 PDF 列长出第二个按钮,
+   * 每种语言各自的状态。`langStates` **总是返回全部语言** ——
+   * 缺的那种是 `absent`,而那正是这一格里的「—」。
+   */
+  const files = r.session?.files ?? [];
+  const states = langStates(files);
+  const pdfErrors = files.filter((f) => f.pdf_last_error).map((f) => `${f.lang}: ${f.pdf_last_error}`);
+  const cardErrors = files.filter((f) => f.share_card_error).map((f) => `${f.lang}: ${f.share_card_error}`);
+  /**
+   * 两种错误共用同一个展开行。分开做两个开关会让这一列长出第二个按钮,
    * 而那一列的全部要求就是【定宽】—— 名单页那次的教训。
    */
-  const anyError = pdfError ?? cardError;
-  const pdfReady = result?.pdf_status === 'ready';
+  const anyError = pdfErrors.length > 0 || cardErrors.length > 0;
   /**
    * 【坏值不该让名单页打不开】`parseWarnings` 把认不出的项丢掉而不抛 ——
    * 这一列是 jsonb、历史行是 null、以后也可能被手工改过,
@@ -181,12 +199,25 @@ export default function RosterRow({
           这不是「有点丑」,是把最紧急的操作变得最难够到。失败是少数,
           不该让少数情况决定常态布局。
         */}
+        {/*
+          ── 报告文件那一格:`zh ✓ / en —` ──
+
+          【没有 result 时给单个「—」,而不是「zh — / en —」】
+          这两种情况**不是同一件事**:
+            · 没 result = 他还没答完 → **不该有** PDF。写成「zh — / en —」等于说
+              「两份都缺」,而运营会去找一个不存在的渲染问题;
+            · 有 result 而没有文件行 = **该有但还没有** → 那才是「zh — / en —」。
+          空白也不行(你说得对:空白会让人以为这一列坏了),所以三种情况三种写法。
+
+          【每种状态一个短记号,不是图标】名单页是用来扫的,而记号要能一眼分出
+          「好了 / 在生成 / 出错 / 没有」。图标做不到这件事 —— 它只说明「有东西」。
+        */}
         <Td>
           {result ? (
             <div className="flex items-center gap-2">
-              <Badge tone={pdfReady ? 'ink' : 'muted'}>{result.pdf_status}</Badge>
-              {/* 分享卡只在【失败】时才占一个位:成功是常态,常态不该占列宽 */}
-              {cardError && <Badge tone="muted">{tk('admin.col.card')}</Badge>}
+              <span className="whitespace-nowrap font-mono text-xs">
+                {states.map((st) => `${st.lang} ${tk(`admin.file.${st.availability}` as never)}`).join(' / ')}
+              </span>
               {anyError && (
                 <Button
                   size="sm"
@@ -262,18 +293,32 @@ export default function RosterRow({
               finalize 那次触发可能丢,卡住的 pending 否则没有出路
               (见 assessment-admin 的 render_pdf)。
             */}
-            {result && (
-              <Button
-                size="sm"
-                variant="outline"
-                className={pdfReady ? 'invisible' : undefined}
-                aria-hidden={pdfReady || undefined}
-                disabled={busy || pdfReady}
-                onClick={onRenderPdf}
-              >
-                {busy ? tk('admin.pdf.rendering') : tk('admin.action.renderPdf')}
-              </Button>
-            )}
+            {/*
+              【每种语言一个按钮,而且必须显式】一个 session 现在有两份报告文件,
+              所以「重新生成」必须说清重渲哪一份 —— 后端那个 action 的 `lang` 是必填、
+              没有默认值(给了默认值的话,他点下去会重渲中文那份而他看着的是英文那一行,
+              一次 Chromium 冷启动之后想修的那份还是坏的)。
+
+              【ready 的那种语言不给按钮,但占位】与上一版同一个理由:
+              按钮宽度会随文案变,而 `invisible` 让 x 位置固定 ——
+              失败那一行恰恰是最需要立刻操作的一行,不能让它的按钮位置跟别的行不一样。
+            */}
+            {result &&
+              states.map((st) => (
+                <Button
+                  key={st.lang}
+                  size="sm"
+                  variant="outline"
+                  className={st.availability === 'ready' ? 'invisible' : undefined}
+                  aria-hidden={st.availability === 'ready' || undefined}
+                  disabled={busy || st.availability === 'ready'}
+                  onClick={() => onRenderPdf(st.lang as 'zh' | 'en')}
+                >
+                  {busy
+                    ? tk('admin.pdf.rendering')
+                    : tk('admin.file.regen').replace('{lang}', st.lang)}
+                </Button>
+              ))}
           </div>
         </Td>
       </Tr>
@@ -308,23 +353,24 @@ export default function RosterRow({
               id={`pdf-error-${r.id}`}
               className="max-w-3xl whitespace-pre-wrap break-words font-mono text-xs"
             >
-              {pdfError && (
+              {pdfErrors.length > 0 && (
                 <>
                   <span className="font-head font-bold uppercase tracking-wider">
                     {tk('admin.pdf.errorLabel')}
                   </span>
                   <br />
-                  {pdfError}
+                  {/* 按语言逐条列 —— 「哪一份坏了」是排查的第一个问题 */}
+                  {pdfErrors.join('\n')}
                 </>
               )}
-              {pdfError && cardError && <br />}
-              {cardError && (
+              {pdfErrors.length > 0 && cardErrors.length > 0 && <br />}
+              {cardErrors.length > 0 && (
                 <>
                   <span className="font-head font-bold uppercase tracking-wider">
                     {tk('admin.card.errorLabel')}
                   </span>
                   <br />
-                  {cardError}
+                  {cardErrors.join('\n')}
                 </>
               )}
             </div>
