@@ -26,16 +26,42 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 /**
- * 纯判定 —— **导出是为了能直接喂 JSON 测那条红路径**。
+ * 【CLI 有两种输出格式,而决定因素是 stdout 是不是 TTY】
  *
- * `supabase migration list` 每条形如
- * `{ local, remote, time }`;未应用的那条 `remote` 是空的(反过来
+ *   - stdout 被重定向(我们这种 `execFileSync`)→ **一行 JSON**
+ *   - 在终端里手敲 → **表格**
+ *   - 而 `--output json` 反直觉地**强制表格**(实测两次)
+ *
+ * 上一版只解析 JSON,并且在注释里把差异归给了那个 flag ——
+ * **观测本身没错(管道下确实是 JSON),错在把它当成了全部**:
+ * 真正的变量是 TTY,而人在终端里看到的与脚本拿到的不是同一个东西。
+ *
+ * 所以现在**两种都解析**:这样它不依赖「哪一种才是真的」这个我不该赌的前提。
+ */
+export function parseTable(text) {
+  const rows = [];
+  for (const line of text.split('\n')) {
+    if (!line.includes('|')) continue;
+    const cells = line.split('|').map((c) => c.replace(/`/g, '').trim());
+    if (cells.length < 2) continue;
+    // 表头与分隔线跳过
+    if (/^local$/i.test(cells[0]) || /^-+$/.test(cells[0])) continue;
+    if (!/^\d{6,}$/.test(cells[0]) && !/^\d{6,}$/.test(cells[1])) continue;
+    rows.push({ local: cells[0], remote: cells[1], time: cells[2] ?? '' });
+  }
+  return rows.length ? { migrations: rows } : null;
+}
+
+/**
+ * 纯判定 —— **导出是为了能直接喂一份输出测那条红路径**。
+ *
+ * 每条形如 `{ local, remote }`;未应用的那条 `remote` 是空的(反过来
  * `local` 空、`remote` 有值 = 远端有一条本地没有的迁移,那同样值得拦:
  * 那说明有人直接在库上改过,或者本地少了一个文件)。
  */
 export function classifyMigrations(json) {
   const rows = Array.isArray(json?.migrations) ? json.migrations : null;
-  if (!rows) return { ok: false, reason: 'CLI 输出里没有 migrations 数组 —— 格式变了,不当作通过' };
+  if (!rows) return { ok: false, reason: '解析不了 CLI 的输出格式(JSON 与表格都没认出来)—— 不当作通过' };
   const notApplied = rows.filter((r) => r.local && !r.remote).map((r) => r.local);
   const onlyRemote = rows.filter((r) => !r.local && r.remote).map((r) => r.remote);
   return { ok: notApplied.length === 0 && onlyRemote.length === 0, notApplied, onlyRemote, total: rows.length };
@@ -51,10 +77,23 @@ function fail(lines) {
 }
 
 let json;
-const stdinFlag = process.argv.indexOf('--from-json');
-if (stdinFlag !== -1) {
-  // 只为测那条红路径:直接喂一份 CLI 形状的 JSON
-  json = JSON.parse(readFileSync(process.argv[stdinFlag + 1], 'utf8'));
+/**
+ * 【两条路径共用同一段解析与同一段诊断】
+ * 上一版把「解析不了就回显实际内容」只写在 CLI 那条分支里,于是用 `--from-file`
+ * 跑的变异走的是另一段代码 —— **验的不是真正会跑的那一段**
+ * (判断标准 1 推论五:变异要真的改到那条路径)。
+ */
+function parseCliOutput(text) {
+  const jsonLine = text.trim().split('\n').filter((l) => l.trim().startsWith('{')).pop();
+  return jsonLine ? JSON.parse(jsonLine) : parseTable(text);
+}
+
+let rawText;
+const fromFile = process.argv.indexOf('--from-file');
+if (fromFile !== -1) {
+  // 只为测那些路径:直接喂一份 CLI 形状的输出(JSON 或表格都行)
+  rawText = readFileSync(process.argv[fromFile + 1], 'utf8');
+  json = parseCliOutput(rawText);
 } else {
   try {
     /**
@@ -67,16 +106,26 @@ if (stdinFlag !== -1) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    // CLI 会在 JSON 前打几行进度("Connecting to remote database..."),取最后一行 JSON
-    const line = out.trim().split('\n').filter((l) => l.trim().startsWith('{')).pop();
-    if (!line) fail(['`supabase migration list` 没有输出 JSON —— 拿不到答案就不放行(fail closed)']);
-    json = JSON.parse(line);
+    rawText = out;
+    json = parseCliOutput(out);
   } catch (err) {
     fail([
       `跑不了 \`supabase migration list\`:${err instanceof Error ? err.message.split('\n')[0] : String(err)}`,
       '拿不到答案时**一律拒绝部署** —— 一道在环境不对时自动让路的检查等于没有检查。',
     ]);
   }
+}
+
+/**
+ * 【把实际拿到的东西回显出来】上一版只说「没有输出 JSON」——
+ * 那把一个格式假设说成了事实,而看到那句话的人无法判断到底收到了什么。
+ * 一条失败路径除了失败,还要说清**去哪找**(判断标准 9)。
+ */
+if (!json) {
+  fail([
+    '解析不了 `supabase migration list` 的输出(JSON 与表格都没认出来)—— 拿不到答案就不放行。',
+    `实际收到的前 200 字符:${JSON.stringify((rawText ?? '').slice(0, 200))}`,
+  ]);
 }
 
 const verdict = classifyMigrations(json);
