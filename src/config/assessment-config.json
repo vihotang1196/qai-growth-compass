@@ -843,35 +843,40 @@
         "formula": "L * 0.30 * baseline_close_rate * V",
         "zh_label": "每月因为接不住而流失的成交额",
         "en_label": "Monthly revenue lost to un-caught enquiries",
-        "zh_note": "假设 30% 询盘因响应慢或无记录而流失（保守值，行业实测常在 30–50%）"
+        "zh_note": "假设 30% 询盘因响应慢或无记录而流失（保守值，行业实测常在 30–50%）",
+        "zh_note_i18n": "internal —— 口径假设的说明,只给我们自己看,不渲染给客户"
       },
       {
         "dimension": "convert",
         "formula": "L * 0.08 * V",
         "zh_label": "每月因成交流程不稳定而少签的金额",
         "en_label": "Monthly revenue lost to an unstable close process",
-        "zh_note": "假设标准化成交路径可带来 8 个百分点的成交率提升"
+        "zh_note": "假设标准化成交路径可带来 8 个百分点的成交率提升",
+        "zh_note_i18n": "internal —— 口径假设的说明,只给我们自己看,不渲染给客户"
       },
       {
         "dimension": "traffic",
         "formula": "L * 0.50 * baseline_close_rate * V",
         "zh_label": "每月未被开发的流量机会",
         "en_label": "Untapped monthly traffic opportunity",
-        "zh_note": "假设内容与渠道补齐后询盘量提升 50%"
+        "zh_note": "假设内容与渠道补齐后询盘量提升 50%",
+        "zh_note_i18n": "internal —— 口径假设的说明,只给我们自己看,不渲染给客户"
       },
       {
         "dimension": "value",
         "formula": "L * baseline_close_rate * V * 0.25",
         "zh_label": "每月未被回收的老客价值",
         "en_label": "Monthly existing-customer value left on the table",
-        "zh_note": "假设复购与转介绍机制可贡献额外 25% 营收"
+        "zh_note": "假设复购与转介绍机制可贡献额外 25% 营收",
+        "zh_note_i18n": "internal —— 口径假设的说明,只给我们自己看,不渲染给客户"
       },
       {
         "dimension": "goal",
         "formula": "L * 0.20 * baseline_close_rate * V",
         "zh_label": "每月耗在错误客户身上的产能",
         "en_label": "Monthly capacity spent on the wrong customers",
-        "zh_note": "假设 20% 询盘属于不该接的客户类型"
+        "zh_note": "假设 20% 询盘属于不该接的客户类型",
+        "zh_note_i18n": "internal —— 口径假设的说明,只给我们自己看,不渲染给客户"
       }
     ]
   },
@@ -879,23 +884,28 @@
     "note": "按最弱维度动态切换报告尾部的 Offer。两个产品：AI 短视频生成系统、Funnel & CRM 转化系统。",
     "goal": {
       "product": "ai_video",
-      "zh_cta": "方向要靠试出来，不是想出来 → 用 AI 短视频快速测市场反应，哪类客户会来自己会说话"
+      "zh_cta": "方向要靠试出来，不是想出来 → 用 AI 短视频快速测市场反应，哪类客户会来自己会说话",
+      "en_cta": "Direction comes from testing, not thinking — use AI short-video to probe the market and let the responses tell you who your customer is"
     },
     "traffic": {
       "product": "ai_video",
-      "zh_cta": "内容产能就是你的瓶颈 → AI 短视频生成系统，一天出十条而不是一周出三条"
+      "zh_cta": "内容产能就是你的瓶颈 → AI 短视频生成系统，一天出十条而不是一周出三条",
+      "en_cta": "Content output is your bottleneck — the AI Short-Video System gets you ten a day instead of three a week"
     },
     "capture": {
       "product": "funnel_crm",
-      "zh_cta": "你每天都在漏询盘 → Funnel & CRM 转化系统，入口 + 自动接待 + 客户入库"
+      "zh_cta": "你每天都在漏询盘 → Funnel & CRM 转化系统，入口 + 自动接待 + 客户入库",
+      "en_cta": "You're leaking enquiries every day — Funnel & CRM gives you the entry point, the auto-reply, and a place to keep them"
     },
     "convert": {
       "product": "funnel_crm",
-      "zh_cta": "流量不缺，缺的是把流量变成钱的路径 → Funnel & CRM 把成交路径固化下来"
+      "zh_cta": "流量不缺，缺的是把流量变成钱的路径 → Funnel & CRM 把成交路径固化下来",
+      "en_cta": "Traffic isn't the problem — turning it into revenue is. Funnel & CRM makes the path to close repeatable"
     },
     "value": {
       "product": "funnel_crm",
-      "zh_cta": "新客最贵，老客最便宜 → Funnel & CRM 的自动培育与复购机制"
+      "zh_cta": "新客最贵，老客最便宜 → Funnel & CRM 的自动培育与复购机制",
+      "en_cta": "New customers cost the most, existing ones the least — Funnel & CRM automates nurture and repeat"
     },
     "products": {
       "ai_video": {
@@ -1209,39 +1219,48 @@
   "report_sections": [
     {
       "key": "score_radar",
-      "zh": "总分 + 五维雷达图（五边形，叠加同期学员基准线）"
+      "zh": "总分 + 五维雷达图（五边形，叠加同期学员基准线）",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "dimension_evidence",
-      "zh": "每一维为什么是这个分:15 项子模块逐项列出「你选的是什么 / 目标是什么」,带 ■ / ◧ / □ 徽章;缺失项红框,属最弱 2 维的额外标「优先」。**同时承担徽章明细与作答依据两个职责** —— 原独立的 submodule_table 板块已并入此处,不是漏了一个板块。"
+      "zh": "每一维为什么是这个分:15 项子模块逐项列出「你选的是什么 / 目标是什么」,带 ■ / ◧ / □ 徽章;缺失项红框,属最弱 2 维的额外标「优先」。**同时承担徽章明细与作答依据两个职责** —— 原独立的 submodule_table 板块已并入此处,不是漏了一个板块。",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "tier",
-      "zh": "分档解读：你处在哪个阶段，这个阶段的典型死法"
+      "zh": "分档解读：你处在哪个阶段，这个阶段的典型死法",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "cohort_rank",
-      "zh": "你在本期学员中的位置（分位区间 + 各维度与均值的差值）"
+      "zh": "你在本期学员中的位置（分位区间 + 各维度与均值的差值）",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "strengths",
-      "zh": "强项 Top 2（先给肯定，降低防御）"
+      "zh": "强项 Top 2（先给肯定，降低防御）",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "weaknesses",
-      "zh": "短板 Top 2 主诊断：现状 / 代价（换算成钱）/ 根因"
+      "zh": "短板 Top 2 主诊断：现状 / 代价（换算成钱）/ 根因",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "action_plan",
-      "zh": "30 天行动清单：3 条动作，按 ROI 排序，标注难度与预计影响"
+      "zh": "30 天行动清单：3 条动作，按 ROI 排序，标注难度与预计影响",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "next_step",
-      "zh": "你的下一步（按最弱维度动态切换 Offer）"
+      "zh": "你的下一步（按最弱维度动态切换 Offer）",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     },
     {
       "key": "pdf_share",
-      "zh": "PDF 下载 + 带分数的社交分享卡片"
+      "zh": "PDF 下载 + 带分数的社交分享卡片",
+      "zh_i18n": "internal —— 这一节「包含什么」的说明,不是渲染出来的文案"
     }
   ],
   "cohorts": {

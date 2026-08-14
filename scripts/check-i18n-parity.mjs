@@ -28,7 +28,20 @@ const CONFIG = 'src/config/assessment-config.json';
 const config = JSON.parse(readFileSync(join(ROOT, CONFIG), 'utf8'));
 
 const problems = [];
+const exempted = [];
 let pairsChecked = 0;
+
+/**
+ * 【豁免写在 config 里,不写在这道门的白名单里】
+ *
+ * `"zh_note": "…"` 旁边放 `"zh_note_i18n": "internal —— 为什么不需要 en"`。
+ * 理由**在数据旁边**:白名单在门里,改那一行的人看不到;兄弟键在 config 里,
+ * 谁改那一行谁就看见(与 `check:ghl-transport` 的豁免同一条约定)。
+ *
+ * 门把接受的理由**打印出来** —— 一个每次构建都念一遍的豁免,至少还在视野里。
+ */
+const EXEMPT_SUFFIX = '_i18n';
+const MIN_REASON_LEN = 8;
 
 /**
  * `zh` → `en`;`zh_cta` → `en_cta`(前缀之后的部分逐字保留)。
@@ -59,10 +72,21 @@ function walk(node, path) {
   if (!node || typeof node !== 'object') return;
 
   for (const key of Object.keys(node)) {
-    if (isLangKey(key)) {
+    if (isLangKey(key) && !key.endsWith(EXEMPT_SUFFIX)) {
       const other = counterpart(key);
-      if (!(other in node)) {
-        problems.push(`${path}: 有 \`${key}\` 但**没有** \`${other}\``);
+      const exemptKey = `${key}${EXEMPT_SUFFIX}`;
+      const reason = typeof node[exemptKey] === 'string' ? node[exemptKey].trim() : null;
+      if (reason !== null) {
+        if (reason.length < MIN_REASON_LEN) {
+          problems.push(`${path}.${exemptKey} 的理由太短(“${reason}”)—— 至少 ${MIN_REASON_LEN} 个字符`);
+        } else {
+          exempted.push(`${path}.${key} — ${reason}`);
+        }
+      } else if (!(other in node)) {
+        problems.push(
+          `${path}: 有 \`${key}\` 但**没有** \`${other}\`` +
+            `(内部说明不需要 en 的话,放一个 \`${exemptKey}\` 兄弟键写明理由)`,
+        );
       } else {
         pairsChecked += 1;
       }
@@ -83,5 +107,10 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(
-  `[check-i18n-parity] OK —— ${CONFIG} 里 ${pairsChecked / 2} 对 zh/en 字段齐全(按「应该有哪些」列举,不是按已有的搜)。`,
+  `[check-i18n-parity] OK —— ${CONFIG} 里 ${pairsChecked / 2} 对 zh/en 字段齐全` +
+    `(按「应该有哪些」列举,不是按已有的搜)` +
+    (exempted.length
+      ? `;${exempted.length} 处带理由的豁免:\n${[...new Set(exempted)].map((e) => `             ${e}`).join('\n')}`
+      : '(无豁免)') +
+    '。',
 );

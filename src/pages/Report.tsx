@@ -521,7 +521,9 @@ function NextStep({
   needLabel: string;
   tk: ReturnType<typeof useT>['tk'];
 }) {
-  const route = (config.offer_routing as unknown as Record<string, { product: string; zh_cta: string }>)[weakest];
+  const route = (
+    config.offer_routing as unknown as Record<string, { product: string; zh_cta: string; en_cta: string }>
+  )[weakest];
   const product = route ? config.offer_routing.products[route.product as keyof typeof config.offer_routing.products] : null;
   return (
     <Section title={tk('report.section.nextStep')}>
@@ -534,7 +536,14 @@ function NextStep({
         <Card tone="ink" padding="md">
           <CardBody className="space-y-2">
             <p className="font-head text-lg font-bold">{L(product.zh, product.en)}</p>
-            <p className="font-body leading-relaxed">{route.zh_cta}</p>
+            {/*
+              【走 L(zh, en),与 tiers 的 zh_desc/en_desc 同一套】
+              上一版直接渲 `route.zh_cta` —— 那不是「漏翻」,是**结构上没有 en 的位置**:
+              config 里当时只有 `zh_cta`。所以英文 PDF 第 5 页会出现
+              英文产品名 + 中文 CTA 并排。
+              `grep en` 找不到这一类缺口(那个键根本不存在),只有真渲一次英文版才看得见。
+            */}
+            <p className="font-body leading-relaxed">{L(route.zh_cta, route.en_cta)}</p>
           </CardBody>
         </Card>
       )}
