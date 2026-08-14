@@ -2,11 +2,11 @@
 /**
  * 守「已经**删掉**的列不再被读」。
  *
- * 【这道门的语义在 20260813000000 之后变了 —— 而它更强了】
- * 之前旧列还在库里,读它只是「读了第二个真相源」;
- * 现在那些列**已经不存在**,读它 = PostgREST 直接报 42703 → 端点 500。
- * 所以这道门从「防分叉」变成了「防运行时炸」——
- * 判据一个字都没改,而它拦住的后果严重了一档。
+ * 【当下的后果由**迁移**推出来,不是手写在这里的】
+ * 这道门诞生时守「读了第二个真相源」;`20260813000000` 删掉那些列之后,
+ * 读它 = PostgREST 42703 → 端点 500。**判据一个字没改,后果严重了一档。**
+ * 所以报错信息里那句「后果」是 `consequence()` 按 `drop column` 算出来的 ——
+ * 一份要人维护的注释,迟早与现实脱节。
  *
  * ⚠️ 也因此**不要**因为「列已经删了」就把这道门撤掉:
  * 那些列名在新表 `assessment_report_files` 里**依然存在**(同名),
@@ -41,6 +41,51 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * 【这一列还在不在,从**迁移文件**推,不从数据库查】
+ *
+ * 一道门的价值会随代码变化而变化,而它自己不知道 ——
+ * 这道门诞生时守的是「读了第二个真相源」(旧列还在,读它拿到的可能是过期数据);
+ * `20260813000000` 把那些列删掉之后,读它 = PostgREST **42703 → 端点 500**。
+ * 判据一个字没改,后果严重了一档。
+ *
+ * 上一版把这件事写成了**手写的注释** —— 而手写的东西要人维护,
+ * 正是这个项目一路在拆的那一类。
+ *
+ * 【为什么不连库去查】
+ *   ① 构建时没有库,这是 `check:rpc-contract`(仓库内部一致性)与部署 preflight
+ *      (连得上库)分工的前提。给构建门加库依赖,要么 Vercel 构建拿不到凭证而红,
+ *      要么连不上时 fail-open —— 后者正是 `--sloppy-imports` 的形状:
+ *      一道在某些环境里不响的检查等于没有检查。
+ *   ② **推出来的答案不改变这道门的动作** —— 两种情况都是拒绝,只有措辞不同。
+ *      为一个字符串付一个库依赖,交换不划算。
+ *
+ * 而「这一列删没删」这件事**本来就在仓库里**:`drop column` 写在迁移文件中,
+ * 而迁移是这个仓库里 schema 的真相源。所以推得出来,而且不用付上面两项代价。
+ */
+function droppedColumns() {
+  const dir = join(ROOT, 'supabase', 'migrations');
+  const dropped = new Set();
+  let files = [];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  } catch {
+    return dropped; // 迁移目录都没有的话,按「列还在」处理(措辞轻,但动作不变)
+  }
+  for (const f of files) {
+    const sql = readFileSync(join(dir, f), 'utf8');
+    for (const m of sql.matchAll(/alter\s+table\s+(?:public\.)?(\w+)([\s\S]*?);/gi)) {
+      const table = m[1];
+      for (const c of m[2].matchAll(/drop\s+column\s+(?:if\s+exists\s+)?(\w+)/gi)) {
+        dropped.add(`${table}.${c[1]}`);
+      }
+    }
+  }
+  return dropped;
+}
+
+const DROPPED = droppedColumns();
 
 /** 旧表 → 已经搬走的列 */
 const MOVED = [
@@ -87,6 +132,24 @@ for (const d of SCAN_DIRS) {
     }
   };
   walk(abs);
+}
+
+/**
+ * 这一次违规的**当下后果** —— 由迁移推出来,不是手写的。
+ * 【为什么要说后果而不只是「别读」】下一个人看到的如果只有「这一列搬走了」,
+ * 他可能觉得「那就先凑合读一下」;而「读它现在直接 500」是另一回事。
+ */
+function consequence(table, hits) {
+  const gone = hits.filter((c) => DROPPED.has(`${table}.${c}`));
+  if (gone.length === hits.length) {
+    return `⚠️ 这些列**已经从库里删掉了**(见迁移里的 drop column)——` +
+      `读它 = PostgREST 42703 → 端点 500,不是「读到过期数据」那么轻。`;
+  }
+  if (gone.length > 0) {
+    return `⚠️ 其中 ${gone.join(', ')} **已经从库里删掉了** —— 读它会 42703 → 500;` +
+      `其余的还在,读它是「第二真相源」。`;
+  }
+  return `旧列还在库里(删列不可逆,分两步走),但**读它的人**才是第二真相源。`;
 }
 
 const errors = [];
@@ -152,7 +215,8 @@ for (const abs of files) {
     if (reason === null) {
       errors.push(
         `${rel}:${lineNo} 在**嵌套 select** \`${m[1]}:${m[2]}(…)\` 里读了已经搬走的列:${hits.join(', ')}\n` +
-          `      新家:${moved.movedTo}`,
+          `      新家:${moved.movedTo}\n` +
+          `      ${consequence(m[2], hits)}`,
       );
     } else if (reason.length < MIN_REASON_LEN) {
       errors.push(`${rel}:${lineNo} 的豁免理由太短(“${reason}”)—— 至少 ${MIN_REASON_LEN} 个字符。`);
@@ -206,7 +270,7 @@ for (const abs of files) {
           errors.push(
             `${rel}:${lineNo} 从 ${table} 读了已经搬走的列:${hits.join(', ')}\n` +
               `      新家:${movedTo}\n` +
-              `      旧列还在库里(删列不可逆,分两步走),但**读它的人**才是第二真相源。\n` +
+              `      ${consequence(table, hits)}\n` +
               `      确实需要例外的话,在上方写一行理由:// ${EXEMPT_MARKER} <为什么这一处必须读旧列>`,
           );
         } else if (reason.length < MIN_REASON_LEN) {
