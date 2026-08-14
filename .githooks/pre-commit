@@ -1,0 +1,6 @@
+#!/bin/sh
+# 拒绝在 main 上直接提交(合并提交除外)。判定在 scripts/assert-not-main.mjs ——
+# 抽出去是为了能直接测两个方向;钩子自己没法「假装在 main 上」。
+#
+# 启用(一次性):git config core.hooksPath .githooks
+exec node "$(git rev-parse --show-toplevel)/scripts/assert-not-main.mjs"
