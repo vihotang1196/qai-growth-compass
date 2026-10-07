@@ -65,3 +65,30 @@ export function afterReadyWrite(
     },
   };
 }
+
+/**
+ * 写 ready 时的那一行。
+ *
+ * 【成功就把 pdf_attempts 清零】2026-10-07 起。原来只增不减:每次渲染(包括成功的)在认领时 +1,
+ * 于是同一份 PDF 被正常重渲三次之后,第四次会在 render-pdf 门口被永久拒绝(failed_permanent),
+ * 库里留着的是上一次的 PDF。清零之后,这一列的意思是「上次成功之后连续失败了几次」——
+ * 正好是 3 次上限要数的东西。roster / CSV / 报告页都不显示这个数,所以没有可见的变化。
+ */
+export function readyPatch(input: {
+  path: string;
+  glyphMessage: string | null;
+  cardPaths: Record<string, string | null>;
+  cardError: string | null;
+  nowIso: string;
+}): Record<string, unknown> {
+  return {
+    pdf_path: input.path,
+    pdf_status: 'ready',
+    pdf_status_at: input.nowIso,
+    pdf_last_error: input.glyphMessage,
+    ...input.cardPaths,
+    // 成功时显式清空,免得上一次的错误一直挂着骗人
+    share_card_error: input.cardError,
+    pdf_attempts: 0,
+  };
+}

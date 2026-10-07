@@ -24,7 +24,7 @@ import { pdfObjectPath, shareCardObjectPath } from './_lib/reportFiles.js';
 import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
 import { pickSecretKeyFromPlainEnv } from './_lib/apiKeys.js';
 import { dbLogLine } from './_lib/dbError.js';
-import { afterReadyWrite, writeWithRetry } from './_lib/statusWrite.js';
+import { afterReadyWrite, readyPatch, writeWithRetry } from './_lib/statusWrite.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -670,15 +670,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const readyWrite = await writeWithRetry(() =>
       supa
         .from('assessment_report_files')
-        .update({
-          pdf_path: path,
-          pdf_status: 'ready',
-          pdf_status_at: new Date().toISOString(),
-          pdf_last_error: glyph.message,
-          ...cardPaths,
-          // 成功时显式清空,免得上一次的错误一直挂着骗人
-          share_card_error: cardError,
-        })
+        // 那一行的内容(含「成功就把次数清零」)在 api/_lib/statusWrite.ts 的 readyPatch
+        .update(readyPatch({ path, glyphMessage: glyph.message, cardPaths, cardError, nowIso: new Date().toISOString() }))
         .eq('session_id', sessionId)
         .eq('lang', lang),
     );

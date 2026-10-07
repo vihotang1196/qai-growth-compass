@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { afterReadyWrite, writeWithRetry } from '../../api/_lib/statusWrite';
+import { afterReadyWrite, readyPatch, writeWithRetry } from '../../api/_lib/statusWrite';
 
 /**
  * render-pdf 写 ready 那一步。
@@ -78,5 +78,31 @@ describe('afterReadyWrite (what the caller is told)', () => {
 
   it('a successful ready write passes the success payload through as 200', () => {
     expect(afterReadyWrite({ ok: true, attempts: 1, error: null }, success)).toEqual({ status: 200, body: success });
+  });
+});
+
+describe('readyPatch (the row written when a PDF is ready)', () => {
+  const base = {
+    path: 's/zh.pdf',
+    glyphMessage: null,
+    cardPaths: { share_card_path: 's/zh-card.png', share_card_tall_path: 's/zh-card-tall.png' },
+    cardError: null,
+    nowIso: '2026-10-07T11:40:00.000Z',
+  };
+
+  // 渲染成功就把次数清零:pdf_attempts 的意思是「上次成功之后连续失败了几次」——
+  // 只增不减的话,同一份 PDF 被正常地重渲三次之后,第四次会被永久拒绝(failed_permanent)
+  it('resets pdf_attempts to 0 on success', () => {
+    expect(readyPatch(base).pdf_attempts).toBe(0);
+  });
+
+  it('keeps the rest of the ready row as before', () => {
+    const p = readyPatch(base);
+    expect(p.pdf_status).toBe('ready');
+    expect(p.pdf_path).toBe('s/zh.pdf');
+    expect(p.pdf_status_at).toBe(base.nowIso);
+    expect(p.share_card_path).toBe('s/zh-card.png');
+    expect(p.share_card_error).toBeNull();
+    expect(p.pdf_last_error).toBeNull();
   });
 });
