@@ -23,6 +23,8 @@ import { parseLang, type Lang } from './_lib/lang.js';
 import { pdfObjectPath, shareCardObjectPath } from './_lib/reportFiles.js';
 import { SHARE_CARD_SIZES, SHARE_CARD_VIEWPORT } from './_lib/shareCard.js';
 import { pickSecretKeyFromPlainEnv } from './_lib/apiKeys.js';
+import { dbLogLine } from './_lib/dbError.js';
+import { afterReadyWrite, writeWithRetry } from './_lib/statusWrite.js';
 
 /**
  * PDF 异步渲染(Stage 9)。内部接口,X-Internal-Secret 鉴权。
@@ -567,12 +569,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // probe 不动数据库 —— 它只回答「这条管线现在健康吗」
   if (!probe) {
-    const { data: row } = await supa
+    const { data: row, error: preReadErr } = await supa
       .from('assessment_report_files')
       .select('pdf_attempts, pdf_status')
       .eq('session_id', sessionId)
       .eq('lang', lang)
       .maybeSingle();
+    // 读不到就按 0 次算、照常渲 —— 流程不变,只是不再无声
+    if (preReadErr) {
+      console.error(dbLogLine({ fn: 'render-pdf', op: 'assessment_report_files.select attempts (pre-claim)', session: sessionId, lang }, preReadErr));
+    }
     const attempts = (row?.pdf_attempts as number) ?? 0;
     if (attempts >= MAX_PDF_ATTEMPTS) {
       // 已经用完次数 —— 不再自动重试,等 Admin 手动重置。次数是【每种语言各自】的
@@ -584,7 +590,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      * 于是状态永远停在「什么都没有」,而渲染照常跑完、照常写 ready,
      * 中间那段「正在生成」对前端不可见。
      */
-    await supa.from('assessment_report_files').upsert(
+    const { error: claimErr } = await supa.from('assessment_report_files').upsert(
       {
         session_id: sessionId,
         lang,
@@ -594,6 +600,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
       { onConflict: 'session_id,lang' },
     );
+    // 写 rendering 失败:记日志,照常渲(Viho 2026-10-07 定)—— 渲完写 ready 时那一行会被补上
+    if (claimErr) {
+      console.error(dbLogLine({ fn: 'render-pdf', op: 'assessment_report_files.upsert rendering', session: sessionId, lang }, claimErr));
+    }
   }
 
   try {
@@ -653,43 +663,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      * 【字形有问题仍然出 PDF】有方块的报告好过没有报告。严重程度只写进 pdf_last_error
      * 让 Admin 看得见 —— 那样问题会被我们主动发现,而不是等学员投诉。
      */
-    await supa
-      .from('assessment_report_files')
-      .update({
-        pdf_path: path,
-        pdf_status: 'ready',
-        pdf_status_at: new Date().toISOString(),
-        pdf_last_error: glyph.message,
-        ...cardPaths,
-        // 成功时显式清空,免得上一次的错误一直挂着骗人
-        share_card_error: cardError,
-      })
-      .eq('session_id', sessionId)
-      .eq('lang', lang);
+    /**
+     * 【写 ready:重试最多 3 次;仍失败就回失败,不再报成功】见 api/_lib/statusWrite.ts。
+     * 原来这一步的结果根本没看 —— 写不进去照样回 200 ok,调用方告诉人「好了」而库里还是 rendering。
+     */
+    const readyWrite = await writeWithRetry(() =>
+      supa
+        .from('assessment_report_files')
+        .update({
+          pdf_path: path,
+          pdf_status: 'ready',
+          pdf_status_at: new Date().toISOString(),
+          pdf_last_error: glyph.message,
+          ...cardPaths,
+          // 成功时显式清空,免得上一次的错误一直挂着骗人
+          share_card_error: cardError,
+        })
+        .eq('session_id', sessionId)
+        .eq('lang', lang),
+    );
+    if (!readyWrite.ok) {
+      console.error(
+        dbLogLine(
+          { fn: 'render-pdf', op: `assessment_report_files.update ready (gave up after ${readyWrite.attempts} attempts)`, session: sessionId, lang },
+          readyWrite.error,
+        ),
+      );
+    }
 
     if (needsAttention(glyph.severity)) {
       console.error(`PDF rendered for ${sessionId} but ${glyph.message}`);
     }
     if (cardError) console.error(`PDF ready for ${sessionId} but the share card did not make it: ${cardError}`);
-    return res.status(200).json({
+    const reply = afterReadyWrite(readyWrite, {
       ok: true,
       path,
       bytes: pdf.length,
       glyph: glyph.severity,
       cards: { ...cardPaths, error: cardError },
     });
+    return res.status(reply.status).json(reply.body);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error(`render-pdf failed for ${sessionId}: ${detail}`);
     if (!probe) {
-      const { data: row } = await supa
+      const { data: row, error: failReadErr } = await supa
         .from('assessment_report_files')
         .select('pdf_attempts')
         .eq('session_id', sessionId)
         .eq('lang', lang)
         .maybeSingle();
+      if (failReadErr) {
+        console.error(dbLogLine({ fn: 'render-pdf', op: 'assessment_report_files.select attempts (on failure)', session: sessionId, lang }, failReadErr));
+      }
       const attempts = (row?.pdf_attempts as number) ?? 1;
-      await supa
+      const { error: failWriteErr } = await supa
         .from('assessment_report_files')
         .update({
           pdf_status: attempts >= MAX_PDF_ATTEMPTS ? 'failed_permanent' : 'failed',
@@ -698,6 +726,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
         .eq('session_id', sessionId)
         .eq('lang', lang);
+      // 写 failed 失败:记日志,照旧回 500(Viho 2026-10-07 定)—— 那一行停在 rendering,sweep 兜底
+      if (failWriteErr) {
+        console.error(dbLogLine({ fn: 'render-pdf', op: 'assessment_report_files.update failed', session: sessionId, lang }, failWriteErr));
+      }
     }
     return res.status(500).json({ error: 'render_failed', detail: detail.slice(0, 300) });
   }
