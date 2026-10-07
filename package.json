@@ -31,6 +31,7 @@
     "check:runtime-pin": "node scripts/check-runtime-pin.mjs",
     "check:doc-anchors": "node scripts/check-doc-anchors.mjs",
     "check:crons": "node scripts/check-crons.mjs",
+    "check:db-errors": "node scripts/check-db-errors.mjs",
     "check:ghl-transport": "node scripts/check-ghl-transport.mjs",
     "check:legacy-columns": "node scripts/check-legacy-columns.mjs",
     "check:rpc-contract": "node scripts/check-rpc-contract.mjs",
