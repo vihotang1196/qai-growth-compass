@@ -105,7 +105,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `048d13b` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
+当前分支基线:`main` = `f2bf4a6` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
 
 
 ---
@@ -122,21 +122,26 @@
 
 **代码这一侧到头了。** 剩下的全部要真实场景或 Dashboard 操作才能推进,所以按「需要什么才能做」分组。
 
-### ⓪ 现在就能做的:线上 Auth,四步,顺序不能反(2026-10-07 加)
+### ⓪ 线上 Auth,四步,顺序不能反(2026-10-07 加)—— ✅ 2026-10-07 四步全部完成
 
 生产**原先**开着自助注册,任何人都能建 `auth.users` 行、让我们的发件身份发信。
-**2026-10-07 已关**(【实测】smoke `disable_signup=true`)。前三步做完,**只剩第 4 步**。
+**2026-10-07 已关**(【实测】smoke `disable_signup=true`),自定义 SMTP 也已接好。
+【实测】`auth.users` 现在只有 1 行,就是管理员 —— 关注册之后[它应该一直如此](#关注册之后authusers-应该只包含管理员)。
 
 1. ✅ **前端上线**(那条分支合进 main)→ `npm run smoke`:部署检查全过,`[配置]` 那条**红**、exit 3
    —— **2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3
 2. ✅ **你在 Dashboard 关掉「Allow new users to sign up」** —— **2026-10-07 完成**。
    ⚠️ 前三次操作没有生效,是 smoke 拦下来的([经过](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来))
 3. ✅ **smoke 的 `[配置]` 那条转绿**、exit 0 —— **2026-10-07 完成**:部署检查 9/9、配置期望 1/1、exit 0
-4. **⬅ 下一步:接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后,现在可以做了)
+4. ✅ **接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后)
+   —— **2026-10-07 完成**:Resend,发信域 `auth.qiai.tech`;端到端(申请链接 → 收信 → 同一浏览器点开 → 进后台)成功
 
-**仍待 Viho 决定**:03:33 UTC 那个名单外用户怎么处理(目前没删;见[实测值](#auth-实测值)与待确认第 13 行)。
+**03:33 UTC 那个名单外用户**:2026-10-07 Viho 在 Dashboard 删了;**是谁建的,待 Viho 补充**(待确认第 13 行)。
 
-为什么不能反、每一步的判据、以及 14 项待你在 Dashboard 确认的值(第 3、10、12 行已填):[线上 Auth 配置](#线上-auth-配置)。
+还开着的两件与 Auth 相关:**Resend 账号是否由公司掌控**(待确认第 15 行 —— 账号失联则 Admin 登录邮件中断);
+以及待确认清单里其余没填的行。
+
+为什么不能反、每一步的判据、以及 15 项待你在 Dashboard 确认的值(第 3、10、12 行已填,第 13 行填了一半):[线上 Auth 配置](#线上-auth-配置)。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -2798,7 +2803,7 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 
 | | |
 |---|---|
-| **上线前必做:换掉内置 SMTP** | Supabase 内置邮件服务**只能发给 project 成员**,而且有限流(验收时触发了 `EMAIL RATE LIMIT EXCEEDED`)。只影响后台登录邮件 —— 学员链接走 GHL,不受影响。上线前接自己的 SMTP(Resend 之类)。⚠️ 2026-10-07:**必须排在关自助注册之后**,见[上线顺序](#上线顺序) |
+| ✅ ~~上线前必做:换掉内置 SMTP~~ —— **2026-10-07 完成**(Resend,见[线上 Auth 配置](#待-viho-在-dashboard-确认)第 3 行) | Supabase 内置邮件服务**只能发给 project 成员**,而且有限流(验收时触发了 `EMAIL RATE LIMIT EXCEEDED`)。只影响后台登录邮件 —— 学员链接走 GHL,不受影响。上线前接自己的 SMTP(Resend 之类)。⚠️ 2026-10-07:**必须排在关自助注册之后**,见[上线顺序](#上线顺序) |
 | EXPORT CSV 未实测 | 验收时库里只有一行记录。等有真实数据了一起验。公式注入与 BOM 都有单元测试覆盖,没验的是「点下去真的下载了一个 Excel 能打开的文件」 |
 
 ## 待你操作
@@ -7362,7 +7367,7 @@ Node 370 / Deno 217,十四道门全绿。
 | redirectTo | `${window.location.origin}/admin` | 线上 bundle 里有 `emailRedirectTo`;源码 `AdminLogin.tsx` | 2026-10-07 |
 | JWT 签名键 | JWKS 发布 1 把 **ES256**(非对称) | `GET /auth/v1/.well-known/jwks.json`。它决定了 `assessment-admin` 不能把 `getUser` 换成 `getClaims`(见那一行的注释) | 2026-10-07 |
 | publishable key | **2 把,都有效**。**网站用的是 `qai_compass`,在 Dashboard 里以 `ZSlE` 结尾**(sha256 前 8 位 `e951ded3`,与 smoke 报的 bundle 指纹相等)。另一把 `default` 以 `Cd4x` 结尾(`efec518d`),网站不用它;**暂不删除** —— 删错会让网站断线,第一场课前不动,用途待 Viho 确认([第 14 行](#待-viho-在-dashboard-确认))。这里只记结尾与指纹,不记 key | 列表来自 Viho 贴的 Dashboard;各带一把 `GET /auth/v1/settings` → 200,对照组(编造的 key)→ 401;指纹按 smoke 同一算法本地算 | 2026-10-07 |
-| `auth.users` | 2 行。1 行在 `admin_users` 里;**1 行不在**:`2026-10-07 03:33:33 UTC` 建,未确认、从未登录,11ms 后 `confirmation_sent_at` 有值 —— 「陌生邮箱 → 建用户 + 发信」真的发生过的标本。**决定:不删** | `supabase db query --linked`,只取计数与时间戳 | 2026-10-07 |
+| `auth.users` | **1 行,在 `admin_users` 里**(不在的 0 行;`admin_users` 也是 1 行)。同日早些时候是 2 行:另一行 `2026-10-07 03:33:33 UTC` 建,未确认、从未登录,11ms 后 `confirmation_sent_at` 有值 —— 「陌生邮箱 → 建用户 + 发信」真的发生过的标本。原先决定不删;**2026-10-07 Viho 在 Dashboard 删了**(03:33 那一分钟建的用户现为 0 行),**是谁建的待 Viho 补充** | `supabase db query --linked`,只取计数:按 `lower(trim(email))` 与 `admin_users` 比对,输出里没有邮箱 | 2026-10-07 |
 
 ⚠️ **两个读数会骗人**(都是「一个混在一起的零 / 非零」):
 
@@ -7379,7 +7384,7 @@ Node 370 / Deno 217,十四道门全绿。
 |---|---|---|---|---|
 | 1 | Site URL | Authentication → URL Configuration | | |
 | 2 | Redirect URLs(至少要有 `https://compass.qiai.tech/admin`;本地开发要登后台的话加 `http://localhost:5173/admin`) | 同上 | | |
-| 3 | 自定义 SMTP 是否已接(host / 发件人)—— 03:33 那封确认信**发出去了**,说明要么对方是项目成员、要么已经接了自定义 SMTP,我分辨不出来 | Authentication → Emails → SMTP | **内置**(Dashboard 显示 built-in email service 横幅),尚未接自定义 SMTP。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
+| 3 | 自定义 SMTP 是否已接(host / 发件人)—— 03:33 那封确认信**发出去了**,说明要么对方是项目成员、要么已经接了自定义 SMTP,我分辨不出来 | Authentication → Emails → SMTP | **自定义 SMTP(Resend)**,2026-10-07 接好(此前同日是内置)。**Supabase 侧**:Sender `noreply@auth.qiai.tech`,名称 `Q.Ai Growth Compass`,host `smtp.resend.com`,port 465,username `resend`。**Resend 侧**:region Tokyo,发信域 `auth.qiai.tech`,状态 Verified;API key **只有发送权限、只限 `auth.qiai.tech` 这一个域**。**DNS(Cloudflare)**:DKIM 的 TXT,以及 `rsend.auth`、`send.auth` 两条 CNAME,均为 DNS only。⚠️ **刻意没加 Resend 建议的 DMARC**:它要加在根域 `_dmarc.qiai.tech` 上,会影响包括 GHL 发信域在内的所有子域;根域若已有 DMARC,重复记录会让两条都失效。端到端:申请链接 → 收信 → 同一浏览器点开 → 进后台,成功。来源:Viho(记录照 Viho 的描述) | 2026-10-07 |
 | 4 | 每小时发信上限(⚠️ magic link、确认信共用这一个额度 —— 刷满了后台一小时收不到登录信) | Authentication → Rate Limits | | |
 | 5 | 每用户发信间隔 | 同上 | | |
 | 6 | Magic Link / Confirm signup 模板的现有内容 | Authentication → Emails → Templates | | |
@@ -7389,8 +7394,9 @@ Node 370 / Deno 217,十四道门全绿。
 | 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
 | 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。但有 **Vercel Authentication(Standard Protection)** 保护:预览部署要登录 Vercel 团队账号才能访问,正式域名公开 ⇒ **只有团队成员能访问 Preview**。**已确认**。来源:Viho 的 Vercel 截图 | 2026-10-07 |
-| 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | | |
+| 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | **已删**(Viho 在 Dashboard 删的;【实测】`auth.users` 现只剩管理员 1 行)。**是谁建的:待 Viho 补充**(这一半没填完) | 2026-10-07 |
 | 14 | `default` 那把 publishable key(结尾 `Cd4x`)的用途 —— 网站不用它;删不删等第一场课后,删之前先确认没有别的东西在用它 | Project Settings → API Keys | | |
+| 15 | **Resend 账号(`jianan1196`)是否由公司掌控** —— 这个账号失联,Admin 登录邮件就会中断(Supabase 的 SMTP 用的是它下面的 API key) | Resend → Settings / Team | | |
 
 ## Auth 规则
 
@@ -7426,6 +7432,25 @@ Node 370 / Deno 217,十四道门全绿。
   是否晚于最近一次生产部署。不晚于 ⇒ 不是这个原因,先查是不是复制错了 key。
   ⚠️ smoke 那条的失败信息写着「多半是改了环境变量但没重新构建部署」——
   有两把有效 key 时这个「多半」不成立,先按日期判。
+
+### 关注册之后,`auth.users` 应该只包含管理员
+
+- 注册已关(`disable_signup=true`)+ 登录页 `shouldCreateUser: false` ⇒ 前端与公开 key 都建不出新用户;
+  能建的只剩走 admin 接口的路(Dashboard、secret key)【推断】。
+  所以 `auth.users` 里**出现一个不在 `admin_users` 里的人**,要么有一条我们不知道的建用户路径,
+  要么有人在 Dashboard 建了管理员却没走完[下面那两步](#关注册之后新增管理员--两步缺一不可)的第 2 步。
+- 核对用只读计数,**不读邮箱**(`supabase db query --linked "<下面这段>"`):
+
+  ```sql
+  select
+    (select count(*) from auth.users) as auth_users,
+    (select count(*) from auth.users u where not exists (
+       select 1 from public.admin_users a where lower(trim(a.email)) = lower(trim(u.email))
+    )) as auth_users_not_in_admin_users;
+  ```
+
+  判据:`auth_users_not_in_admin_users = 0`。【实测 2026-10-07】`auth_users = 1`、`auth_users_not_in_admin_users = 0`。
+- 不是 0 时,**先查清是谁、什么时候建的(`created_at`),再决定删不删** —— 删掉之后就没有东西可查了。
 
 ### 关注册之后,新增管理员 = 两步,缺一不可
 
@@ -7466,7 +7491,7 @@ Node 370 / Deno 217,十四道门全绿。
 | ① ✅ | 前端上线(`feat/admin-login-neutral` 合进 main = Vercel 部署) | Viho | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base https://compass.qiai.tech`:「部署检查」全过,`[配置]` 那条**红**,**exit 3**。**2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3(key 用的是[那条规则](#跑-smoke-用哪把-key怎么判断改了变量没重新构建)里注明结尾的那一把) |
 | ② ✅ | Dashboard 关掉「Allow new users to sign up」 | Viho | **2026-10-07 完成**。关之前先在生产 `/admin` 用一个陌生邮箱提交:页面**只出现中性提示**、60 秒倒计时正常;Dashboard → Users **仍是 2 人** —— 注册还开着时陌生邮箱没被建成用户,即 `shouldCreateUser: false` 在生产上成立。⚠️ 前三次操作没生效,[见下](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来) |
 | ③ ✅ | smoke 的 `[配置]` 那条转绿 | — | **exit 0** —— 这是那一项**第一次真实的绿**,之前只有变异让它绿过。**2026-10-07 06:57:55 UTC 完成**:部署检查 9/9、配置期望 1/1、exit 0 |
-| ④ ⬅ 下一步 | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行 |
+| ④ ✅ | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行。**2026-10-07 完成**:Resend(`auth.qiai.tech`);Admin 登录页申请链接 → 收到邮件 → 同一浏览器点开 → 进入后台,成功;第 3 行已填。之后 smoke 9/9 + 1/1、exit 0 |
 
 **为什么不能反:**
 
@@ -7617,6 +7642,14 @@ Node 390 / Deno 217,十四道门全绿。
 ---
 
 ## 变更日志
+
+- 2026-10-07 — **[上线顺序](#上线顺序) ④ 完成:自定义 SMTP(Resend)接好,四步全部完成**。
+  发信域 `auth.qiai.tech`(Verified),API key 只能发信、只限这一个域;
+  **刻意没加 DMARC** —— 它要加在根域,会波及 GHL 的发信子域,根域已有的话两条一起失效。
+  端到端:申请链接 → 收信 → 同一浏览器点开 → 进后台,成功。Stage 5 那条「上线前必做:换掉内置 SMTP」划掉。
+  03:33 那个名单外用户 Viho 已删,身份待补;【实测】`auth.users` 只剩管理员 1 行(只取计数)。
+  新增规则「[关注册之后 `auth.users` 应该只包含管理员](#关注册之后authusers-应该只包含管理员)」(附只读计数 SQL);
+  待确认新增第 15 行:Resend 账号是否由公司掌控。smoke 9/9 + 1/1、exit 0
 
 - 2026-10-07 — **[上线顺序](#上线顺序) ②③ 完成:自助注册已关,smoke 9/9 + 1/1、exit 0**。
   `[配置]` 第一次真实的绿,也是**第一次拦下真实问题**:Dashboard 前三次操作没有生效
