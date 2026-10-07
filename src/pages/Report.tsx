@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import config from '@/config/assessment-config.json';
 import { Button, Card, CardBody, CardHeader, CardTitle } from '@/components/brutalist';
 import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleMark';
@@ -15,6 +14,8 @@ import { badgeForScore } from '@/lib/scoring';
 import { isPriorityMismatch } from '../../api/_lib/surveySignals';
 import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
 import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
+import { useDelayedFlag, useSingleFlight } from '@/lib/useBusy';
+import { useTransitionNavigate } from '@/lib/usePageMotion';
 
 declare global {
   interface Window {
@@ -37,6 +38,16 @@ const Q_BY_ID = new Map(QUESTIONS.map((q) => [q.id, q]));
 const MARK: Record<string, MarkState> = { full: 'full', partial: 'half', missing: 'empty' };
 
 /**
+ * PDF 渲染器打开报告页时带 `?rt=`(渲染令牌)。那时**一点动效都不要**:块的依次淡入
+ * 会让 __REPORT_READY__ 之后的那一刻有几块还停在半透明 —— PDF 截到的就是那一帧。
+ * (motion.css 的 @media print 是第二道;这一道不依赖渲染器用不用打印媒体。)
+ * 每次渲染时读,不在模块加载时读一次 —— 后者在页内跳转过来时是旧值。
+ */
+function isRenderMode(): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rt');
+}
+
+/**
  * 报告页 —— 九个板块。原「15 项子模块明细表」已并入「每维为什么是这个分」:
  * 后者本就逐项列出同样 15 个子模块,且多了「你选的是什么 / 目标是什么」,信息量严格更大。
  * 同一组数据在一份报告里出现两次,读者会以为第二次有新信息,读完发现没有 —— 那是在消耗
@@ -48,15 +59,21 @@ const MARK: Record<string, MarkState> = { full: 'full', partial: 'half', missing
  */
 export default function Report() {
   const { tk, locale } = useT();
-  const navigate = useNavigate();
+  const navigate = useTransitionNavigate();
   const [data, setData] = useState<ReportPayload | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'notReady' | 'error'>('loading');
   /** PDF 状态与新签 URL —— 由轮询更新;pollDone 表示已放弃轮询(见下) */
   const [pdf, setPdf] = useState<{ status: string; url: string | null }>({ status: 'pending', url: null });
   const [pollDone, setPollDone] = useState(false);
-  const [opening, setOpening] = useState(false);
+  /** 正在打开哪种语言那一份 —— 只有那一个按钮转圈。null = 没有 */
+  const [opening, setOpening] = useState<'zh' | 'en' | null>(null);
   /** 正在为哪种语言触发生成 —— 按钮据此禁用并改文案。null = 没有在触发 */
   const [generating, setGenerating] = useState<'zh' | 'en' | null>(null);
+  /** 下载与生成各自一道闸:等待期间再按无效(同步挡,见 lib/singleFlight.ts) */
+  const openFlight = useSingleFlight();
+  const generateFlight = useSingleFlight();
+  /** 报告加载等满 150ms 才出现五边形动画 —— 快的时候直接是报告 */
+  const showLoader = useDelayedFlag(state === 'loading');
 
   const onAuthLost = useCallback(() => navigate(`/expired?lang=${locale}`, { replace: true }), [navigate, locale]);
   /** 按当前语言取 config 字段(zh/en);config 是允许出现中文的源 */
@@ -142,7 +159,7 @@ export default function Report() {
    * 而报告页一开就是几十分钟。重新取把「URL 会过期」从错误处理变成不存在的问题。
    */
   async function openPdfIn(lang: 'zh' | 'en') {
-    setOpening(true);
+    setOpening(lang);
     try {
       const fresh = await fetchReport();
       setData(fresh);
@@ -153,7 +170,7 @@ export default function Report() {
         open: (url, target, features) => window.open(url, target, features),
       });
     } finally {
-      setOpening(false);
+      setOpening(null);
     }
   }
 
@@ -203,7 +220,7 @@ export default function Report() {
     return (
       <Shell>
         <div className="flex min-h-[60vh] items-center justify-center">
-          <PentagonLoader label={tk('report.loading')} />
+          {showLoader && <PentagonLoader label={tk('report.loading')} />}
         </div>
       </Shell>
     );
@@ -240,7 +257,7 @@ export default function Report() {
   const mismatch = isPriorityMismatch(priority, result.weakest);
 
   return (
-    <Shell>
+    <Shell stagger={!isRenderMode()}>
       {/* 1. 总分 + 雷达 */}
       <Section title={tk('report.section.radar')}>
         <div className="mb-4 text-center">
@@ -506,8 +523,8 @@ export default function Report() {
           pollDone={pollDone}
           opening={opening}
           generating={generating}
-          onOpen={(l) => void openPdfIn(l)}
-          onGenerate={(l) => void generateIn(l)}
+          onOpen={(l) => void openFlight.run(() => openPdfIn(l))}
+          onGenerate={(l) => void generateFlight.run(() => generateIn(l))}
         />
         {/* 打印保底(print.css)—— 自动 PDF 失败时这条路仍然可用,所以永远保留 */}
         <div className="mt-3">
@@ -602,10 +619,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, stagger = false }: { children: React.ReactNode; stagger?: boolean }) {
+  // stagger:报告的块依次淡入(间隔 50ms,600ms 内到位,见 motion.css)。渲染模式下不开
   return (
     <main className="min-h-screen bg-muted p-4 md:p-8">
-      <div className="mx-auto max-w-2xl space-y-6">{children}</div>
+      <div className={`mx-auto max-w-2xl space-y-6${stagger ? ' qai-stagger' : ''}`}>{children}</div>
     </main>
   );
 }

@@ -159,14 +159,26 @@ h1, h2, h3, h4, h5, h6 {
 .qai-lift {
   box-shadow: var(--qai-shadow);
   transition: box-shadow var(--qai-transition), transform var(--qai-transition);
+  /* iOS 点按时默认盖一层灰 —— 我们自己有「压下去」的反馈,不要那层灰 */
+  -webkit-tap-highlight-color: transparent;
 }
 .qai-lift:hover:not(:disabled):not([data-disabled]) {
   box-shadow: var(--qai-shadow-hover);
   transform: translate(var(--qai-press-offset), var(--qai-press-offset));
 }
+/* 按下:立刻压到底(不走 100ms 过渡 —— 「按下即时反馈」),松手再弹回来。
+   ⚠️ iOS 上 :active 默认不对触摸生效,要页面注册过 touchstart —— 见 main.tsx */
 .qai-lift:active:not(:disabled):not([data-disabled]) {
   box-shadow: var(--qai-shadow-none);
   transform: translate(4px, 4px);
+  transition-duration: 0ms;
+}
+/* 按下之后在等服务器(Button 的 busy):保持压下去的样子,再按无效。150ms 后按钮里出现转圈 */
+.qai-lift[data-busy] {
+  box-shadow: var(--qai-shadow-none);
+  transform: translate(4px, 4px);
+  transition-duration: 0ms;
+  pointer-events: none;
 }
 
 /* 静态卡面:有阴影但不响应 hover */

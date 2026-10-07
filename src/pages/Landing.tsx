@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Button, Card, CardBody, CardHeader, CardTitle, Input } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
 import { postJson } from '@/lib/api';
 import { langForAuthRequest } from '@/lib/loginLocale';
+import { useSingleFlight } from '@/lib/useBusy';
+import { useTransitionNavigate } from '@/lib/usePageMotion';
 
 interface AuthResponse {
   /** 已经带上 ?lang= 的完整路径,由后端推导 —— 前端不参与决定去哪 */
@@ -26,7 +28,8 @@ const COOLDOWN_SECONDS = 60;
  * 不该把别人的登录凭证翻出来。
  */
 function TokenExchange({ token }: { token: string }) {
-  const navigate = useNavigate();
+  // 验完跳去答题 / 问卷 / 报告:旧页(「正在验证链接…」)淡出,新页淡入上移
+  const navigate = useTransitionNavigate();
   const { tk, locale, setLocale } = useT();
   const [failed, setFailed] = useState(false);
   /** StrictMode 下 effect 会跑两次,token 只该被兑换一次 */
@@ -72,7 +75,8 @@ function TokenExchange({ token }: { token: string }) {
 function ResendForm() {
   const { tk, locale } = useT();
   const [identifier, setIdentifier] = useState('');
-  const [pending, setPending] = useState(false);
+  // 发送要等服务端(它把耗时补齐到固定下限):等待期间再按无效,同步挡(见 lib/singleFlight.ts)
+  const { run, busy: pending } = useSingleFlight();
   const [result, setResult] = useState<'sent' | 'locked' | null>(null);
   const [cooldown, setCooldown] = useState(0);
 
@@ -82,10 +86,13 @@ function ResendForm() {
     return () => clearTimeout(timer);
   }, [cooldown]);
 
-  async function submit(event: React.FormEvent) {
+  function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (pending || cooldown > 0 || !identifier.trim()) return;
-    setPending(true);
+    if (cooldown > 0 || !identifier.trim()) return;
+    void run(send);
+  }
+
+  async function send() {
     try {
       const res = await postJson<ResendResponse>('assessment-login-request', {
         identifier: identifier.trim(),
@@ -97,8 +104,6 @@ function ResendForm() {
       // 网络失败也显示同一句 —— 任何可区分的错误状态都是一条旁路
       setResult('sent');
       setCooldown(COOLDOWN_SECONDS);
-    } finally {
-      setPending(false);
     }
   }
 
@@ -116,8 +121,14 @@ function ResendForm() {
             autoComplete="username"
             disabled={pending}
           />
-          <Button type="submit" block disabled={pending || cooldown > 0 || !identifier.trim()}>
-            {pending ? tk('common.loading') : tk('login.action')}
+          <Button
+            type="submit"
+            block
+            disabled={cooldown > 0 || !identifier.trim()}
+            busy={pending}
+            busyLabel={tk('common.loading')}
+          >
+            {tk('login.action')}
           </Button>
         </form>
 

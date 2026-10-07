@@ -80,7 +80,10 @@ export const UI_STRINGS = {
   'quiz.profileSectionTitle': { zh: '先了解一下你的生意', en: 'First, about your business' },
   'quiz.saved': { zh: '已保存', en: 'Saved' },
   'quiz.savingOne': { zh: '保存中', en: 'Saving' },
-  'quiz.saveOneFailed': { zh: '这一题没存上,点一下重选即可重试', en: "This one didn't save — pick again to retry" },
+  // 原来写「点一下重选即可重试」—— 同一个选项再点一次不会触发保存(Radix 只在点没选中的选项时回调),所以卡片上另有「重试」按钮
+  'quiz.saveOneFailed': { zh: '这一题没存上。', en: "This one didn't save." },
+  /** 进度栏下方的总提示:页面上任何一题没存上都显示,点一下去第一题 */
+  'quiz.failedNotice': { zh: '有 {n} 题没存上 · 点这里去重试', en: '{n} answer(s) not saved · tap to retry' },
   'quiz.submit': { zh: '提交,查看我的分数', en: 'Submit and see my score' },
   'quiz.unanswered': {
     zh: '还有 {n} 题没答,已帮你定位到第一题。',
@@ -96,8 +99,8 @@ export const UI_STRINGS = {
     en: 'This page is out of date — this device is now signed in to a different assessment. Reopening it for you…',
   },
   'quiz.someFailed': {
-    zh: '有 {n} 题没保存成功,已定位到第一题,重选一下就会重试。',
-    en: '{n} answer(s) failed to save — jumped you to the first; re-pick to retry.',
+    zh: '有 {n} 题没保存成功,已定位到第一题,点那一题的「重试」即可。',
+    en: '{n} answer(s) failed to save — jumped you to the first; tap Retry there.',
   },
   'quiz.autosaveNote': {
     zh: '每答一题即自动保存。中途关掉,下次点链接回来会从这一题继续。',

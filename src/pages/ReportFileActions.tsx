@@ -36,7 +36,8 @@ export default function ReportFileActions({
   currentStatus: string;
   /** 轮询已放弃 —— 不再显示「正在生成」,回到静态兜底 */
   pollDone: boolean;
-  opening: boolean;
+  /** 正在打开哪种语言那一份(点了下载、在取新签的链接)。null = 没有 */
+  opening: 'zh' | 'en' | null;
   generating: 'zh' | 'en' | null;
   onOpen: (lang: 'zh' | 'en') => void;
   onGenerate: (lang: 'zh' | 'en') => void;
@@ -56,16 +57,24 @@ export default function ReportFileActions({
               key={f.lang}
               variant={isCurrent ? 'primary' : 'outline'}
               onClick={() => onOpen(f.lang)}
-              disabled={opening}
+              // 点的那一个:压下去、150ms 后转圈 +「正在打开…」;另一个这时不可点
+              busy={opening === f.lang}
+              busyLabel={tk('report.pdf.opening')}
+              disabled={opening !== null && opening !== f.lang}
             >
-              {opening ? tk('report.pdf.opening') : tk('report.pdf.downloadIn').replace('{lang}', name)}
+              {tk('report.pdf.downloadIn').replace('{lang}', name)}
             </Button>
           );
         }
 
+        /**
+         * 生成要等 7–8 秒(彩排实测渲染 6.4–7.8 秒)—— 一定超过 150ms,所以点下去立刻换成这一行字,
+         * 不先压着按钮等 150ms。旁边的小方块在转,说明还在办(减少动态效果时不转)。
+         */
         if (f.availability === 'working' || generating === f.lang) {
           return (
-            <p key={f.lang} className="font-body text-sm opacity-70">
+            <p key={f.lang} className="flex items-center gap-2 font-body text-sm opacity-70">
+              <span aria-hidden className="qai-spinner inline-block h-3 w-3 shrink-0 border-2 border-current" />
               {tk('report.pdf.generatingIn').replace('{lang}', name)}
             </p>
           );

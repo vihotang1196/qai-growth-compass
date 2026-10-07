@@ -23,8 +23,8 @@ export default function LanguageToggle() {
     <button
       type="button"
       onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
-      // 固定右上角,z 高于答题页那条 sticky 进度条(z-10)
-      className="fixed right-3 top-3 z-50 border-brutal border-line bg-paper px-3 py-1.5 font-head text-sm font-bold shadow-brutal-sm"
+      // 固定右上角,z 高于答题页那条 sticky 进度条(z-10);qai-vt-static:换页时它原地不动(motion.css)
+      className="qai-vt-static fixed right-3 top-3 z-50 border-brutal border-line bg-paper px-3 py-1.5 font-head text-sm font-bold shadow-brutal-sm"
       aria-label={tk('common.langSwitch')}
     >
       {tk('common.lang')}

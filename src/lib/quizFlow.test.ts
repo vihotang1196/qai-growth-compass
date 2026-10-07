@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import config from '@/config/assessment-config.json';
-import { isComplete, nextStep, progress } from './quizFlow';
+import { isComplete, nextStep, progress, segmentAdvance } from './quizFlow';
 import { PROFILE_IDS, QUESTION_IDS, STEP_CASES } from './quizFlow.cases';
 
 describe('nextStep', () => {
@@ -230,5 +230,37 @@ describe('assessment-config structural assumptions', () => {
         expect(a.root_cause[level], `${d.key} root_cause.${level}`).toBeTruthy();
       }
     }
+  });
+});
+
+describe('segmentAdvance — glide to the next segment only when a tap completes one', () => {
+  const segments = [
+    ['P1', 'P2', 'P3'],
+    ['Q1', 'Q2', 'Q3'],
+    ['Q4', 'Q5', 'Q6'],
+  ];
+
+  it('finishing the background questions goes to the first formal question', () => {
+    expect(segmentAdvance(segments, new Set(['P1', 'P2']), 'P3')).toBe('Q1');
+  });
+
+  it('a tap inside an unfinished segment stays put', () => {
+    expect(segmentAdvance(segments, new Set(['P1']), 'P2')).toBeNull();
+  });
+
+  // 回头改答案:这一题原来就答过 —— 不把人带走
+  it('changing an answer never moves the page', () => {
+    expect(segmentAdvance(segments, new Set(['P1', 'P2', 'P3']), 'P3')).toBeNull();
+  });
+
+  it('finishing the last segment with everything answered goes to submit', () => {
+    const before = new Set(['P1', 'P2', 'P3', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5']);
+    expect(segmentAdvance(segments, before, 'Q6')).toBe('submit');
+  });
+
+  // 后面的段都答完了,但前面留了空洞(跳着答)—— 去那个空洞,而不是去提交
+  it('a hole left earlier is the next stop, not submit', () => {
+    const before = new Set(['P1', 'P3', 'Q1', 'Q2', 'Q4', 'Q5', 'Q6']);
+    expect(segmentAdvance(segments, before, 'Q3')).toBe('P2');
   });
 });

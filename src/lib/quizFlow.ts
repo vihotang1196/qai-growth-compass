@@ -73,6 +73,28 @@ export function progress(
   return { done, total, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
 }
 
+/**
+ * 答完一题之后要不要自动滑到下一段(背景题 → 第一维 → … → 提交)。
+ *
+ * 只在「这一下让一整段答完了」时滑;返回要去的那一题,后面都答完了就回 `'submit'`,不该滑就回 null。
+ * - **改答案不滑**(这一题原来就答过):人在回头改,不该把他带走
+ * - 段内还没答完不滑:段内是人自己往下读的
+ * - 下一处没答的可能在前面(跳着答留下的空洞)—— 先找后面的段,再从头找
+ */
+export function segmentAdvance(
+  segments: readonly (readonly string[])[],
+  answeredBefore: ReadonlySet<string>,
+  id: string,
+): string | 'submit' | null {
+  if (answeredBefore.has(id)) return null;
+  const at = segments.findIndex((segment) => segment.includes(id));
+  if (at === -1) return null;
+  const after = new Set(answeredBefore).add(id);
+  if (!segments[at].every((x) => after.has(x))) return null;
+  const order = [...segments.slice(at + 1).flat(), ...segments.slice(0, at + 1).flat()];
+  return order.find((x) => !after.has(x)) ?? 'submit';
+}
+
 // v3 移除了 scoreForOption:计分不再用「option_index 查 option_values 表」,
 // 改为每题按 option_count 归一化(见 scoring.ts 的 perQuestionScore)。
 // 「下标 → 语义值」的通用形状仍在 optionMap.mapOption,问卷的 S1/S7 映射用它。

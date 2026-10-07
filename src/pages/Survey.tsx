@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import config from '@/config/assessment-config.json';
 import {
   Badge,
@@ -12,10 +11,13 @@ import {
   Textarea,
 } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
+import { scrollBehavior } from '@/lib/motion';
 import { quizApi, QuizAuthError } from '@/lib/quizApi';
 import { routeForStatus, SessionGuardError, type GuardError } from '@/lib/sessionFlow';
 import { rerouteToCurrentSession } from '@/lib/sessionReroute';
 import { SurveyValidationError, surveyApi } from '@/lib/surveyApi';
+import { useSingleFlight } from '@/lib/useBusy';
+import { useTransitionNavigate } from '@/lib/usePageMotion';
 
 const SURVEY = config.survey_questions;
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
@@ -35,10 +37,17 @@ type Answer = number | number[] | string;
  */
 export default function Survey() {
   const { tk, locale } = useT();
-  const navigate = useNavigate();
+  // 换页走 View Transitions(旧页淡出、新页淡入上移);签名与 navigate 相同
+  const navigate = useTransitionNavigate();
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [index, setIndex] = useState(0);
-  const [pending, setPending] = useState(false);
+  /**
+   * 「提交」背后的 save + finalize(约 1–2 秒)。原来用 `pending` state 挡重复点击 ——
+   * 同一帧里的两次点击读到的都是旧值,两次都会发出去。现在同步挡,见 lib/singleFlight.ts。
+   */
+  const { run: runSubmit, busy: pending } = useSingleFlight();
+  /** 换过一次题之后,每张新题卡淡入;第一张不淡入(换页本身已经有转场) */
+  const [moved, setMoved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 服务端指名的那一题 —— 用来把客户直接送回那一屏 */
   const [badQuestion, setBadQuestion] = useState<string | null>(null);
@@ -108,14 +117,19 @@ export default function Survey() {
     setError(null);
   };
 
+  /** 换题(页面内分段):新题卡淡入;人往下滚过的话,平滑回到顶上从题目读起 */
+  function goTo(next: number) {
+    setIndex(next);
+    setMoved(true);
+    if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: scrollBehavior() });
+  }
+
   function toggleMulti(i: number) {
     const current = Array.isArray(answer) ? answer : [];
     set(current.includes(i) ? current.filter((x) => x !== i) : [...current, i]);
   }
 
   async function submit() {
-    if (pending) return;
-    setPending(true);
     setError(null);
     setBadQuestion(null);
     try {
@@ -146,14 +160,12 @@ export default function Survey() {
         // 而不是自己从头找一遍
         if (err.questionId) {
           const at = SURVEY.findIndex((s) => s.id === err.questionId);
-          if (at >= 0) setIndex(at);
+          if (at >= 0) goTo(at);
           setBadQuestion(err.questionId);
         }
         return;
       }
       setError(tk('survey.saveFailed'));
-    } finally {
-      setPending(false);
     }
   }
 
@@ -188,7 +200,13 @@ export default function Survey() {
           <p className="mt-1 font-body text-sm opacity-70">{tk('survey.hint')}</p>
         </div>
 
-        <Card shadow="lg" padding="md" tone={badQuestion === q.id ? 'accent' : 'paper'}>
+        <Card
+          key={q.id}
+          shadow="lg"
+          padding="md"
+          tone={badQuestion === q.id ? 'accent' : 'paper'}
+          className={moved ? 'qai-enter' : undefined}
+        >
           <CardBody className="space-y-6">
             <div className="space-y-2">
               <h1 className="font-head text-xl font-bold leading-snug md:text-2xl">{copy.q}</h1>
@@ -269,24 +287,22 @@ export default function Survey() {
             )}
 
             <div className="flex gap-3">
-              <Button
-                variant="outline"
-                disabled={index === 0 || pending}
-                onClick={() => setIndex((i) => i - 1)}
-              >
+              <Button variant="outline" disabled={index === 0 || pending} onClick={() => goTo(index - 1)}>
                 {tk('common.prev')}
               </Button>
               {isLast ? (
-                <Button variant="primary" block disabled={!satisfied || pending} onClick={() => void submit()}>
-                  {pending ? tk('survey.submitting') : tk('survey.submit')}
-                </Button>
-              ) : (
                 <Button
                   variant="primary"
                   block
-                  disabled={!satisfied || pending}
-                  onClick={() => setIndex((i) => i + 1)}
+                  disabled={!satisfied}
+                  busy={pending}
+                  busyLabel={tk('survey.submitting')}
+                  onClick={() => void runSubmit(submit)}
                 >
+                  {tk('survey.submit')}
+                </Button>
+              ) : (
+                <Button variant="primary" block disabled={!satisfied || pending} onClick={() => goTo(index + 1)}>
                   {tk('common.next')}
                 </Button>
               )}

@@ -1,0 +1,95 @@
+/* ============================================================================
+ * 转场动效 —— 全部集中在这一个文件(2026-10-07,Viho 提的「顿一下然后硬切」)
+ *
+ * 规则(src/lib/motion.test.ts 钉着):
+ *   - 除了 @keyframes(定义,不是应用)与 @media print(只做「关掉」),
+ *     这里的每一条都在 `prefers-reduced-motion: no-preference` 里 ——
+ *     系统开了「减少动态效果」就一条都不生效,连隐藏态(opacity: 0)也不生效,
+ *     否则那些人会看到一片空白。即时反馈(按下的样子)不在这里,在 brutalist.css 的 .qai-lift。
+ *   - 动画从不挡住跳转:换页由 View Transitions 截下旧页再淡出,新页的数据请求不等它。
+ *
+ * 时长:换页 250ms ease-out、新页上移 10px;旧页 120ms 淡出;
+ *       报告页块与块间隔 50ms、单块 200ms,第 9 块起不再加延迟 → 最后一块 600ms 内到位。
+ * ========================================================================== */
+
+@keyframes qai-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes qai-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes qai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 页面切换(View Transitions):旧页快速淡出,新页淡入 + 上移 10px */
+  ::view-transition-old(root) {
+    animation: 120ms ease-out both qai-fade-out;
+  }
+  ::view-transition-new(root) {
+    animation: 250ms ease-out both qai-enter;
+  }
+  /* 右上角的语言切换单独成组:换页时它原地不动,不跟着整页淡出淡入 */
+  .qai-vt-static {
+    view-transition-name: qai-lang-toggle;
+  }
+
+  /* 数据到了之后才出现的页面内容(答题页加载完、问卷换题) */
+  .qai-enter {
+    animation: 250ms ease-out both qai-enter;
+  }
+
+  /* 页面内分段:进入视口时淡入。
+     容器上的 .qai-reveal-on 只在浏览器有 IntersectionObserver 时由 JS 加上 —— 没有就什么都不藏 */
+  .qai-reveal-on [data-reveal]:not([data-revealed]) {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  .qai-reveal-on [data-reveal][data-revealed] {
+    animation: 250ms ease-out both qai-enter;
+  }
+
+  /* 报告页:块依次淡入 */
+  .qai-stagger > * {
+    animation: 200ms ease-out both qai-enter;
+  }
+  .qai-stagger > :nth-child(2) { animation-delay: 50ms; }
+  .qai-stagger > :nth-child(3) { animation-delay: 100ms; }
+  .qai-stagger > :nth-child(4) { animation-delay: 150ms; }
+  .qai-stagger > :nth-child(5) { animation-delay: 200ms; }
+  .qai-stagger > :nth-child(6) { animation-delay: 250ms; }
+  .qai-stagger > :nth-child(7) { animation-delay: 300ms; }
+  .qai-stagger > :nth-child(8) { animation-delay: 350ms; }
+  .qai-stagger > :nth-child(n + 9) { animation-delay: 400ms; }
+
+  /* 等待中的小方块(按钮里、生成 PDF 的那行字旁边) */
+  .qai-spinner {
+    animation: qai-spin 0.8s linear infinite;
+  }
+}
+
+/* PDF 渲染器用打印媒体出 PDF —— 任何一块都不能停在淡入的中途。
+   (报告页在渲染模式 ?rt= 下本来就不加 .qai-stagger;这里是第二道) */
+@media print {
+  .qai-enter,
+  .qai-stagger > *,
+  [data-reveal] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

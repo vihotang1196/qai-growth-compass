@@ -20,7 +20,7 @@ function render(
     current: 'zh' | 'en';
     currentStatus: string;
     pollDone: boolean;
-    opening: boolean;
+    opening: 'zh' | 'en' | null;
     generating: 'zh' | 'en' | null;
   }> = {},
 ): string {
@@ -33,7 +33,7 @@ function render(
         current: over.current ?? 'zh',
         currentStatus: over.currentStatus ?? 'ready',
         pollDone: over.pollDone ?? false,
-        opening: over.opening ?? false,
+        opening: over.opening ?? null,
         generating: over.generating ?? null,
         onOpen: () => {},
         onGenerate: () => {},
