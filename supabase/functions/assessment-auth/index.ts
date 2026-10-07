@@ -20,6 +20,7 @@ import { canAdvance } from '../_shared/entitlementStatus.ts';
 import { postAuthTarget, targetWithLang, type SessionStatus } from '../_shared/postAuthTarget.ts';
 import { sessionCookieHeader, signSession } from '../_shared/session.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
+import { loginLang } from '../_shared/loginLang.ts';
 
 const FN = 'assessment-auth';
 
@@ -32,9 +33,6 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
   });
 }
 
-function parseLang(v: unknown): 'zh' | 'en' {
-  return v === 'en' ? 'en' : 'zh';
-}
 
 /** token 无效 / 作废时的统一回复:告诉前端去 /expired,不下 cookie */
 function expired(lang: 'zh' | 'en'): Response {
@@ -61,7 +59,14 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'invalid_json' }, 400);
   }
 
-  const lang = parseLang(body.lang);
+  /**
+   * 【登录后的语言由这里定,不由浏览器定】见 api/_lib/loginLang.ts。
+   * 前端只在链接显式带了 `?lang=` 时才发 lang;没发就用 `entitlement.lang`(人的语言)。
+   * 原来是 `body.lang === 'en' ? 'en' : 'zh'` —— 原样回传浏览器的界面语言,entitlement.lang 从没被看过。
+   * 还没查到 entitlement 时(token 为空 / 无效)只能用显式的那个,没有就是 zh。
+   */
+  const requestedLang = body.lang;
+  const lang = loginLang(requestedLang, null);
   const token = typeof body.token === 'string' ? body.token.trim() : '';
   if (!token) return expired(lang);
 
@@ -71,7 +76,7 @@ Deno.serve(async (req: Request) => {
     // access_token 上有 unique 索引,这里是索引查找
     const { data: ent, error: entError } = await supa
       .from('assessment_entitlements')
-      .select('id, access_revoked_at, first_login_at, status')
+      .select('id, access_revoked_at, first_login_at, status, lang')
       .eq('access_token', token)
       .maybeSingle();
     // ctx 里不放 token —— 它是凭证;这一步失败时还不知道是哪个 entitlement
@@ -80,7 +85,8 @@ Deno.serve(async (req: Request) => {
     if (!ent || ent.access_revoked_at !== null) {
       // 两种情况回同一个结果。作废的情况记一条日志,便于确认 Admin 的操作生效了
       if (ent) console.warn(`auth rejected: entitlement ${ent.id} was revoked`);
-      return expired(lang);
+      // 作废的人我们知道他的语言 —— 「链接已失效」那一页也用它
+      return expired(ent ? loginLang(requestedLang, ent.lang) : lang);
     }
 
     // ── session:有则取,无则建 ────────────────────────────────
@@ -135,6 +141,7 @@ Deno.serve(async (req: Request) => {
       if (error) console.error(dbLogLine({ fn: FN, op: 'assessment_entitlements.update first_login_at', entitlement: ent.id }, error));
     }
 
+    const personLang = loginLang(requestedLang, ent.lang);
     const target = postAuthTarget({
       entitlementFound: true,
       revoked: false,
@@ -143,7 +150,7 @@ Deno.serve(async (req: Request) => {
 
     const cookie = await signSession(ent.id, secret, Date.now());
     return json(
-      { target: targetWithLang(target, lang), lang },
+      { target: targetWithLang(target, personLang), lang: personLang },
       200,
       { 'Set-Cookie': sessionCookieHeader(cookie) },
     );

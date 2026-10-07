@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Card, CardBody, CardHeader, CardTitle, Input } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
 import { postJson } from '@/lib/api';
+import { langForAuthRequest } from '@/lib/loginLocale';
 
 interface AuthResponse {
   /** 已经带上 ?lang= 的完整路径,由后端推导 —— 前端不参与决定去哪 */
@@ -26,7 +27,7 @@ const COOLDOWN_SECONDS = 60;
  */
 function TokenExchange({ token }: { token: string }) {
   const navigate = useNavigate();
-  const { tk, locale } = useT();
+  const { tk, locale, setLocale } = useT();
   const [failed, setFailed] = useState(false);
   /** StrictMode 下 effect 会跑两次,token 只该被兑换一次 */
   const started = useRef(false);
@@ -34,10 +35,20 @@ function TokenExchange({ token }: { token: string }) {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    postJson<AuthResponse>('assessment-auth', { token, lang: locale })
-      .then((res) => navigate(res.target, { replace: true }))
+    /**
+     * 【登录之后的语言由后端定】只在链接显式带了 `?lang=` 时才发;否则不发,
+     * auth 用 `entitlement.lang`(人的语言)。原来发的是当前界面语言 ——
+     * 浏览器里存过什么,登录之后就是什么(2026-10-07 第二次彩排:en 学员看到中文)。
+     * 见 api/_lib/loginLang.ts。
+     */
+    const lang = langForAuthRequest(window.location.search);
+    postJson<AuthResponse>('assessment-auth', lang ? { token, lang } : { token })
+      .then((res) => {
+        if (res.lang !== locale) setLocale(res.lang);
+        navigate(res.target, { replace: true });
+      })
       .catch(() => setFailed(true));
-  }, [token, locale, navigate]);
+  }, [token, locale, setLocale, navigate]);
 
   return (
     <Card shadow="lg" className="w-full max-w-md">

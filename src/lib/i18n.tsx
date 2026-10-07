@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { UI_STRINGS, type UiKey } from '@/config/ui-strings';
+import { pickInitialLocale } from '@/lib/loginLocale';
 
 export type Locale = 'zh' | 'en';
 
@@ -20,22 +21,20 @@ export interface LocalizedNode {
 const STORAGE_KEY = 'compass_lang';
 const DEFAULT_LOCALE: Locale = 'zh';
 
-function isLocale(v: string | null | undefined): v is Locale {
-  return v === 'zh' || v === 'en';
-}
-
-/** 优先级:?lang= → localStorage → zh */
+/**
+ * 页面初始语言:?lang= → localStorage → zh(判定在 loginLocale.ts 的 pickInitialLocale,可测)。
+ * ⚠️ 这只是**页面刚加载**时的语言。token 登录之后以 assessment-auth 回的 lang 为准
+ * (链接显式的 ?lang= 或 entitlement.lang)—— Landing 拿到之后会 setLocale。
+ */
 export function resolveInitialLocale(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;
-  const fromQuery = new URLSearchParams(window.location.search).get('lang');
-  if (isLocale(fromQuery)) return fromQuery;
+  let stored: string | null = null;
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (isLocale(stored)) return stored;
+    stored = window.localStorage.getItem(STORAGE_KEY);
   } catch {
     // 隐私模式下 localStorage 不可用,回落默认值
   }
-  return DEFAULT_LOCALE;
+  return pickInitialLocale(window.location.search, stored);
 }
 
 interface LocaleContextValue {
