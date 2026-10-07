@@ -83,6 +83,12 @@
 - **不要在这个仓库运行 `supabase config push`。** `config.toml` 没有 `[auth]` 段,
   push 会把 CLI 的默认值推上生产(`site_url` 变成 `127.0.0.1`,后台登录链接全坏)。
   线上 Auth 配置只在 Dashboard 里改,改完回[线上 Auth 配置](#线上-auth-配置)记值和日期。
+- **函数日志里出现 `[object Object]` 时**:那是一个数据库错误被原样抛出、message 丢了
+  ([成因](#postgresterror-盘点与第-0-批))。去 **Dashboard → Logs 看 Postgres / API 日志**,
+  按函数名和时间对照。⚠️ 这是**【推断】**:没有实测过 Postgres 日志一定记下了那条错误。
+  **第一次真实出错时这样验**:在那条 `[object Object]` 的时间前后 1 分钟内找 Postgres 的 ERROR 行 ——
+  找到了就把这句改成【实测】并记下用的过滤条件;找不到就记「这条路不通」,第 1 批的优先级随之上调。
+  第 1、2 批迁完之后,函数日志自己就带 message / code / 操作名,这一条可以删。
 
 ---
 
@@ -105,7 +111,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `f2bf4a6` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
+当前分支基线:`feat/db-error-helper` 建在 `e4f167d` 上(第 0 批 + PROGRESS 更正,2026-10-07)。测试基线:**Node 401 / Deno 220,十四道门全绿**。
 
 
 ---
@@ -185,8 +191,18 @@ S5/S6 的开放回答上有没有可分辨的差别。
 - **`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
   再决定 `api/_lib/lambdaEnv.ts` 那段注入是保留 / 改值 / 删掉
   (它可能变成没必要,也可能变成有害)
-- **`PostgrestError` 的 `code`/`details`/`hint` 被 ~37 处 `.message` 降级丢掉** ——
-  `errorKind.ts` 只在 admin 那一处兑现了,其余单独一轮
+- ~~**`PostgrestError` 的 `code`/`details`/`hint` 被 ~37 处 `.message` 降级丢掉** ——
+  `errorKind.ts` 只在 admin 那一处兑现了,其余单独一轮~~
+  ⚠️ **已更正(2026-10-07)**:**前提错了。** supabase-js 返回的 `error` 是**普通对象**,不是 Error ——
+  真实情况是 **49 处原样 `throw`,其中 35 处日志里只剩 `[object Object]`**(连 message 都没有),
+  而「已兑现」的 admin 那一处在生产上也丢了 message。
+  这是[判断标准 5](#5-读了一半的源码比没读更危险)(只读了 `PostgrestError` 的类定义,没读返回路径)
+  与[判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致)(fixture 照着那个假设手写)的又一个实例。
+  **现状**:第 0 批已做(2026-10-07);**第 1–4 批课后做,第 1 批里 `login_attempts` 那两处最优先** ——
+  见[盘点](#postgresterror-盘点与第-0-批)
+- **`render-pdf` 状态写入失败时怎么办 —— 待产品决定,课后**。`api/render-pdf.ts` 有 5 处写状态时不看 `error`
+  (570 / 587 / 656 / 685 / 692);最要紧的是 656:PDF 已上传、状态没写成 `ready` ⇒ 调用方拿到成功,
+  sweep 5 分钟后又重渲一次。是第 3 批的前置,见[盘点](#待产品决定render-pdf-写状态失败时怎么办)
 
 ---
 
@@ -1171,6 +1187,7 @@ Map 的值是**理由字符串**,不是 `true` —— 一个只有名字的白�
 | `check:deno` / `test:deno` / `check:cross` | 需要 deno,而 Vercel 构建环境没有。在 `npm run verify` 里 |
 | `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测。**两类检查、两个退出码**:部署检查失败 exit 1;部署全过、只有 `[配置]` 期望没满足 exit 3(那类的修法在 Dashboard,不是重新部署 —— 分开是为了不让它挡住部署验收,见[上线顺序](#上线顺序)) |
 | `npm run config:check` | 改 config 时才跑(`config:apply` 会先跑它)。32 项校验,**先校验后落地** |
+| `npm run check:db-errors` | **只报告**:原样 `throw` supabase-js 的 `error`(普通对象)的地方。2026-10-07 全量 **49 处**,所以现在进构建链只会是永远红;课后第 1、2 批迁完,第 4 批再接进 `build`。自带自检(先证明抓得到起因),盲区写在脚本头部。见[盘点](#postgresterror-盘点与第-0-批) |
 
 ⚠️ **已知开着的洞:`verify` 靠人记得跑。** Vercel 只跑 `npm run build`,所以需要 deno 的三项
 **在 CI 上永远不会执行**。当前单人开发够用,**所以现在不做**;触发条件是①加人 ②开始出现漏跑。
@@ -4019,11 +4036,14 @@ Unexpected status code: 404.
 |---|---|
 | `chromium.font()` 非 200 | ⚠️ `reject(string)` —— 全仓唯一一处,已修 |
 | `@sparticuz/chromium` 其余 | grep 过,没有第二处裸 reject |
-| supabase-js 的 `throw pgError` | ✅ `PostgrestError extends Error`,`.message` 拿得到 |
+| supabase-js 的 `throw pgError` | ~~✅ `PostgrestError extends Error`,`.message` 拿得到~~ ⚠️ **已更正(2026-10-07)**:那个类只在 `.throwOnError()` 时才用;`{ data, error }` 里的 `error` 是 `JSON.parse` 出来的**普通对象** ⇒ catch 处的 `String(err)` 得到 `[object Object]`。全仓 49 处这样抛。[判断标准 5](#5-读了一半的源码比没读更危险) + [8](#8-从被测对象推导出来的断言验的是代码和自己一致) 的又一个实例,见[盘点](#postgresterror-盘点与第-0-批) |
 | `fetch` / puppeteer / WebCrypto | ✅ 都是 Error |
 
 **一处就地包一层,不上 `normalizeError(err, context)`。** 统一封装要养一个新概念,
 而它现在只有一个用户 —— 等出现第二处再说。
+
+> ⚠️ **已更正(2026-10-07)**:「只有一处会收到非 Error」不成立 —— 上表 supabase-js 那一行写错了,
+> 第二处早就在:49 处。所以「不抽象」的理由也一起不成立,统一出口见 `api/_lib/dbError.ts`。
 
 ⚠️ **但排查带出了一件独立的事,没在这一轮做**:`PostgrestError` 除了 `message`
 还带 `code` / `details` / `hint`,而那 37 处全都只取 `.message`,
@@ -5493,7 +5513,13 @@ Edge Function 的 `Deno.serve` 入口本地无处可测(与判断标准 4 后半
 ## 顺带兑现了一小块挂了很久的债
 
 `PostgrestError` 的 `code` / `details` / `hint` 被仓库里 37 处 `.message` 降级一律丢掉。
-这一轮的日志把四个都打出来 —— **但只在这一处**。其余 36 处仍未改,单独一轮。
+~~这一轮的日志把四个都打出来 —— **但只在这一处**。~~其余 36 处仍未改,单独一轮。
+
+> ⚠️ **已更正(2026-10-07)**:「这一处把四个都打出来」**在生产上不成立**。生产上的 `error` 是普通对象,
+> `classifyError` 对它取 `String(err)` ⇒ 日志是 `code=… | message=[object Object] | …` ——
+> code / details / hint 留下了,**message 丢了**。测试没红过,因为 fixture 是 `new Error(message)` 再挂上 code ——
+> 一个生产上不存在的形状。[判断标准 5](#5-读了一半的源码比没读更危险) + [8](#8-从被测对象推导出来的断言验的是代码和自己一致)
+> 的又一个实例。第 0 批修好(fixture 改由真 supabase-js 产生),见[盘点](#postgresterror-盘点与第-0-批)。
 
 ## 未做
 
@@ -7641,7 +7667,118 @@ Node 390 / Deno 217,十四道门全绿。
 
 ---
 
+# PostgrestError 盘点与第 0 批
+
+2026-10-07。D 组那条「~37 处 `.message` 降级」的只读盘点,以及课前只做的第 0 批。
+**第 1–4 批放到第一场课之后**(Viho 的决定)。
+
+## 那条待办的前提是错的
+
+**supabase-js 2.110.8 的 `{ data, error }` 里,`error` 是普通对象,不是 Error**
+【实测:读 postgrest-js `processResponse`(`error = JSON.parse(body)`)+ stub fetch 跑真客户端】。
+`PostgrestError extends Error` 那个类只在 `.throwOnError()` 时才被 new。于是:
+
+| | 结果 |
+|---|---|
+| `if (error) throw error` | 抛出普通对象,**没有堆栈** |
+| catch 处 `err instanceof Error ? err.message : String(err)` | **`[object Object]`** —— 连 message 都没有 |
+| admin 的 `classifyError`(「已兑现」的那一处) | `code=… \| message=[object Object] \| …` —— code / details / hint 在,message 丢了 |
+
+2026-08-07 那句「`.message` 拿得到」是[判断标准 5](#5-读了一半的源码比没读更危险)
+(读了类定义,没读返回路径);`errorKind_test` 的 fixture 是 `new Error()` 再挂 code,
+是[判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致)(照着同一个假设手写,所以永远绿)。
+
+## 位置清单(服务端 17 个文件;`src/` 只调 Auth,不查 PostgREST)
+
+| 类 | 数量 | 后果 |
+|---|---|---|
+| A1 原样 throw,最终记成 `[object Object]` | **35**(10 个文件) | 不知道哪个操作、哪个 entitlement,也没有错误内容 |
+| A2 原样 throw,经 admin 的 `classifyError` | **14** + 名单查询 1 | 有 code / details / hint,丢 message(第 0 批已修) |
+| B 只打印 `.message`,然后继续 | **14** | message 在,丢 code / hint |
+| C 包成新 Error,只带 message | **3** | 同上(其中 2 处是 storage,本来就是 Error) |
+| D 吞掉:`error` 根本没解构 | **10** | 没有任何痕迹。含 `login_attempts` 两处、`render-pdf` 五处 |
+| catch 处的 `String(err)` 降级 | 服务端 29 处 | 其中 10 处收的是 A1 的普通对象;其余收的是真 Error,不用改 |
+
+A1 + A2 = **49**,`npm run check:db-errors` 报的就是这 49 处(行集合与独立 grep 逐行一致)。
+
+## 安全结论
+
+**没有任何学员或公网可见的响应带出表名、约束名或 SQL 片段。** 学员链路的 catch 一律回通用错误码;
+login-request 出错也回 `sent`;学员报告 payload 不含 `pdf_last_error`。
+唯一把原始错误文本放进响应体的是 **render-pdf 的 `detail`(300 字)**,它要 `X-Internal-Secret`,
+经 admin「重新生成」透传给**已授权的管理员**。
+
+两处潜在风险:① render-pdf 那种「`detail` 进响应体」的写法,会被将来新写的学员端点照抄;
+② `login_attempts` 写入失败被吞掉 —— 不泄露信息,但让限流悄悄失效(见下)。
+
+## 第 0 批做了什么
+
+- **`api/_lib/dbError.ts`(新)**:`DbCtx` / `DbError` / `dbFail` / `dbLogLine` / `describeError`。
+  纯函数、无导入。`_shared/errorKind.ts` 改成再导出,`classifyError` 这个名字保留 ⇒ admin 的导入不变。
+  ⚠️ **没有加 `deno.json` 映射**(与草案不同):Deno 从 `api/_lib` 再导出一律写 `.ts` 直接路径
+  (`_shared/testCohort.ts` 同一做法),映射只给 `api/_lib` 文件**内部**的 `.js` 导入用;
+  `dbError.ts` 没有导入,加了反而是一条没人用的映射 —— `check:dep-sync` 会因此红。
+- **日志脱敏,先脱敏后截断**:`Key (列)=(值)` 留列换值(列按括号配对扫,函数式索引 `lower(email)` 也认);
+  `Failing row contains (…)` 整行换掉;邮箱;≥32 字符的 hex / base64url;电话(带 `+` 的,和 8–15 位独立数字串)。
+  **约束名要留着**,所以 token 的判据不是「含数字」(`…_phone_e164_check` 也含数字)而是
+  「纯 hex 带数字」或「有大写且同时有小写或数字」—— Postgres 标识符是小写 snake_case。
+  盲区写在 `redactText` 的注释里(不带 `+`、带分隔符的本地号码抓不到等)。
+- **ctx 也过一遍**:entitlement / session 不像 UUID、lang 不像语言码 ⇒ 换成 `<redacted>`。
+  `DbError` 上只存脱敏后的字段 —— 它哪天被 `JSON.stringify` 进响应体,也带不出 token。
+- **按第 0 条的两份证据**:
+  1. **fixture**:先**只**把 `errorKind_test` 的 fixture 换成真 supabase-js(stub fetch)产出的普通对象 ——
+     **9/9 照样全绿**。不是 fixture 没起作用,是原来的用例**没有一条看 message**
+     ([判断标准 1 推论三](#1-一道没见过它变红的门不值钱):无事可做)。
+     补上「message 要进日志」那条 → **红,实际值 `code=PGRST200 | message=[object Object]`** —— 正是生产上的样子;
+     修 `describeError` 的取法 → 绿。另加一条「fixture 是普通对象」的绊线:supabase-js 哪天改成回 Error,它先红。
+     选真客户端而不是对象字面量的理由:**这次的 bug 就出在手写的形状上**;让库自己产出,形状跟着库走。
+  2. **脱敏**:`redactText` 先写成原样返回 → 6 条脱敏用例**红**(token / 邮箱 / hex 原样出现在日志里)→ 实现 → 11/11 绿。
+     另跑两次定向变异,各自只让对应那一条红:「先截断后脱敏」→ 跨截断点那条红;
+     「含数字就当 token」→ 带数字的约束名那条红。每次都逐字还原(`shasum` 一致)。
+- **`scripts/check-db-errors.mjs`(新,只报告)**:49 处 / 11 个文件,自检 9/9。不在构建链里(见[十四道门那张表](#不在构建链上的几项))。
+- 测试:Node 390 → **401**,Deno 217 → **220**。
+
+**部署范围**:`errorKind` 唯一的导入方是 `assessment-admin`,`api/` 下没有任何文件导入 `dbError` ⇒
+**只部署 `assessment-admin`**(`npm run deploy:functions -- assessment-admin`,门照跑)。
+它的行为变化只在日志:message 回来了,而且脱敏;响应体不变(仍是 `kind` + `code`)。
+⚠️ **写这一节时还没部署** —— 部署与 smoke 的结果记在之后的变更日志里。
+
+## 课后的分批与顺序
+
+| 批 | 内容 | 行为变化 | 怎么验 |
+|---|---|---|---|
+| **1** | 学员链路六个函数:27 处 throw、6 个 catch、5 处只打印;D 类补日志(**`login_attempts` 两处最优先**、`report:227`) | 无(只换抛出物与日志) | 类型检查 + `check:db-errors` 计数下降;`Deno.serve` 入口本地无处可测 → 部署后看一次函数日志 |
+| **2** | 后台 / 定时 / 写回:admin 14、webhook 3、resync 3、maintenance 1、pdf-sweep 1;`_shared` 写回三件与 `testCohort` 的只打印 / 吞掉 | 无 | 现有 `ghlWriteback_test` / `ghlTagsWriteback_test` / `testCohort.test` 照跑 + 门 |
+| **3** | render-pdf 吞掉的 5 处 | **有** | 先做下面那个产品决定,再补断言 |
+| **4** | `check:db-errors` 接进 `build` | — | 变异:造回一处 `if (error) throw error` → 红 |
+
+**为什么 `login_attempts` 那两处排第一**(`assessment-login-request` 199 / 222):
+限流读的就是这张表,写入失败被吞掉 ⇒ **限流悄悄失效** ⇒ 有人可以反复触发 GHL 发信 ——
+**既花钱,又打扰学员**。而且不会有任何人知道:接口照常回 `sent`,日志里什么都没有。
+同一条路上的另一道闸 —— 每人 60 秒的冷却 —— 读的是 `link_sent_at`,而那一列的写入(`resendLink.ts:117`)
+失败时也只打印、照常继续:**两道闸都建在一次没人检查结果的写入上。**
+
+## 待产品决定:render-pdf 写状态失败时怎么办
+
+`api/render-pdf.ts` 570 / 587 / 656 / 685 / 692 写 `assessment_report_files` 时不看 `error`。
+最要紧的是 **656**:PDF 已经上传,状态没写成 `ready` ⇒ 调用方拿到成功,库里仍是 `rendering`,
+sweep 5 分钟后再渲一次(多一次 Lambda;学员那边看到的是「还在生成」)。
+要决定的是:写失败时回失败(学员重试)、回成功但记日志(靠 sweep 自愈)、还是重试写入 ——
+三种都会改变已有行为,所以按[判断标准 19](#19-改动成本远小于影响面时先停下来问这是不是一次产品决定)
+**课后决定**,决定之后才做第 3 批。
+
+---
+
 ## 变更日志
+
+- 2026-10-07 — **[PostgrestError 盘点](#postgresterror-盘点与第-0-批) + 第 0 批(`api/_lib/dbError.ts`)+ 三处更正**。
+  盘点推翻了 D 组那条的前提:supabase-js 的 `error` 是普通对象,49 处原样 throw,35 处日志只剩 `[object Object]`,
+  admin 那一处也丢 message。**没有任何学员 / 公网响应带出 DB 细节**。
+  第 0 批:统一出口 + 日志脱敏(先脱敏后截断)+ `classifyError` 改为它的再导出 + fixture 改由真 supabase-js 产生;
+  两份「先红后绿」证据都记在盘点里 —— fixture 那份的第一步是**只换 fixture 仍 9/9 全绿**(原用例没有一条看 message)。
+  新增 `npm run check:db-errors`(只报告,49 处)。三处旧说法保留并标注已更正(判断标准 5 + 8)。
+  登记:`render-pdf` 写状态失败时怎么办 —— 待产品决定,课后。加一条运维说明(`[object Object]` 时去哪看,【推断】)。
+  第 1–4 批课后,`login_attempts` 两处最优先。Node 401 / Deno 220。**提交时未部署**
 
 - 2026-10-07 — **[上线顺序](#上线顺序) ④ 完成:自定义 SMTP(Resend)接好,四步全部完成**。
   发信域 `auth.qiai.tech`(Verified),API key 只能发信、只限这一个域;
@@ -7858,6 +7995,7 @@ Node 390 / Deno 217,十四道门全绿。
   导致最可能的字体失败给出最没信息量的错误(`Unexpected status code: 404.`)。
   包一层带 url + 环境事实 + 三个常见成因的 Error;两个抛点共用 `fontEnvFacts()`。
   同类排查:37 处降级里只有这一处会收到非 Error,**故不抽象**。
+  (⚠️ 2026-10-07 已更正:不成立 —— supabase-js 的 `error` 是普通对象,49 处,见[盘点](#postgresterror-盘点与第-0-批))
   新增[判断标准 9](#9-验一条失败路径要验的不只是它会失败还有它说的话够不够用来定位)。
   **另记一笔:`PostgrestError` 的 `code`/`details`/`hint` 被那 37 处一律丢掉,单独一轮做**
 - 2026-08-07 — **雷达维度标签移到五个顶点旁**:新增 `buildLabelAnchors()`(角度仍只有一份),
