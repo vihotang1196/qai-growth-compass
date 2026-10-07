@@ -105,7 +105,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `e90dd39`(`feat/admin-login-neutral` 待合)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
+当前分支基线:`main` = `23d3211` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
 
 
 ---
@@ -125,14 +125,15 @@
 ### ⓪ 现在就能做的:线上 Auth,四步,顺序不能反(2026-10-07 加)
 
 生产开着自助注册(【实测】`disable_signup=false`),任何人都能建 `auth.users` 行、
-让我们的发件身份发信。代码侧(AdminLogin 不建用户、不显示原文)在 `feat/admin-login-neutral`。
+让我们的发件身份发信。代码侧(AdminLogin 不建用户、不显示原文)已随 `feat/admin-login-neutral` 合进 main。
 
-1. **前端上线**(那条分支合进 main)→ `npm run smoke`:部署检查全过,`[配置]` 那条**红**、exit 3
+1. ✅ **前端上线**(那条分支合进 main)→ `npm run smoke`:部署检查全过,`[配置]` 那条**红**、exit 3
+   —— **2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3
 2. **你在 Dashboard 关掉「Allow new users to sign up」**
 3. **smoke 的 `[配置]` 那条转绿**、exit 0
 4. **接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后)
 
-为什么不能反、每一步的判据、以及 13 项待你在 Dashboard 确认的值(第 3、10 行 2026-10-07 已填):[线上 Auth 配置](#线上-auth-配置)。
+为什么不能反、每一步的判据、以及 14 项待你在 Dashboard 确认的值(第 3、10 行已填,第 12 行填了一半):[线上 Auth 配置](#线上-auth-配置)。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -7357,6 +7358,7 @@ Node 370 / Deno 217,十四道门全绿。
 | `flowType` | `pkce` | 线上 bundle 里有 `flowType:"pkce"`;源码 `src/lib/supabase.ts` | 2026-10-07 |
 | redirectTo | `${window.location.origin}/admin` | 线上 bundle 里有 `emailRedirectTo`;源码 `AdminLogin.tsx` | 2026-10-07 |
 | JWT 签名键 | JWKS 发布 1 把 **ES256**(非对称) | `GET /auth/v1/.well-known/jwks.json`。它决定了 `assessment-admin` 不能把 `getUser` 换成 `getClaims`(见那一行的注释) | 2026-10-07 |
+| publishable key | **2 把,都有效**。**网站用的是 `qai_compass`,在 Dashboard 里以 `ZSlE` 结尾**(sha256 前 8 位 `e951ded3`,与 smoke 报的 bundle 指纹相等)。另一把 `default` 以 `Cd4x` 结尾(`efec518d`),网站不用它;**暂不删除** —— 删错会让网站断线,第一场课前不动,用途待 Viho 确认([第 14 行](#待-viho-在-dashboard-确认))。这里只记结尾与指纹,不记 key | 列表来自 Viho 贴的 Dashboard;各带一把 `GET /auth/v1/settings` → 200,对照组(编造的 key)→ 401;指纹按 smoke 同一算法本地算 | 2026-10-07 |
 | `auth.users` | 2 行。1 行在 `admin_users` 里;**1 行不在**:`2026-10-07 03:33:33 UTC` 建,未确认、从未登录,11ms 后 `confirmation_sent_at` 有值 —— 「陌生邮箱 → 建用户 + 发信」真的发生过的标本。**决定:不删** | `supabase db query --linked`,只取计数与时间戳 | 2026-10-07 |
 
 ⚠️ **两个读数会骗人**(都是「一个混在一起的零 / 非零」):
@@ -7383,8 +7385,9 @@ Node 370 / Deno 217,十四道门全绿。
 | 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
 | 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
-| 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | | |
+| 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。**Deployment Protection 是否开启:待 Viho 确认**(这一半没填完)。来源:Viho 的 Vercel 截图 | 2026-10-07 |
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | | |
+| 14 | `default` 那把 publishable key(结尾 `Cd4x`)的用途 —— 网站不用它;删不删等第一场课后,删之前先确认没有别的东西在用它 | Project Settings → API Keys | | |
 
 ## Auth 规则
 
@@ -7399,6 +7402,19 @@ Node 370 / Deno 217,十四道门全绿。
   而 CLI 的 `config` 只有 `push` 一个子命令,没有只读 diff【实测 help】。
 - 改 Auth 配置走 Dashboard,改完回[上面](#auth-实测值)写值和日期。
 - `config.toml` 头注释里也写了这一条 —— 那是准备跑它的人会看的地方。
+
+### 跑 smoke 用哪把 key、怎么判断「改了变量没重新构建」
+
+- **Vercel 上的值不可回看。** `VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_SUPABASE_URL`、
+  `SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY` 都是 **Secret 类型**(Viho 的 Vercel 截图,2026-10-07)——
+  所以拿不到「网站在用的那把」去对照。
+- **跑 smoke 时,key 一律从 Supabase Dashboard 复制以 `ZSlE` 结尾的那一把**(`qai_compass`,
+  见[上面](#auth-实测值))。项目里有两把**都有效**的 publishable key,复制错一把,
+  key 一致性那条照样红、exit 1 —— 2026-10-07 第一次跑就是这样红的(复制了 `default`,`Cd4x`)。
+- **判断「是否改了变量没重新构建」**:看 Vercel 变量列表上的 **Added / Updated 日期**
+  是否晚于最近一次生产部署。不晚于 ⇒ 不是这个原因,先查是不是复制错了 key。
+  ⚠️ smoke 那条的失败信息写着「多半是改了环境变量但没重新构建部署」——
+  有两把有效 key 时这个「多半」不成立,先按日期判。
 
 ### 关注册之后,新增管理员 = 两步,缺一不可
 
@@ -7436,7 +7452,7 @@ Node 370 / Deno 217,十四道门全绿。
 
 | 步 | 动作 | 谁 | 完成的判据 |
 |---|---|---|---|
-| ① | 前端上线(`feat/admin-login-neutral` 合进 main = Vercel 部署) | Viho | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base https://compass.qiai.tech`:「部署检查」全过,`[配置]` 那条**红**,**exit 3** |
+| ① ✅ | 前端上线(`feat/admin-login-neutral` 合进 main = Vercel 部署) | Viho | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base https://compass.qiai.tech`:「部署检查」全过,`[配置]` 那条**红**,**exit 3**。**2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3(key 用的是[那条规则](#跑-smoke-用哪把-key怎么判断改了变量没重新构建)里注明结尾的那一把) |
 | ② | Dashboard 关掉「Allow new users to sign up」 | Viho | — |
 | ③ | smoke 的 `[配置]` 那条转绿 | — | **exit 0** —— 这是那一项**第一次真实的绿**,之前只有变异让它绿过 |
 | ④ | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行 |
@@ -7452,6 +7468,7 @@ Node 370 / Deno 217,十四道门全绿。
 如果 `[配置]` 那条和部署检查共用 exit 1,①的验收就要等②,而②又要等①验收过。
 所以它单独计 **exit 3** —— ①看「部署检查」那一行;`[配置]` 那条照样红、照样非零,直到②做完。
 ⚠️ 跑 smoke 时**要带** `SUPABASE_PUBLISHABLE_KEY`,否则 key 一致性那条按原设计报 unverified、exit 1。
+带哪一把见[那条规则](#跑-smoke-用哪把-key怎么判断改了变量没重新构建) —— 项目里有两把有效的,复制错了同样 exit 1。
 
 ---
 
@@ -7562,6 +7579,17 @@ Node 390 / Deno 217,十四道门全绿。
 ---
 
 ## 变更日志
+
+- 2026-10-07 — **[上线顺序](#上线顺序) ① 完成:smoke 部署检查 9/9、`[配置]` 红、exit 3**。
+  `feat/admin-login-neutral` fast-forward 合进 main(`23d3211`);部署以 bundle 里出现
+  `Open it in the same browser you requested it from` 为判据(新 bundle `index-5WRSp2CS.js`)。
+  第一次跑是 **exit 1**:key 一致性那条红 —— 项目有两把有效 publishable key,复制了网站不用的那把。
+  换成 `ZSlE` 那把(指纹与 bundle 的 `e951ded3` 相等)之后 9/9。
+  ⚠️ 这是 key 一致性那条**第一次用独立来源的 key 跑出绿** —— 上一轮那次 9/9 是把期望值设成
+  bundle 里那把,同义反复。
+  新增[跑 smoke 用哪把 key](#跑-smoke-用哪把-key怎么判断改了变量没重新构建) 的规则;
+  [待确认清单](#待-viho-在-dashboard-确认)第 12 行填了一半(Preview 连生产库、持有生产 secret key;
+  Deployment Protection 待确认),加了第 14 行(`default` 那把 key 的用途)
 
 - 2026-10-07 — **补档:启动目录规则 + Dashboard 三项**。
   过程记录:上一轮会话误开在其他仓库目录,并使用了该仓库的逃生门。已清理。
