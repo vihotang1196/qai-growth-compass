@@ -19,11 +19,22 @@
  * 实际耗时超过下限时会打 warn:那说明下限太低,差异又回来了。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { normalizeEmail, normalizePhone, tailFromInput } from '../_shared/phone.ts';
 import { hashIdentifier } from '../_shared/identifierHash.ts';
 import { DEFAULT_RATE_LIMIT, evaluateRateLimit, lookbackMs } from '../_shared/rateLimit.ts';
 import { sendMagicLink } from '../_shared/resendLink.ts';
 import { missingKeys } from '../_shared/env.ts';
+
+/**
+ * 【login_attempts 的写入失败:记日志,照常继续(fail-open)】2026-10-07 Viho 定的。
+ * 限流读的就是这张表,所以写入失败等于这一次没被计数。仍然放行,理由:
+ *   - 攻击者没法主动让这条写入失败 —— 它只会在数据库自己出问题时失败;
+ *   - 反过来 fail-closed(写不进就拒绝)会在数据库抖动时把正常学员挡在门外,
+ *     而那恰恰是开课时最可能撞上的时刻。
+ * 代价是「那段时间限流不计数」—— 现在至少看得见(dbLogLine),原来是彻底无声。
+ */
+const FN = 'assessment-login-request';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 /** 同一记录的重发间隔 */
@@ -74,7 +85,8 @@ async function matchEntitlement(
       .select(SELECT_COLS)
       .eq('email_lower', email)
       .limit(2);
-    if (error) throw error;
+    // ctx 里不放邮箱 / 号码 —— 这是未鉴权路径上调用方给的标识
+    if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select by email' }, error);
     if ((data?.length ?? 0) > 1) return { hit: null, ambiguousEmail: email };
     return { hit: (data?.[0] as Matched) ?? null, ambiguousEmail: null };
   }
@@ -87,7 +99,7 @@ async function matchEntitlement(
       .select(SELECT_COLS)
       .eq('phone_e164', e164)
       .limit(2);
-    if (error) throw error;
+    if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select by phone_e164' }, error);
     if (data?.length === 1) return { hit: data[0] as Matched, ambiguousEmail: null };
     if ((data?.length ?? 0) > 1) return { hit: null, ambiguousEmail: null };
   }
@@ -100,7 +112,7 @@ async function matchEntitlement(
     .select(SELECT_COLS)
     .eq('phone_tail', tail)
     .limit(2);
-  if (error) throw error;
+  if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select by phone_tail' }, error);
   if (data?.length === 1) return { hit: data[0] as Matched, ambiguousEmail: null };
   // 第 3 级:命中 >1 条 → 视为未命中
   return { hit: null, ambiguousEmail: null };
@@ -184,7 +196,8 @@ Deno.serve(async (req: Request) => {
       .select('created_at')
       .eq('ip', ip)
       .gte('created_at', since);
-    if (attemptsError) throw attemptsError;
+    // 读失败照旧 fail-closed(进 catch → 回 sent、不发信):读不到就判断不了限流
+    if (attemptsError) dbFail({ fn: FN, op: 'assessment_login_attempts.select' }, attemptsError);
 
     const verdict = evaluateRateLimit(
       (attempts ?? []).map((a) => new Date(a.created_at as string).getTime()),
@@ -196,9 +209,13 @@ Deno.serve(async (req: Request) => {
 
     if (verdict.locked) {
       // 被锁的尝试也记录 —— 连续猛试会把锁刷新到更晚
-      await supa
+      const { error: lockedInsertError } = await supa
         .from('assessment_login_attempts')
         .insert({ ip, identifier_hash: identifierHash, succeeded: false });
+      // fail-open,理由见文件上方 FN 那一段
+      if (lockedInsertError) {
+        console.error(dbLogLine({ fn: FN, op: 'assessment_login_attempts.insert (locked)' }, lockedInsertError));
+      }
       return await respond({ status: 'locked' });
     }
 
@@ -219,9 +236,13 @@ Deno.serve(async (req: Request) => {
     // 作废的记录不重发。跟未命中同样处理,不给出任何区别
     const sendable = hit && hit.access_revoked_at === null ? hit : null;
 
-    await supa
+    const { error: attemptInsertError } = await supa
       .from('assessment_login_attempts')
       .insert({ ip, identifier_hash: identifierHash, succeeded: sendable !== null });
+    // fail-open,理由见文件上方 FN 那一段
+    if (attemptInsertError) {
+      console.error(dbLogLine({ fn: FN, op: 'assessment_login_attempts.insert' }, attemptInsertError));
+    }
 
     // ── 3. 60 秒节流 + 发送 ───────────────────────────────────
     if (sendable) {
@@ -247,7 +268,7 @@ Deno.serve(async (req: Request) => {
     // 命中、命中但被节流、未命中 —— 到这里回的是同一个东西
     return await respond({ status: 'sent' });
   } catch (err) {
-    console.error(`login-request failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`login-request failed: ${describeError(err).log}`);
     // 500 也要过耗时下限:否则「服务端出错」这条路径的耗时会短得离谱,
     // 反而成了一个可观测的旁路
     return await respond({ status: 'sent' });

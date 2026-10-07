@@ -14,6 +14,7 @@ import { magicLink } from './token.ts';
 import { buildResendPayload } from './resendPayload.ts';
 import { triggerAccepted } from './ghlTriggerResponse.ts';
 import { isTestEntitlement } from './testCohort.ts';
+import { dbLogLine } from './dbError.ts';
 import { effectiveLang } from './lang.ts';
 
 export interface SendTarget {
@@ -115,7 +116,15 @@ export async function sendMagicLink(
   const patch: Record<string, unknown> = { link_sent_at: new Date().toISOString() };
   if (target.status === 'pending') patch.status = 'link_sent';
   const { error } = await supa.from('assessment_entitlements').update(patch).eq('id', target.id);
-  if (error) console.error(`failed to stamp link_sent_at for ${target.id}: ${error.message}`);
+  /**
+   * 【写不进 link_sent_at:记日志,照常继续(fail-open)】2026-10-07 Viho 定的。
+   * 每人 60 秒的重发冷却读的就是这一列,所以写失败 = 这一次没有开始冷却。仍然放行,理由与
+   * login_attempts 那两处相同:攻击者没法主动让这条写入失败;而 fail-closed 会在数据库抖动时
+   * 让本该收到链接的学员收不到。代价现在至少看得见(原来只打 error.message,丢了 code / hint)。
+   */
+  if (error) {
+    console.error(dbLogLine({ fn: 'sendMagicLink', op: 'assessment_entitlements.update link_sent_at', entitlement: target.id }, error));
+  }
 
   if (!outcome.ok) console.error(`resend failed for ${target.id}: ${outcome.detail}`);
   else if (!outcome.queued) console.error(`resend not queued for ${target.id}: ${outcome.detail}`);

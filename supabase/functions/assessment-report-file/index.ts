@@ -33,10 +33,13 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { dbFail, describeError } from '../_shared/dbError.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { parseLang } from '../_shared/lang.ts';
 import { availabilityOf } from '../_shared/reportFiles.ts';
+
+const FN = 'assessment-report-file';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const json = (body: unknown, status = 200) =>
@@ -96,7 +99,7 @@ Deno.serve(async (req: Request) => {
       .select('id, status')
       .eq('entitlement_id', verified.entitlementId)
       .maybeSingle();
-    if (sErr) throw sErr;
+    if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: verified.entitlementId }, sErr);
     if (!session) return json({ error: 'no_session' }, 404);
 
     const { data: row, error: rErr } = await supa
@@ -105,7 +108,7 @@ Deno.serve(async (req: Request) => {
       .eq('session_id', session.id)
       .eq('lang', lang)
       .maybeSingle();
-    if (rErr) throw rErr;
+    if (rErr) dbFail({ fn: FN, op: 'assessment_report_files.select', session: session.id, lang }, rErr);
 
     /**
      * ── 幂等(约定 3)──
@@ -151,7 +154,7 @@ Deno.serve(async (req: Request) => {
      */
     return json({ status: 'ready', lang, alreadyThere: false });
   } catch (err) {
-    console.error(`report-file failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`report-file failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });

@@ -9,6 +9,7 @@
  * 都在这里定好,前端不猜(PROGRESS 0.9)。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { effectiveLang, parseLang } from '../_shared/lang.ts';
 import { langStates, type ReportFileRow } from '../_shared/reportFiles.ts';
 import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
@@ -22,6 +23,8 @@ import {
   selectBaseline,
 } from '../../../src/lib/reportStats.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+
+const FN = 'assessment-report';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const json = (body: unknown, status = 200) =>
@@ -129,7 +132,12 @@ Deno.serve(async (req: Request) => {
           .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
           .eq('entitlement_id', verified!.entitlementId)
           .maybeSingle();
-    if (sErr) throw sErr;
+    if (sErr) {
+      dbFail(
+        { fn: FN, op: 'assessment_sessions.select', session: renderSessionId, entitlement: verified?.entitlementId },
+        sErr,
+      );
+    }
     if (!session) return json({ error: 'no_session' }, 409);
 
     const { data: ent, error: entErr } = await supa
@@ -137,7 +145,7 @@ Deno.serve(async (req: Request) => {
       .select('id, cohort_id, access_revoked_at')
       .eq('id', session.entitlement_id)
       .maybeSingle();
-    if (entErr) throw entErr;
+    if (entErr) dbFail({ fn: FN, op: 'assessment_entitlements.select', entitlement: session.entitlement_id, session: session.id }, entErr);
     // 渲染令牌也要过这一关 —— 被停用的人不该还能被渲出报告
     if (!ent || ent.access_revoked_at) return json({ error: 'revoked' }, 403);
 
@@ -146,7 +154,7 @@ Deno.serve(async (req: Request) => {
       .select('dim_scores, total, tier, weakest, strongest')
       .eq('session_id', session.id)
       .maybeSingle();
-    if (rErr) throw rErr;
+    if (rErr) dbFail({ fn: FN, op: 'assessment_results.select', session: session.id }, rErr);
     /**
      * 这一次响应用哪个语言 —— `locale`、当前那份文件、兼容投影三处都用它。
      * 【算一遍就够】算两遍的话,以后有人改其中一处,另一处会静默不同步。
@@ -182,7 +190,7 @@ Deno.serve(async (req: Request) => {
       .from('assessment_report_files')
       .select('lang, pdf_status, pdf_path, pdf_attempts, pdf_last_error, share_card_path, share_card_tall_path')
       .eq('session_id', session.id);
-    if (fErr) throw fErr;
+    if (fErr) dbFail({ fn: FN, op: 'assessment_report_files.select', session: session.id }, fErr);
     const fileRows = (fileRowsRaw ?? []) as unknown as (ReportFileRow & {
       share_card_path: string | null;
       share_card_tall_path: string | null;
@@ -195,7 +203,7 @@ Deno.serve(async (req: Request) => {
       .from('assessment_answers')
       .select('question_id, option_index')
       .eq('session_id', session.id);
-    if (aErr) throw aErr;
+    if (aErr) dbFail({ fn: FN, op: 'assessment_answers.select', session: session.id }, aErr);
     const answers = new Map((answerRows ?? []).map((r) => [r.question_id as string, r.option_index as number]));
 
     /**
@@ -224,11 +232,13 @@ Deno.serve(async (req: Request) => {
     for (const [qid, idx] of answers) answersByQuestion[qid] = idx;
 
     // ── 问卷(mismatch 高亮、goal_90d 展示要用)──
-    const { data: surveyRow } = await supa
+    const { data: surveyRow, error: surveyErr } = await supa
       .from('assessment_survey')
       .select('responses')
       .eq('session_id', session.id)
       .maybeSingle();
+    // 读不到问卷不该让整份报告失败(那两块退回空)—— 原来连这一行日志都没有,报告悄悄少一块
+    if (surveyErr) console.error(dbLogLine({ fn: FN, op: 'assessment_survey.select', session: session.id }, surveyErr));
     const survey = (surveyRow?.responses ?? {}) as Record<string, unknown>;
 
     // ── 基准线 / 分位:同批次 + 全库结果 ──
@@ -245,7 +255,7 @@ Deno.serve(async (req: Request) => {
         'dim_scores, total, tier, session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
       )
       .eq('session.status', 'completed');
-    if (allErr) throw allErr;
+    if (allErr) dbFail({ fn: FN, op: 'assessment_results.select baseline', session: session.id }, allErr);
 
     /**
      * 【分池交给纯函数,不在这里就地 filter】
@@ -344,7 +354,7 @@ Deno.serve(async (req: Request) => {
       cardTallUrl: await signedObjectUrl(supa, (currentFile?.share_card_tall_path as string | null) ?? null),
     });
   } catch (err) {
-    console.error(`report failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`report failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });

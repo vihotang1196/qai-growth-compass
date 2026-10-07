@@ -15,11 +15,14 @@
  * 那个「停用」就只是停了入口没停人。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { effectiveLang } from '../_shared/lang.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+
+const FN = 'assessment-quiz';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -85,7 +88,7 @@ Deno.serve(async (req: Request) => {
       .select('id, access_revoked_at')
       .eq('id', verified.entitlementId)
       .maybeSingle();
-    if (entError) throw entError;
+    if (entError) dbFail({ fn: FN, op: 'assessment_entitlements.select', entitlement: verified.entitlementId }, entError);
     // 记录被删掉的情况也走这里 —— cookie 还在但准入没了
     if (!ent || ent.access_revoked_at) {
       console.warn(`quiz denied for entitlement ${verified.entitlementId}: revoked or missing`);
@@ -97,7 +100,7 @@ Deno.serve(async (req: Request) => {
       .select('id, profile, status, entitlement:assessment_entitlements(lang)')
       .eq('entitlement_id', ent.id)
       .maybeSingle();
-    if (sessionError) throw sessionError;
+    if (sessionError) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sessionError);
     // session 由 assessment-auth 在首次登录时创建。没有就是状态不一致,不在这里补建 ——
     // 补建会掩盖「登录路径没建成」这个真正的问题
     if (!sessionRow) {
@@ -142,7 +145,7 @@ Deno.serve(async (req: Request) => {
           .from('assessment_sessions')
           .update({ profile: merged })
           .eq('id', session.id);
-        if (error) throw error;
+        if (error) dbFail({ fn: FN, op: 'assessment_sessions.update profile', session: session.id }, error);
 
         return json(await snapshot(supa, { ...session, profile: merged }));
       }
@@ -177,7 +180,7 @@ Deno.serve(async (req: Request) => {
           },
           { onConflict: 'session_id,question_id' },
         );
-        if (error) throw error;
+        if (error) dbFail({ fn: FN, op: 'assessment_answers.upsert', session: session.id }, error);
 
         return json(await snapshot(supa, session));
       }
@@ -186,7 +189,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: 'unknown_action', action }, 400);
     }
   } catch (err) {
-    console.error(`quiz failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`quiz failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });
@@ -204,7 +207,7 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
     .from('assessment_answers')
     .select('question_id, option_index')
     .eq('session_id', session.id);
-  if (error) throw error;
+  if (error) dbFail({ fn: FN, op: 'assessment_answers.select (snapshot)', session: session.id }, error);
 
   const rows = (data ?? []) as { question_id: string; option_index: number }[];
   const answers: Record<string, number> = {};
@@ -226,7 +229,7 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
       .update({ status: 'survey' })
       .eq('id', session.id);
     // 推进失败不该让这次答题失败 —— 答案已经存好了,状态下次请求会再试
-    if (statusError) console.error(`failed to advance session ${session.id}: ${statusError.message}`);
+    if (statusError) console.error(dbLogLine({ fn: FN, op: 'assessment_sessions.update status', session: session.id }, statusError));
     else status = 'survey';
   }
 

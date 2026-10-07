@@ -19,6 +19,9 @@ import { serviceClient } from '../_shared/supa.ts';
 import { canAdvance } from '../_shared/entitlementStatus.ts';
 import { postAuthTarget, targetWithLang, type SessionStatus } from '../_shared/postAuthTarget.ts';
 import { sessionCookieHeader, signSession } from '../_shared/session.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
+
+const FN = 'assessment-auth';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -71,7 +74,8 @@ Deno.serve(async (req: Request) => {
       .select('id, access_revoked_at, first_login_at, status')
       .eq('access_token', token)
       .maybeSingle();
-    if (entError) throw entError;
+    // ctx 里不放 token —— 它是凭证;这一步失败时还不知道是哪个 entitlement
+    if (entError) dbFail({ fn: FN, op: 'assessment_entitlements.select by token' }, entError);
 
     if (!ent || ent.access_revoked_at !== null) {
       // 两种情况回同一个结果。作废的情况记一条日志,便于确认 Admin 的操作生效了
@@ -85,7 +89,7 @@ Deno.serve(async (req: Request) => {
       .select('id, status')
       .eq('entitlement_id', ent.id)
       .maybeSingle();
-    if (sesError) throw sesError;
+    if (sesError) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sesError);
 
     let sessionStatus: SessionStatus | null = null;
     if (existing) {
@@ -107,7 +111,9 @@ Deno.serve(async (req: Request) => {
           .select('status')
           .eq('entitlement_id', ent.id)
           .maybeSingle();
-        if (raceError || !raced) throw insError;
+        // 原来是 `if (raceError || !raced) throw insError` —— 重查自己失败时,真正的原因(raceError)被丢掉
+        if (raceError) dbFail({ fn: FN, op: 'assessment_sessions.select after insert conflict', entitlement: ent.id }, raceError);
+        if (!raced) dbFail({ fn: FN, op: 'assessment_sessions.insert', entitlement: ent.id }, insError);
         sessionStatus = raced.status as SessionStatus;
       } else {
         sessionStatus = 'in_progress';
@@ -126,7 +132,7 @@ Deno.serve(async (req: Request) => {
         .update(patch)
         .eq('id', ent.id);
       // 这一步失败不该挡住登录 —— 它只影响 Admin 看到的时间线
-      if (error) console.error(`failed to stamp first_login_at for ${ent.id}: ${error.message}`);
+      if (error) console.error(dbLogLine({ fn: FN, op: 'assessment_entitlements.update first_login_at', entitlement: ent.id }, error));
     }
 
     const target = postAuthTarget({
@@ -142,7 +148,7 @@ Deno.serve(async (req: Request) => {
       { 'Set-Cookie': sessionCookieHeader(cookie) },
     );
   } catch (err) {
-    console.error(`auth failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`auth failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });

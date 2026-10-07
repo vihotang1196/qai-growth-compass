@@ -12,6 +12,7 @@
  * 【分数一律服务端算】客户端不传任何分数,只传 option_index。见 _shared/scoring.ts。
  */
 import { serviceClient } from '../_shared/supa.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { statusesBefore } from '../_shared/entitlementStatus.ts';
@@ -22,6 +23,8 @@ import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
 import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
 import { effectiveLang } from '../_shared/lang.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+
+const FN = 'assessment-score';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const json = (body: unknown, status = 200) =>
@@ -73,7 +76,7 @@ Deno.serve(async (req: Request) => {
       .select('id, ghl_contact_id, access_revoked_at, lang')
       .eq('id', verified.entitlementId)
       .maybeSingle();
-    if (entError) throw entError;
+    if (entError) dbFail({ fn: FN, op: 'assessment_entitlements.select', entitlement: verified.entitlementId }, entError);
     if (!ent || ent.access_revoked_at) {
       console.warn(`score denied for entitlement ${verified.entitlementId}: revoked or missing`);
       return json({ error: 'revoked' }, 403);
@@ -84,7 +87,7 @@ Deno.serve(async (req: Request) => {
       .select('id, status')
       .eq('entitlement_id', ent.id)
       .maybeSingle();
-    if (sErr) throw sErr;
+    if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sErr);
     if (!sRow) return json({ error: 'no_session' }, 409);
     const session = sRow as SessionRow;
 
@@ -105,7 +108,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: 'unknown_action', action }, 400);
     }
   } catch (err) {
-    console.error(`score failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`score failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });
@@ -190,7 +193,7 @@ async function saveSurvey(
   const { error } = await supa
     .from('assessment_survey')
     .upsert({ session_id: session.id, responses: stored }, { onConflict: 'session_id' });
-  if (error) throw error;
+  if (error) dbFail({ fn: FN, op: 'assessment_survey.upsert', session: session.id }, error);
 
   return json({ ok: true, stored });
 }
@@ -221,14 +224,14 @@ async function finalize(
     .from('assessment_answers')
     .select('question_id, option_index')
     .eq('session_id', session.id);
-  if (aErr) throw aErr;
+  if (aErr) dbFail({ fn: FN, op: 'assessment_answers.select', session: session.id }, aErr);
 
   const { data: sessionRow, error: pErr } = await supa
     .from('assessment_sessions')
     .select('profile')
     .eq('id', session.id)
     .maybeSingle();
-  if (pErr) throw pErr;
+  if (pErr) dbFail({ fn: FN, op: 'assessment_sessions.select profile', session: session.id }, pErr);
 
   const answers = new Map(
     (answerRows ?? []).map((r) => [r.question_id as string, r as { option_index: number }]),
@@ -246,7 +249,7 @@ async function finalize(
     .select('responses')
     .eq('session_id', session.id)
     .maybeSingle();
-  if (svErr) throw svErr;
+  if (svErr) dbFail({ fn: FN, op: 'assessment_survey.select', session: session.id }, svErr);
   if (!surveyRow) return json({ error: 'survey_missing' }, 409);
   const survey = (surveyRow.responses ?? {}) as Record<string, unknown>;
 
@@ -275,7 +278,7 @@ async function finalize(
     result = computeResult(questionInputs, DIMENSIONS, TIERS, { scale: SCALE });
   } catch (err) {
     // computeResult 对越界 option_index / 缺维度会抛 —— 那是数据损坏,不是客户的错
-    console.error(`session ${session.id}: scoring failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`session ${session.id}: scoring failed: ${describeError(err).log}`);
     return json({ error: 'corrupt_answer' }, 500);
   }
 
@@ -291,13 +294,13 @@ async function finalize(
     },
     { onConflict: 'session_id' },
   );
-  if (rErr) throw rErr;
+  if (rErr) dbFail({ fn: FN, op: 'assessment_results.upsert', session: session.id }, rErr);
 
   const { error: stErr } = await supa
     .from('assessment_sessions')
     .update({ status: 'completed', completed_at: new Date().toISOString() })
     .eq('id', session.id);
-  if (stErr) console.error(`failed to mark session ${session.id} completed: ${stErr.message}`);
+  if (stErr) console.error(dbLogLine({ fn: FN, op: 'assessment_sessions.update completed', session: session.id }, stErr));
 
   /**
    * ── entitlement 也要跟着推到 completed ──
@@ -321,7 +324,7 @@ async function finalize(
     .eq('id', entitlementId)
     .in('status', statusesBefore('completed'));
   if (entErr) {
-    console.error(`failed to mark entitlement ${entitlementId} completed: ${entErr.message}`);
+    console.error(dbLogLine({ fn: FN, op: 'assessment_entitlements.update completed', entitlement: entitlementId }, entErr));
   }
 
   // ── GHL 写回(共用 _shared/ghlWriteback,与重试 sweep 同一份实现)──
@@ -369,7 +372,7 @@ async function finalize(
   if (appliedErr) {
     // 读不到就当作没有上次记录 —— 但要说出来:那意味着这一次不会移除任何旧标签
     console.error(
-      `failed to read ghl_tags_applied for ${session.id}: ${appliedErr.message} ` +
+      `${dbLogLine({ fn: FN, op: 'assessment_results.select ghl_tags_applied', session: session.id }, appliedErr)} ` +
         `— stale tags (if any) will not be removed this round`,
     );
   }
@@ -432,7 +435,7 @@ function triggerPdfRender(sessionId: string, lang: string): boolean {
       }
     })
     .catch((err) => {
-      console.error(`PDF render trigger for ${sessionId} threw: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`PDF render trigger for ${sessionId} threw: ${describeError(err).log}`);
     });
 
   const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
