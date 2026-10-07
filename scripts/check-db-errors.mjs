@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 找出「把 supabase-js 返回的 `error` 原样抛出去」的地方。**只报告,不在构建链里。**
+ * 找出「把 supabase-js 返回的 `error` 原样抛出去」的地方。**第十六道门**(2026-10-07 进构建链)。
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * 【它找什么】`const { error } = await supa…` 里的 `error` 是**普通对象**,不是 Error
@@ -22,8 +22,8 @@
  *     那两类见 PROGRESS「PostgrestError 盘点」的清单
  *
  * 【退出码】有命中 → 1;没有 → 0;自检失败 → 2。
- * 现在不在 `build` / `verify` 里:2026-10-07 全量是 49 处,要等课后第 1、2 批迁完,
- * 第 4 批再接进构建链。它先作为**清单**用(判断标准 11 推论三)。
+ * 2026-10-07 先作为**清单**用(判断标准 11 推论三):第一次全量跑报出 49 处;第 1、2 批迁完之后
+ * 降到 0,第 4 批接进 `build`。从此新写一处 `if (error) throw error` 就过不了构建。
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -113,6 +113,6 @@ for (const [file, n] of [...byFile].sort((a, b) => b[1] - a[1])) console.log(`  
 console.log(
   `\n[check-db-errors] ${findings.length} place(s) in ${byFile.size} file(s) throw a supabase-js error as-is ` +
     `(a plain object: no stack, and catch sites log "[object Object]"). Replace with dbFail(ctx, error) ` +
-    `from api/_lib/dbError.ts. Self-test ${selfCases}/${selfCases}. Report only —— not in the build chain yet.`,
+    `from api/_lib/dbError.ts (Deno: supabase/functions/_shared/dbError.ts). Self-test ${selfCases}/${selfCases}.`,
 );
 process.exit(1);
