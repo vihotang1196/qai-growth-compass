@@ -40,7 +40,7 @@
 
 1. **[判断标准](#判断标准--这个项目反复用到的二十一条从第-0-条起)** —— 二十一条(第 0 条排在最前:造检测器先验它抓不抓得到起因)。它们不是格言,是每一条都对应一次真实的返工。
    不读这节,后面很多设计会显得像洁癖。
-2. **[十五道门](#十五道门--每一道都是撞出来的)** —— 构建链上的十五道守卫各自守什么、**因为踩了什么坑才加的**。
+2. **[十六道门](#十六道门--每一道都是撞出来的)** —— 构建链上的十六道守卫各自守什么、**因为踩了什么坑才加的**。
    没有那个背景,下一个人会以为它们可以绕过。
 3. **[状态总览](#状态总览)** + **[当前未完成](#当前未完成)** —— 做到哪、下一步是什么。
 4. 你要动的那个 Stage 自己那一节(文档按时间顺序排,越往后越新)。
@@ -91,6 +91,8 @@
   **第一次真实出错时这样验**:在那条 `[object Object]` 的时间前后 1 分钟内找 Postgres 的 ERROR 行 ——
   找到了就把这句改成【实测】并记下用的过滤条件;找不到就记「这条路不通」,第 1 批的优先级随之上调。
   第 1、2 批迁完之后,函数日志自己就带 message / code / 操作名,这一条可以删。
+  ✅ **2026-10-07 第 1、2 批已上线**:函数日志现在是 `[函数] op=表.操作 entitlement=… session=… failed [kind]: code=… | message=… | details=… | hint=…`(已脱敏)。
+  这一条只对 2026-10-07 之前的日志还有用。
 
 ---
 
@@ -113,7 +115,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`docs/rehearsal-results` 建在 `12a1a9a` 上(彩排结果,2026-10-07)。测试基线:**Node 402 / Deno 220,十五道门全绿**。
+当前分支基线:`docs/db-errors-batches-and-rehearsal2` 建在 `9c01861` 上(PostgrestError 第 1–4 批 + 第二次彩排,2026-10-07)。测试基线:**Node 408 / Deno 220,十六道门全绿**。
 
 
 ---
@@ -171,6 +173,26 @@ Viho 在手机上以学员身份走完全程(测试 entitlement `2d732b39-0e1a-4
 
 冷启动的处理已定:**开课前 10 分钟跑一次 smoke**,见[课前流程](#课前流程每场课)。
 
+### ③ 进行中:英文学员打开链接,界面是中文(2026-10-07 第二次彩排发现)
+
+**现象**:第二次彩排的测试 entitlement `lang = en`,Viho 打开链接后整个界面是中文。
+**成因(只读排查,已确认)**:
+- 所有真实链接都是 `/?t=<token>`,**不带语言**(`_shared/token.ts` 的 `magicLink()`;webhook 响应、`resendLink`、
+  后台重发都走它;GHL 那边 `lang` 只用来选消息模板,不进链接)
+- 前端初始语言 `?lang=` → `localStorage` → `zh`;**登录之后不会切到 `entitlement.lang`** ——
+  `Landing.tsx` 把**浏览器当前的界面语言**发给 auth,auth 原样回传
+- 于是:报告页跟着界面语言(带 `?lang=`,后端让它赢),而出分后自动生成的 PDF 跟着 `entitlement.lang` ——
+  会出现「界面中文、自动 PDF 英文」
+- 换一个全新浏览器也一样(默认 zh),与 Viho 手机里存过什么无关
+
+**影响**:今天 105 条真实 entitlement 全是 `zh`,所以没有英文学员撞上;但反方向会发生
+(一台设备的浏览器存过 `en`,中文学员在上面打开会看到英文)。将来 GHL 只要发来 `lang = en` 的学员,一定会撞上。
+
+**第二次彩排因此中止**:测试 entitlement `37615b18-837e-47b1-93d7-e2e4d7a30796` **保持原样、不再使用**
+(只产生了首登的写入:session 1 行、`first_login_at`、`status` → started;`lang` 仍是 `en`)。
+
+**修法**:A(登录时让 `entitlement.lang` 生效,链接显式带 `?lang=` 时以它为准)—— 进行中。
+
 ### A. 需要一次真实投影(现场当场就能改)
 
 **会场投影距离下的字号够不够。** 只有「在我的屏幕上不难看」被验过;
@@ -226,9 +248,11 @@ S5/S6 的开放回答上有没有可分辨的差别。
   而「已兑现」的 admin 那一处在生产上也丢了 message。
   这是[判断标准 5](#5-读了一半的源码比没读更危险)(只读了 `PostgrestError` 的类定义,没读返回路径)
   与[判断标准 8](#8-从被测对象推导出来的断言验的是代码和自己一致)(fixture 照着那个假设手写)的又一个实例。
-  **现状**:第 0 批已做(2026-10-07);**第 1–4 批课后做,第 1 批里 `login_attempts` 那两处最优先** ——
-  见[盘点](#postgresterror-盘点与第-0-批)
-- **`render-pdf` 状态写入失败时怎么办 —— 待产品决定,课后**。`api/render-pdf.ts` 有 5 处写状态时不看 `error`
+  ~~**现状**:第 0 批已做(2026-10-07);**第 1–4 批课后做,第 1 批里 `login_attempts` 那两处最优先**~~ ——
+  见[盘点](#postgresterror-盘点与第-0-批)。
+  ✅ **2026-10-07 第 1–4 批已全部做完、上线**(Viho 决定提前到课前):49 处 → 0,`check:db-errors` 进构建链。
+  见[第 1–4 批](#postgresterror-第-14-批2026-10-07提前到课前)
+- ✅ ~~**`render-pdf` 状态写入失败时怎么办 —— 待产品决定,课后**~~ **2026-10-07 已定、已上线(第 3 批)**:写 ready 重试最多 3 次,仍失败就回失败;见[第 1–4 批](#postgresterror-第-14-批2026-10-07提前到课前)。原文:`api/render-pdf.ts` 有 5 处写状态时不看 `error`
   (570 / 587 / 656 / 685 / 692);最要紧的是 656:PDF 已上传、状态没写成 `ready` ⇒ 调用方拿到成功,
   sweep 5 分钟后又重渲一次。是第 3 批的前置,见[盘点](#待产品决定render-pdf-写状态失败时怎么办)
 
@@ -1102,21 +1126,21 @@ git branch --no-merged main
 
 ---
 
-# 十五道门 —— 每一道都是撞出来的
+# 十六道门 —— 每一道都是撞出来的
 
-`npm run build` 依次跑这十五道,**纯 Node,所以 Vercel 部署也跑同一条链**。
+`npm run build` 依次跑这十六道,**纯 Node,所以 Vercel 部署也跑同一条链**。
 `npm run verify` 在这之上加需要 deno 的三项。
 
 > **读这一节的目的**:没有「因为什么才加」这一列,这些门看起来像洁癖,
 > 于是下一个人遇到红灯时的第一反应会是绕过它。它们没有一道是预防性的 ——
-> **十五道全部是事后补的**,每一道对应一次已经付出的代价。
+> **十六道全部是事后补的**,每一道对应一次已经付出的代价。
 
-**十五道里有七道是某次真实事故的机械化**:`check:api-imports`(线上
+**十六道里有八道是某次真实事故的机械化**:`check:api-imports`(线上
 `ERR_MODULE_NOT_FOUND` 而四道门全绿)、`check:runtime-pin`(Vercel 默认 Node 从 22 漂到 24)、
 `check:crons`(一个存在且正确、却没人调用的重试函数)、`check:ghl-transport`
 (收口装在函数级,而新出站路径「什么都不做」就绕过了它)、`check:legacy-columns`
 (名单页从嵌套 select 读旧列,而门绿着)、`check:rpc-contract`(webhook 按 10 参调用一个
-还不存在的重载)、`check:proxy-allowlist`(报告页「生成 X 版」按钮在生产上被代理回 404,而十四道门全绿)。再加一道部署 preflight(`db push` / `deploy` 顺序反了)与一个
+还不存在的重载)、`check:proxy-allowlist`(报告页「生成 X 版」按钮在生产上被代理回 404,而十四道门全绿)、`check:db-errors`(生产日志里 49 处数据库错误只剩 `[object Object]`,而 `errorKind` 的测试一直绿着)。再加一道部署 preflight(`db push` / `deploy` 顺序反了)与一个
 pre-commit 钩子(同一个错误四次)。
 
 **所以这些门不是设计出来的,是长出来的** —— 每一道背后都有一个**具体的标本**。
@@ -1181,6 +1205,7 @@ schema 的真相源。所以推得出来,而且不用付上面两项代价。
 | `check:rpc-contract` | 代码 `.rpc(name, {…})` 传的参数,必须与某条迁移里那个函数的**最终签名**逐个对上(两个方向都拦:多传、漏传)| **那次「付款 webhook 差点坏」的机械版本**。`feat/entitlement-warnings` 同时装着「webhook 改成 10 参调用」和「建 10 参重载的迁移」,而那条分支从没被合 —— 两样一起缺、彼此一致,所以系统看起来正常。**救了我们的是那个巧合,不是任何检查**:任一侧单独上线就是「PostgREST 找不到重载 → 500」,而那是付款入口。⚠️ 它只查仓库内部一致性;「迁移在生产库跑过没有」要连库才知道,仍然靠部署顺序 |
 | `check:i18n-parity` | config 里每个 `zh*` 字段都要有对应的 `en*`;内部字段用带理由的兄弟键(`zh_note_i18n`)豁免,理由 ≥8 字符且**每次构建都打印出来** | 英文 PDF 第 5 页出现一行**中文 CTA** —— `offer_routing` 只有 `zh_cta`。那不是漏翻,是**结构上没有 en 的位置**,而 `grep en` 找不到这一类:**那个键根本不存在**。判据因此必须从「按规则应该有哪些」那一侧列举 ——一次扫出 19 处三族,其中 5 处是渲染出来的、14 处是配置内部说明。⚠️ 而它的第一版**恰好漏掉了 offer_routing**(见[第 0 条](#0-造一个检测器时第一条断言是它能抓到那个促使它诞生的东西))|
 | `check:proxy-allowlist` | 前端调用的每个函数都在代理 `api/[...path].ts` 的 `ALLOWED` 里;`ALLOWED` 里的每个函数都在 `supabase/functions/` 下真的存在。前端的调用从 **AST** 推出(注释不算),**helper 自动发现**(函数体里有 `/api/${自己的参数}` 的就是,今天是 `postJson`);静态判定不了的写法**报红**(失败封闭)。`ALLOWED` 有而前端没调的(webhook / cron 那种)不报 | **报告页「生成 X 版 PDF」按钮在生产上的每一次点击都被代理回 404,而十四道门全绿**。代理那张 `ALLOWED` 是手写的覆盖清单,前端从 `e2b7041` 起就在调 `assessment-report-file`,清单没跟上 —— [判断标准 12](#12-覆盖范围是手写的守卫会被代码悄悄长到边界外面--让覆盖由运行时事实驱动) 第九次。按第 0 条先对当时的代码跑:**只报出 `assessment-report-file`** 一处、exit 1;反方向(清单里塞一个不存在的函数)变异也红。盲区写在脚本头部(只扫 `src/`、`new URL()` 这类构造抓不到、只看目录不看是否已部署)|
+| `check:db-errors` | `api/` 与 `supabase/functions/` 里不许把 supabase-js 返回的 `error` 原样 `throw`(解构出来的 `error` 绑定、或 `x.error`);替代是 `dbFail(ctx, error)`。自带自检(先证明抓得到起因的五种形状、放过替代写法),判定不了就不放过 | **supabase-js 的 `error` 是普通对象,不是 Error**:原样抛出 → 没有堆栈、catch 处只记下 `[object Object]`。2026-10-07 盘点出 **49 处**,连「已兑现」的 admin 那一处也丢了 message —— 而 `errorKind` 的测试一直绿,因为 fixture 是手写的 `new Error()`([判断标准 5](#5-读了一半的源码比没读更危险) + [8](#8-从被测对象推导出来的断言验的是代码和自己一致))。先作为清单用,第 1–3 批迁到 0 之后第 4 批进构建链;变异(在 `dbFail` 前面多加一行 `throw error`,让 lint 照样过)→ 构建恰好停在这一道 |
 | `check:bundle` | 在 `dist/` 里 grep secret 名与 GHL 域名,命中即失败 | 只有 `VITE_` 前缀会被 Vite 打进客户端 bundle。**一次手滑加上前缀**,service role key 或 GHL webhook URL 就进了浏览器。这道门让手滑在构建时炸,而不是上线后 |
 
 ### 三处必须知道的细节
@@ -1225,7 +1250,7 @@ Map 的值是**理由字符串**,不是 `true` —— 一个只有名字的白�
 | `check:deno` / `test:deno` / `check:cross` | 需要 deno,而 Vercel 构建环境没有。在 `npm run verify` 里 |
 | `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测。**两类检查、两个退出码**:部署检查失败 exit 1;部署全过、只有 `[配置]` 期望没满足 exit 3(那类的修法在 Dashboard,不是重新部署 —— 分开是为了不让它挡住部署验收,见[上线顺序](#上线顺序))。**2026-10-07 起部署检查 16 条**:学员链路上每个函数都要被碰一次、拿到函数自己的 401(auth、login-request、quiz、score、report、report-file、render-pdf —— 代理漏放行或路由丢了,都只会在那个函数上露出来);外加两条区域检查(Vercel 函数 `::sin1`、Edge Function `ap-southeast-1` —— 区域错了只会变慢、不会报错)。新加的几条在生产已经是绿的,所以按第 0 条用**本地变异**证明它们会红,见[课前流程](#课前流程每场课) |
 | `npm run config:check` | 改 config 时才跑(`config:apply` 会先跑它)。32 项校验,**先校验后落地** |
-| `npm run check:db-errors` | **只报告**:原样 `throw` supabase-js 的 `error`(普通对象)的地方。2026-10-07 全量 **49 处**,所以现在进构建链只会是永远红;课后第 1、2 批迁完,第 4 批再接进 `build`。自带自检(先证明抓得到起因),盲区写在脚本头部。见[盘点](#postgresterror-盘点与第-0-批) |
+| ~~`npm run check:db-errors`~~ | **2026-10-07 起已在构建链里(第十六道门),这一行只留作记录。** 原来:**只报告**:原样 `throw` supabase-js 的 `error`(普通对象)的地方。2026-10-07 全量 **49 处**,所以现在进构建链只会是永远红;课后第 1、2 批迁完,第 4 批再接进 `build`。自带自检(先证明抓得到起因),盲区写在脚本头部。见[盘点](#postgresterror-盘点与第-0-批) |
 
 ⚠️ **已知开着的洞:`verify` 靠人记得跑。** Vercel 只跑 `npm run build`,所以需要 deno 的三项
 **在 CI 上永远不会执行**。当前单人开发够用,**所以现在不做**;触发条件是①加人 ②开始出现漏跑。
@@ -4390,7 +4415,7 @@ Lambda 环境注入、chromium 启动整套再写一遍([判断标准 3](#3-同�
   从码位构造(`String.fromCharCode(0xffe5)`)。
 - **`check:deno`** 拦下了 `assessment-admin` 里那份**自己的** `RosterRow` 类型 ——
   前端那份加了 `share_card_error`,Deno 这份没加。Node 侧 tsc 全绿,只有 deno check 会红。
-  这正是「[verify 靠人记得跑](#十五道门--每一道都是撞出来的)」那个已知洞会漏掉的东西。
+  这正是「[verify 靠人记得跑](#十六道门--每一道都是撞出来的)」那个已知洞会漏掉的东西。
 
 ## 未做 / 未验
 
@@ -5358,7 +5383,7 @@ Node **302** / Deno **159**(+12),八道门全绿。
 而门从 2 道长到 8 道,**它一直停在 0**。没人碰它,因为没有任何东西指向它。
 
 **危险在名字上。** `build:ci` 读起来像「CI 用的那个 build」——
-而 PROGRESS 里[早就写着](#十五道门--每一道都是撞出来的)「加人之后上 GitHub Actions 跑 `npm run verify`」。
+而 PROGRESS 里[早就写着](#十六道门--每一道都是撞出来的)「加人之后上 GitHub Actions 跑 `npm run verify`」。
 那个未来的时刻,一个来配 CI 的人会去找**名字里带 ci 的那个 script** ——
 然后无声地部署一个八道门一道没跑的产物。
 
@@ -7782,7 +7807,7 @@ login-request 出错也回 `sent`;学员报告 payload 不含 `pdf_last_error`�
   2. **脱敏**:`redactText` 先写成原样返回 → 6 条脱敏用例**红**(token / 邮箱 / hex 原样出现在日志里)→ 实现 → 11/11 绿。
      另跑两次定向变异,各自只让对应那一条红:「先截断后脱敏」→ 跨截断点那条红;
      「含数字就当 token」→ 带数字的约束名那条红。每次都逐字还原(`shasum` 一致)。
-- **`scripts/check-db-errors.mjs`(新,只报告)**:49 处 / 11 个文件,自检 9/9。不在构建链里(见[十五道门那张表](#不在构建链上的几项))。
+- **`scripts/check-db-errors.mjs`(新,只报告)**:49 处 / 11 个文件,自检 9/9。不在构建链里(见[十六道门那张表](#不在构建链上的几项);2026-10-07 第 4 批起已在构建链里,是第十六道门)。
 - 测试:Node 390 → **401**,Deno 217 → **220**(收尾补 `+60` 用例后 Node **402**)。
 
 **部署范围**:`errorKind` 唯一的导入方是 `assessment-admin`,`api/` 下没有任何文件导入 `dbError` ⇒
@@ -7801,6 +7826,8 @@ login-request 出错也回 `sent`;学员报告 payload 不含 `pdf_last_error`�
 
 ## 课后的分批与顺序
 
+> ✅ 2026-10-07 已提前到课前做完,结果见[第 1–4 批](#postgresterror-第-14-批2026-10-07提前到课前)。
+
 | 批 | 内容 | 行为变化 | 怎么验 |
 |---|---|---|---|
 | **1** | 学员链路六个函数:27 处 throw、6 个 catch、5 处只打印;D 类补日志(**`login_attempts` 两处最优先**、`report:227`) | 无(只换抛出物与日志) | 类型检查 + `check:db-errors` 计数下降;`Deno.serve` 入口本地无处可测 → 部署后看一次函数日志 |
@@ -7815,6 +7842,8 @@ login-request 出错也回 `sent`;学员报告 payload 不含 `pdf_last_error`�
 失败时也只打印、照常继续:**两道闸都建在一次没人检查结果的写入上。**
 
 ## 待产品决定:render-pdf 写状态失败时怎么办
+
+> ✅ 2026-10-07 已定(Viho):写 ready 短间隔重试最多 3 次,仍失败就记日志并向调用方返回失败;写 rendering / failed 失败只记日志、流程照旧;pdf-sweep 兜底。已上线,见[第 1–4 批](#postgresterror-第-14-批2026-10-07提前到课前)。
 
 `api/render-pdf.ts` 570 / 587 / 656 / 685 / 692 写 `assessment_report_files` 时不看 `error`。
 最要紧的是 **656**:PDF 已经上传,状态没写成 `ready` ⇒ 调用方拿到成功,库里仍是 `rendering`,
@@ -8150,7 +8179,68 @@ Storage 里 2 份 PDF + 4 张分享卡。都在 `is_test` 批次里,统计与导
 
 ---
 
+# PostgrestError 第 1–4 批(2026-10-07,提前到课前)
+
+Viho 决定把原定课后的第 1–4 批提前到课前做。**每一批单独走完一遍**:小分支 → verify → 快进合并 →
+推送 → 只部署受影响的函数(由各函数的本地 import 闭包算出来,不是凭记忆列)→ 对每个刚部署的函数做启动检查 → smoke。
+任何一批不符合预期就停 —— 四批都符合。
+
+| 批 | 提交 | 改了什么 | 测试 | 部署 | 启动检查 | smoke |
+|---|---|---|---|---|---|---|
+| 1 学员链路 | `a843232` | auth / login-request / quiz / score / report / report-file:**27 处** throw → `dbFail`;8 个 catch → `describeError`;6 处只打印 → `dbLogLine`(含 `resendLink` 的 `link_sent_at`);3 处原本吞掉的(`login_attempts` 两次写入、报告页读问卷)补上日志;auth 那处「重查也失败时把 `raceError` 丢掉」顺手修了。新增 `_shared/dbError.ts`(再导出) | 不变(402 / 220)—— 只换抛出物与日志 | **7 个**:六个学员函数 + `assessment-admin`(它也打包 `resendLink`) | 7 / 7 回自己的 405 / 200 / 401 | 16/16 + 1/1,exit 0 |
+| 2 后台、定时、写回 | `5bb89c4` | admin **14** / ghl-webhook **3** / ghl-resync **3** / maintenance **1** / pdf-sweep **1** 处 throw → `dbFail`;4 个 catch;写回三件 + `testCohort` 的 8 处只打印 → `dbLogLine`;两处吞掉的 `ghl_sync_attempts` 读补上日志;`getFieldMap` 读失败仍然抛,但改成 `DbError`(原来包成 `new Error(message)` 丢了 code / hint);`deno.json` 加 `dbError.js` 的重映射(`testCohort` 在 Deno 侧要用) | 改了 1 条断言(`ghlFieldMap_test` 原来钉着旧措辞,改成钉操作名 + 底层原因,更严) | **6 个**:admin、resync、webhook、maintenance、score(打包写回模块)、login-request(经 `resendLink` → `testCohort`);Vercel 那边 push 即部署(pdf-sweep) | 6 / 6 回自己的 401 / 405(webhook / resync / maintenance 直连 Supabase,在验密钥那一步就回) | 16/16 + 1/1,exit 0 |
+| 3 render-pdf | `6528394` | 5 处原本吞掉的读写:两次读、写 rendering、写 failed → 记日志,流程照旧;**写 ready → 短间隔重试最多 3 次,仍失败就回 500 `status_write_failed`**(原来写不进去也回 200 ok)。逻辑抽到 `api/_lib/statusWrite.ts` | **+6**(Node 402 → 408),先红后绿,见下 | 只有 Vercel(render-pdf);没有 Supabase 函数受影响 | render-pdf 无密钥 → 401,`sin1::sin1` | 16/16 + 1/1,exit 0 |
+| 4 门进构建链 | `9c01861` | `check:db-errors` 进 `build`(**第十六道门**) | 不变(408 / 220) | 只有 Vercel(构建链变了;Vercel 的构建跑过了这道新门) | —(没有函数代码变化) | 16/16 + 1/1,exit 0 |
+
+`check:db-errors` 的计数:**49 → 22(第 1 批后)→ 0(第 2 批后)**。
+
+## 两个决定与理由
+
+**① `login_attempts` 的两次写入、`link_sent_at` 的写入:失败时记日志、照常继续(fail-open)。**
+限流读的是 `login_attempts`,每人 60 秒的重发冷却读的是 `link_sent_at` —— 写失败等于这一次没被计数 / 没开始冷却。
+仍然放行,理由:**攻击者没法主动让这些写入失败**(它们只会在数据库自己出问题时失败);
+而 fail-closed 会在数据库抖动时把正常学员挡在门外 —— 那恰恰是开课时最可能撞上的时刻。
+代价(那段时间限流 / 冷却不计数)现在至少看得见:`dbLogLine` 那一行。原来是彻底无声。决定与理由同时写在代码注释里
+(`assessment-login-request` 文件头、`_shared/resendLink.ts` 那一行上方)。
+
+**② render-pdf 写状态失败时怎么办。** 写 ready:短间隔(250 ms)重试最多 3 次;仍失败就记日志,
+**向调用方返回 500 `status_write_failed`,不再报成功**(说明是固定措辞,不带数据库原文)。
+那一行停在 `rendering`;pdf-sweep 看到它陈旧(5 分钟)会重渲一次 —— 兜底在那里。写 rendering / failed 失败:记日志,流程照旧。
+
+三个调用方收到这个失败时分别怎样:
+
+| 调用方 | 怎么调 | 收到 500 时 | 学员 / 管理员看到的 |
+|---|---|---|---|
+| `assessment-score`(出分后) | 后台触发(`EdgeRuntime.waitUntil`),不等结果 | 只记一行 `PDF render trigger … returned 500` | 出分不受影响;报告页的 PDF 显示「生成中」(那一行是 `rendering` ⇒ `working`),直到 sweep 重渲成功 |
+| `assessment-report-file`(「生成 X 版」按钮) | 同步等 render-pdf | 记日志,回 502 `{status:'failed', lang, upstream:500}` | 按钮显示失败;再点 ⇒ 那一行是 `rendering` ⇒ 回 `working`、不重复触发。**原来**这里会回「ready」,而报告页拿不到下载链接 |
+| `pdf-sweep`(每 10 分钟) | 逐行同步调 | 记一行 `returned 500`,继续下一行;下一轮那一行仍陈旧就再试(次数没用完的话) | — |
+| Admin「重新生成 PDF」 | 同步等 | 原样透传 `{ok:false, status:500, detail}` | 管理员看到那句固定说明 |
+
+最坏情况:写 ready 连着失败、sweep 也撞上同样的数据库问题 —— 那一行的 `pdf_attempts` 会用完,进 `failed_permanent`,等 Admin 重置。
+
+## 第 3 批的先红后绿
+
+`api/_lib/statusWrite.ts` 先按**旧行为**写(只写一次、不看 error、一律 200)→ 6 条新用例里 **4 条红**:
+「一直写不进去要试满 3 次并报失败」「第二次成功就停」「写的那一下自己抛了也算失败并重试」「写 ready 失败回 500,绝不是 200」;
+另 2 条(第一次就成功、成功时原样透传)本来就是旧行为,绿 —— 正好说明红的那 4 条是行为变化而不是测试写坏了。
+实现之后 6/6 绿。用例里的 error 用的是 supabase-js 的真形状(普通对象)。
+
+## 第 4 批的先红后绿
+
+第一次变异(把 maintenance 那处 `dbFail` 改回 `if (error) throw error`)**没证明任何东西**:构建停在了 `eslint .` ——
+`dbFail` 的 import 变成没人用了,lint 先红,根本没走到 `check:db-errors`([判断标准 1 推论五](#1-一道没见过它变红的门不值钱):变异要真的走到被测的那一道)。
+改成**在 `dbFail` 前面多加一行** `if (error) throw error;`(`dbFail` 仍在用,lint 照过)→ `npm run build` 走过前面所有门、
+**恰好停在 `check:db-errors`**,报 `assessment-maintenance/index.ts:55`,`tsc -b` 没有跑。逐字还原(`shasum` 一致)。
+
+---
+
 ## 变更日志
+
+- 2026-10-07 — **[PostgrestError 第 1–4 批](#postgresterror-第-14-批2026-10-07提前到课前)(提前到课前)**:
+  49 处 → 0;第 1 批部署 7 个函数、第 2 批 6 个,第 3 批只有 Vercel(render-pdf 写 ready 重试 3 次、仍失败回 500),
+  第 4 批 `check:db-errors` 进构建链(**第十六道门**)。每批 smoke 16/16 + 1/1、exit 0。两个决定(fail-open、写 ready 的规矩)写在那一节。
+  **第二次彩排中止**:发现英文学员打开链接界面是中文,登记为[当前未完成 ③](#③-进行中英文学员打开链接界面是中文2026-10-07-第二次彩排发现),
+  测试 entitlement `37615b18-…` 保持原样、不再使用
 
 - 2026-10-07 — **[彩排](#彩排结果2026-10-07)**:Viho 在手机上以学员身份走完全程,没有报错。
   测试 entitlement `2d732b39-0e1a-4d5d-ba82-0b3aa73921cb`(经 webhook 同一个 RPC 建,带 `seed-test-` 前缀,数据保留)。
@@ -8426,7 +8516,7 @@ Storage 里 2 份 PDF + 4 张分享卡。都在 `is_test` 批次里,统计与导
   `_shared/entitlementStatus.ts` 两处共用,「只往前走」交给 `.in()` 过滤而不是先读后写;
   7 条新用例经两次变异反向验证。**未部署、历史行未回填**
 
-- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的二十一条从第-0-条起)」七条(每条附它对应的那次返工)②「[七道门](#十五道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
+- 2026-08-07 — **交接整理**:补上四类只活在对话里的东西 —— ①「[判断标准](#判断标准--这个项目反复用到的二十一条从第-0-条起)」七条(每条附它对应的那次返工)②「[七道门](#十六道门--每一道都是撞出来的)」合并成一节,每道门写明**因为撞了什么才加**③ 状态总览按实际进度更正(4/5/6 原本还写着「未开始」,Stage 6 是 15 题不是 24 题)④ 新增「[当前未完成](#当前未完成)」,含已确认未修的 `assessment_entitlements.status` bug
 - 2026-07-31 — rev1 初稿
 - 2026-07-31 — rev2:PDF 异步化 + Storage;字体 CDN 化;GHL Inbound Webhook 替代 workflow ID;环境变量改名与新增;D1–D5 批准;新增 D6/D7
 - 2026-07-31 — rev4 **Stage 0 定稿**:「8 张表」约束解除,D8 采用第 9 张 `app_settings` 表;D9 定稿(标签独立于字段写入、TRANSIENT/CONFIG/AUTH 三类错误分流、错误具体到字段 key);字体源文件位置与 `.gitignore` 规则确定;0.12 字段清单标记作废(实际前缀为 `qai_assessment_*`);`assessment-config.json` 第三次未送达
