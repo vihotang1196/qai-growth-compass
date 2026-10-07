@@ -105,7 +105,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `23d3211` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
+当前分支基线:`main` = `048d13b` + 一个只改 PROGRESS 的 docs 提交(`feat/admin-login-neutral` 已于 2026-10-07 fast-forward 合入)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
 
 
 ---
@@ -124,16 +124,19 @@
 
 ### ⓪ 现在就能做的:线上 Auth,四步,顺序不能反(2026-10-07 加)
 
-生产开着自助注册(【实测】`disable_signup=false`),任何人都能建 `auth.users` 行、
-让我们的发件身份发信。代码侧(AdminLogin 不建用户、不显示原文)已随 `feat/admin-login-neutral` 合进 main。
+生产**原先**开着自助注册,任何人都能建 `auth.users` 行、让我们的发件身份发信。
+**2026-10-07 已关**(【实测】smoke `disable_signup=true`)。前三步做完,**只剩第 4 步**。
 
 1. ✅ **前端上线**(那条分支合进 main)→ `npm run smoke`:部署检查全过,`[配置]` 那条**红**、exit 3
    —— **2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3
-2. **你在 Dashboard 关掉「Allow new users to sign up」**
-3. **smoke 的 `[配置]` 那条转绿**、exit 0
-4. **接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后)
+2. ✅ **你在 Dashboard 关掉「Allow new users to sign up」** —— **2026-10-07 完成**。
+   ⚠️ 前三次操作没有生效,是 smoke 拦下来的([经过](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来))
+3. ✅ **smoke 的 `[配置]` 那条转绿**、exit 0 —— **2026-10-07 完成**:部署检查 9/9、配置期望 1/1、exit 0
+4. **⬅ 下一步:接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后,现在可以做了)
 
-为什么不能反、每一步的判据、以及 14 项待你在 Dashboard 确认的值(第 3、10 行已填,第 12 行填了一半):[线上 Auth 配置](#线上-auth-配置)。
+**仍待 Viho 决定**:03:33 UTC 那个名单外用户怎么处理(目前没删;见[实测值](#auth-实测值)与待确认第 13 行)。
+
+为什么不能反、每一步的判据、以及 14 项待你在 Dashboard 确认的值(第 3、10、12 行已填):[线上 Auth 配置](#线上-auth-配置)。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -7352,8 +7355,8 @@ Node 370 / Deno 217,十四道门全绿。
 
 | 项 | 值 | 怎么测的 | 日期 |
 |---|---|---|---|
-| `disable_signup` | **`false`** —— 自助注册开着。⚠️ 目标是 `true`,见[上线顺序](#上线顺序) | `GET /auth/v1/settings`,publishable key 取自线上 bundle。smoke 的 `[配置]` 那一项就是它 | 2026-10-07 |
-| `mailer_autoconfirm` | `false`(即「Confirm email」开着) | 同上 | 2026-10-07 |
+| `disable_signup` | **`true`** —— 自助注册已关(同日早些时候是 `false`;[上线顺序](#上线顺序)第 ② 步) | **smoke** 的 `[配置]` 那一项(06:57:55 UTC,1/1、exit 0);06:59:03 UTC 直接 `GET /auth/v1/settings` 再读一次,`cf-cache-status: DYNAMIC`(不是缓存) | 2026-10-07 |
+| `mailer_autoconfirm` | `false`(即「Confirm email」**开着**;关注册之后仍开着) | 06:59:03 UTC 同一次 `GET /auth/v1/settings`;Viho 刷新后的 Dashboard 也是开 | 2026-10-07 |
 | 开着的登录方式 | 只有 email(`external` 里只有 `email: true`) | 同上 | 2026-10-07 |
 | `flowType` | `pkce` | 线上 bundle 里有 `flowType:"pkce"`;源码 `src/lib/supabase.ts` | 2026-10-07 |
 | redirectTo | `${window.location.origin}/admin` | 线上 bundle 里有 `emailRedirectTo`;源码 `AdminLogin.tsx` | 2026-10-07 |
@@ -7385,7 +7388,7 @@ Node 370 / Deno 217,十四道门全绿。
 | 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
 | 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
-| 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。**Deployment Protection 是否开启:待 Viho 确认**(这一半没填完)。来源:Viho 的 Vercel 截图 | 2026-10-07 |
+| 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。但有 **Vercel Authentication(Standard Protection)** 保护:预览部署要登录 Vercel 团队账号才能访问,正式域名公开 ⇒ **只有团队成员能访问 Preview**。**已确认**。来源:Viho 的 Vercel 截图 | 2026-10-07 |
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | | |
 | 14 | `default` 那把 publishable key(结尾 `Cd4x`)的用途 —— 网站不用它;删不删等第一场课后,删之前先确认没有别的东西在用它 | Project Settings → API Keys | | |
 
@@ -7402,6 +7405,14 @@ Node 370 / Deno 217,十四道门全绿。
   而 CLI 的 `config` 只有 `push` 一个子命令,没有只读 diff【实测 help】。
 - 改 Auth 配置走 Dashboard,改完回[上面](#auth-实测值)写值和日期。
 - `config.toml` 头注释里也写了这一条 —— 那是准备跑它的人会看的地方。
+
+### 在 Dashboard 改设置:以「刷新后的状态 + smoke 结果」为准,不以保存提示为准
+
+- 页面上的「Successfully updated settings」**不算数** —— 2026-10-07 关注册时它出现过一次,
+  而开关并没有变([经过](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来))。
+- 算数的是两样,**两样都要**:① 刷新页面之后开关的状态;② smoke 的结果
+  (或直接 `GET /auth/v1/settings` 读回来的值)。两者冲突时以 ② 为准 —— 它读的是服务端实际生效的值。
+- 改完回[实测值](#auth-实测值)写值、日期,以及**是怎么读到的**。
 
 ### 跑 smoke 用哪把 key、怎么判断「改了变量没重新构建」
 
@@ -7453,9 +7464,9 @@ Node 370 / Deno 217,十四道门全绿。
 | 步 | 动作 | 谁 | 完成的判据 |
 |---|---|---|---|
 | ① ✅ | 前端上线(`feat/admin-login-neutral` 合进 main = Vercel 部署) | Viho | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base https://compass.qiai.tech`:「部署检查」全过,`[配置]` 那条**红**,**exit 3**。**2026-10-07 完成**:部署检查 9/9、`[配置]` 红、exit 3(key 用的是[那条规则](#跑-smoke-用哪把-key怎么判断改了变量没重新构建)里注明结尾的那一把) |
-| ② | Dashboard 关掉「Allow new users to sign up」 | Viho | — |
-| ③ | smoke 的 `[配置]` 那条转绿 | — | **exit 0** —— 这是那一项**第一次真实的绿**,之前只有变异让它绿过 |
-| ④ | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行 |
+| ② ✅ | Dashboard 关掉「Allow new users to sign up」 | Viho | **2026-10-07 完成**。关之前先在生产 `/admin` 用一个陌生邮箱提交:页面**只出现中性提示**、60 秒倒计时正常;Dashboard → Users **仍是 2 人** —— 注册还开着时陌生邮箱没被建成用户,即 `shouldCreateUser: false` 在生产上成立。⚠️ 前三次操作没生效,[见下](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来) |
+| ③ ✅ | smoke 的 `[配置]` 那条转绿 | — | **exit 0** —— 这是那一项**第一次真实的绿**,之前只有变异让它绿过。**2026-10-07 06:57:55 UTC 完成**:部署检查 9/9、配置期望 1/1、exit 0 |
+| ④ ⬅ 下一步 | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行 |
 
 **为什么不能反:**
 
@@ -7469,6 +7480,33 @@ Node 370 / Deno 217,十四道门全绿。
 所以它单独计 **exit 3** —— ①看「部署检查」那一行;`[配置]` 那条照样红、照样非零,直到②做完。
 ⚠️ 跑 smoke 时**要带** `SUPABASE_PUBLISHABLE_KEY`,否则 key 一致性那条按原设计报 unverified、exit 1。
 带哪一把见[那条规则](#跑-smoke-用哪把-key怎么判断改了变量没重新构建) —— 项目里有两把有效的,复制错了同样 exit 1。
+
+### 关注册那一步的经过:Dashboard 前三次没有生效,smoke 拦了下来
+
+**这是 `[配置]` 这道检查第一次拦下真实问题** —— 而它拦下的不是代码,是一次 Dashboard 操作。
+
+Viho 的说法(2026-10-07):前两次没有完成操作;**第三次页面提示了「Successfully updated settings」,
+但刷新后开关仍是开的**;第四次刷新后确认为关。
+
+服务端一侧(`/auth/v1/settings` 的 `disable_signup`,时间都是 UTC):
+
+| 时间 | 怎么读的 | 值 |
+|---|---|---|
+| ≈06:32 | smoke | `false`,exit 3 |
+| 06:34:17 | smoke | `false`,exit 3 |
+| 06:37:03 | smoke | `false`,exit 3 |
+| 06:37:23 | 直接 GET,`cf-cache-status: DYNAMIC`(排除缓存) | `false` |
+| 06:42:15 | smoke | `false`,exit 3 |
+| 06:51:10 | smoke | `false`,exit 3 |
+| 06:54:19 | smoke | `false`,exit 3 |
+| **06:57:55** | smoke | **`true`,exit 0** |
+| 06:59:03 | 直接 GET,`DYNAMIC` | `true` |
+
+- **保存提示是 Dashboard 决定给你看的,服务端读回来的值才是发生了什么** ——
+  与[判断标准 14 推论五](#14-有直接观测可用时先观测再推理)同形(响应 vs 日志),只是这次的「响应」是一条 toast。
+- 没有这一项的话,第 ③ 步会凭 Dashboard 的样子打勾,而那期间自助注册一直开着。
+  它能拦下来,靠的是**单独计 exit 3**:部署检查照样全绿,只有这一项一直红着、一直不让人往下走。
+- 由此立了[一条规则](#在-dashboard-改设置以刷新后的状态--smoke-结果为准不以保存提示为准)。
 
 ---
 
@@ -7579,6 +7617,17 @@ Node 390 / Deno 217,十四道门全绿。
 ---
 
 ## 变更日志
+
+- 2026-10-07 — **[上线顺序](#上线顺序) ②③ 完成:自助注册已关,smoke 9/9 + 1/1、exit 0**。
+  `[配置]` 第一次真实的绿,也是**第一次拦下真实问题**:Dashboard 前三次操作没有生效
+  (第三次还出现了「Successfully updated settings」),服务端连续 7 次读到 `false`(6 次 smoke + 1 次直接 GET),
+  第四次刷新后确认关闭,06:57:55 UTC 才转绿([经过](#关注册那一步的经过dashboard-前三次没有生效smoke-拦了下来))。
+  新增[规则](#在-dashboard-改设置以刷新后的状态--smoke-结果为准不以保存提示为准):
+  以「刷新后的状态 + smoke 结果」为准,不以保存提示为准。
+  关之前的浏览器验证:陌生邮箱只出现中性提示、Users 仍 2 人。
+  `disable_signup` 实测值改 `true`、「Confirm email」仍开;待确认第 12 行补全
+  (Preview 有 Vercel Authentication / Standard Protection,只有团队成员能访问)。
+  下一步:④ 接自定义 SMTP;03:33 那个用户的处理仍待 Viho 决定
 
 - 2026-10-07 — **[上线顺序](#上线顺序) ① 完成:smoke 部署检查 9/9、`[配置]` 红、exit 3**。
   `feat/admin-login-neutral` fast-forward 合进 main(`23d3211`);部署以 bundle 里出现
