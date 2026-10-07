@@ -16,6 +16,7 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
+import { guardSessionWrite } from '../_shared/sessionGuard.ts';
 import { effectiveLang } from '../_shared/lang.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
@@ -115,6 +116,16 @@ Deno.serve(async (req: Request) => {
     const session = sessionRow as unknown as SessionRow;
 
     const action = typeof body.action === 'string' ? body.action : '';
+
+    /**
+     * 【写入之前先过守卫】见 api/_lib/sessionGuard.ts:页面属于别的 session(或没带 session_id)
+     * → 409 session_changed;session 已完成 → 409 already_completed。两种都什么都不写。
+     * bootstrap 是读,不过守卫 —— 页面正是靠它拿到自己的 session_id。
+     */
+    if (action === 'profile' || action === 'answer') {
+      const guard = guardSessionWrite(session, body.session_id);
+      if (!guard.ok) return json({ error: guard.error }, 409);
+    }
 
     switch (action) {
       case 'bootstrap':
@@ -237,5 +248,6 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
    * 【payload 的键名仍叫 `locale`,值换成了这个人的 lang】
    * 键名不改是为了不牵动前端;而值的来源换了 —— 那才是这次要修的东西。
    */
-  return { locale: effectiveLang(session.entitlement?.lang), profile, answers, status, complete };
+  // sessionId:页面之后的每次写入都带上它,服务端据此拦下「属于别的 session 的旧页面」
+  return { locale: effectiveLang(session.entitlement?.lang), profile, answers, status, complete, sessionId: session.id };
 }

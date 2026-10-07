@@ -13,6 +13,7 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
+import { guardSessionWrite } from '../_shared/sessionGuard.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { statusesBefore } from '../_shared/entitlementStatus.ts';
@@ -92,6 +93,15 @@ Deno.serve(async (req: Request) => {
     const session = sRow as SessionRow;
 
     const action = typeof body.action === 'string' ? body.action : '';
+
+    /**
+     * 【写入之前先过守卫】见 api/_lib/sessionGuard.ts。问卷与出分都是写入:
+     * 已完成的 session 再出分会改写结果、重渲 PDF、重写 GHL 字段与标签 —— 一律 409,什么都不写。
+     */
+    if (action === 'survey' || action === 'finalize') {
+      const guard = guardSessionWrite(session, body.session_id);
+      if (!guard.ok) return json({ error: guard.error }, 409);
+    }
 
     switch (action) {
       case 'survey':

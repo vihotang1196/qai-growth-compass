@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import config from '@/config/assessment-config.json';
 import {
@@ -12,7 +12,9 @@ import {
   Textarea,
 } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
-import { QuizAuthError } from '@/lib/quizApi';
+import { quizApi, QuizAuthError } from '@/lib/quizApi';
+import { routeForStatus, SessionGuardError, type GuardError } from '@/lib/sessionFlow';
+import { rerouteToCurrentSession } from '@/lib/sessionReroute';
 import { SurveyValidationError, surveyApi } from '@/lib/surveyApi';
 
 const SURVEY = config.survey_questions;
@@ -41,9 +43,52 @@ export default function Survey() {
   /** 服务端指名的那一题 —— 用来把客户直接送回那一屏 */
   const [badQuestion, setBadQuestion] = useState<string | null>(null);
 
+  /** 这个页面加载时属于哪个 session —— 问卷与出分都带上,见 api/_lib/sessionGuard.ts */
+  const sessionIdRef = useRef<string | null>(null);
+  /** 写入守卫回了 session_changed:这个页面已过期,正在按当前登录重新分流 */
+  const [pageExpired, setPageExpired] = useState(false);
+
   const onAuthLost = useCallback(() => {
     navigate(`/expired?lang=${locale}`, { replace: true });
   }, [navigate, locale]);
+
+  /** 写入被守卫拦下:已完成 → 去报告页;页面属于别的 session → 提示后整页重新分流 */
+  const onGuard = useCallback(
+    (kind: GuardError) => {
+      if (kind === 'already_completed') {
+        navigate(routeForStatus('completed', locale), { replace: true });
+        return;
+      }
+      setPageExpired(true);
+      window.setTimeout(() => void rerouteToCurrentSession(locale), 1500);
+    },
+    [navigate, locale],
+  );
+
+  /**
+   * 进来先认一次 session(问卷页原来什么都不读):
+   * 已经交卷了就直接去报告页 —— 否则再交一次会重新出分、改写结果、重渲 PDF。
+   */
+  useEffect(() => {
+    let alive = true;
+    void quizApi
+      .bootstrap()
+      .then((snap) => {
+        if (!alive) return;
+        if (snap.status === 'completed') {
+          navigate(routeForStatus('completed', locale), { replace: true });
+          return;
+        }
+        sessionIdRef.current = snap.sessionId;
+      })
+      .catch((err) => {
+        if (alive && err instanceof QuizAuthError) onAuthLost();
+        // 其余失败先不拦:提交时会再取一次
+      });
+    return () => {
+      alive = false;
+    };
+  }, [navigate, locale, onAuthLost]);
 
   const q = SURVEY[index];
   const copy = locale === 'en' ? q.en : q.zh;
@@ -80,11 +125,14 @@ export default function Survey() {
         if (v === '' || (Array.isArray(v) && v.length === 0)) continue;
         payload[id] = v;
       }
-      await surveyApi.save(payload);
-      await surveyApi.finalize();
+      // 进页面时那次没取到(网络慢 / 失败)就现取一次 —— 没有 session_id 的写入会被当成旧页面拦下
+      const sessionId = sessionIdRef.current ?? (await quizApi.bootstrap()).sessionId;
+      await surveyApi.save(payload, sessionId);
+      await surveyApi.finalize(sessionId);
       navigate(`/report?lang=${locale}`, { replace: true });
     } catch (err) {
       if (err instanceof QuizAuthError) return onAuthLost();
+      if (err instanceof SessionGuardError) return onGuard(err.kind);
       if (err instanceof SurveyValidationError) {
         if (err.code === 'incomplete') {
           // 测评题没答满 —— 问卷已经存住了,回去补完再回来不用重填
@@ -107,6 +155,20 @@ export default function Survey() {
     } finally {
       setPending(false);
     }
+  }
+
+  if (pageExpired) {
+    return (
+      <main className="min-h-screen bg-muted p-4 md:p-8">
+        <div className="mx-auto max-w-2xl">
+          <Card tone="accent" padding="md">
+            <CardBody className="font-body">
+              <p>{tk('session.changed')}</p>
+            </CardBody>
+          </Card>
+        </div>
+      </main>
+    );
   }
 
   return (

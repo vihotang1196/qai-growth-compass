@@ -5,6 +5,8 @@ import { Badge, Button, Card, CardBody, Progress, RadioCard, RadioGroup } from '
 import { useT } from '@/lib/i18n';
 import { nextStep, progress } from '@/lib/quizFlow';
 import { quizApi, QuizAuthError, type QuizSnapshot } from '@/lib/quizApi';
+import { routeForStatus, SessionGuardError, type GuardError } from '@/lib/sessionFlow';
+import { rerouteToCurrentSession } from '@/lib/sessionReroute';
 
 const PROFILE = config.profile_questions;
 const QUESTIONS = config.questions;
@@ -45,10 +47,27 @@ export default function Quiz() {
   const [submitNote, setSubmitNote] = useState<string | null>(null);
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  /** 这个页面加载时属于哪个 session —— 每次写入都带上,见 api/_lib/sessionGuard.ts */
+  const sessionIdRef = useRef<string | null>(null);
+  /** 写入守卫回了 session_changed:这个页面已过期,正在按当前登录重新分流 */
+  const [pageExpired, setPageExpired] = useState(false);
 
   const onAuthLost = useCallback(() => {
     navigate(`/expired?lang=${locale}`, { replace: true });
   }, [navigate, locale]);
+
+  /** 写入被守卫拦下:已完成 → 去报告页;页面属于别的 session → 提示后整页重新分流 */
+  const onGuard = useCallback(
+    (kind: GuardError) => {
+      if (kind === 'already_completed') {
+        navigate(routeForStatus('completed', locale), { replace: true });
+        return;
+      }
+      setPageExpired(true);
+      window.setTimeout(() => void rerouteToCurrentSession(locale), 1500);
+    },
+    [navigate, locale],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -56,6 +75,12 @@ export default function Quiz() {
       .bootstrap()
       .then((s) => {
         if (!alive) return;
+        // 已经交卷了:不再显示题目(否则改一个选项就会写进一份已完成的测评)
+        if (s.status === 'completed') {
+          navigate(routeForStatus('completed', locale), { replace: true });
+          return;
+        }
+        sessionIdRef.current = s.sessionId;
         setSnapshot(s);
         // 回填服务端已有的答案,并标记为已保存
         const merged = { ...s.profile, ...s.answers };
@@ -70,7 +95,7 @@ export default function Quiz() {
     return () => {
       alive = false;
     };
-  }, [onAuthLost]);
+  }, [onAuthLost, navigate, locale]);
 
   const answeredSet = useMemo(() => new Set(Object.keys(answers)), [answers]);
   const bar = useMemo(() => progress(PROFILE_IDS, QUESTION_IDS, answeredSet), [answeredSet]);
@@ -90,12 +115,16 @@ export default function Quiz() {
     setSaveState((prev) => ({ ...prev, [id]: 'saving' }));
     setSubmitNote(null);
 
+    const sessionId = sessionIdRef.current ?? '';
     const call =
-      kind === 'profile' ? quizApi.saveProfile(id, optionIndex) : quizApi.saveAnswer(id, optionIndex);
+      kind === 'profile'
+        ? quizApi.saveProfile(id, optionIndex, sessionId)
+        : quizApi.saveAnswer(id, optionIndex, sessionId);
     void call
       .then(() => setSaveState((prev) => ({ ...prev, [id]: 'saved' })))
       .catch((err) => {
         if (err instanceof QuizAuthError) return onAuthLost();
+        if (err instanceof SessionGuardError) return onGuard(err.kind);
         // 不回滚本地选择 —— 客户看得见自己选了什么,再点一下即重试
         setSaveState((prev) => ({ ...prev, [id]: 'error' }));
       });
@@ -133,6 +162,18 @@ export default function Quiz() {
       return;
     }
     navigate(`/survey?lang=${locale}`, { replace: true });
+  }
+
+  if (pageExpired) {
+    return (
+      <Shell>
+        <Card tone="accent" padding="md">
+          <CardBody className="font-body">
+            <p>{tk('session.changed')}</p>
+          </CardBody>
+        </Card>
+      </Shell>
+    );
   }
 
   if (loadError) {

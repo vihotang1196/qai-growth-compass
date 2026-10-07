@@ -5,6 +5,8 @@
  * 只回增量的话,一次响应丢失(移动网络下很常见)就会让客户端的已答集合与库里不一致,
  * 表现是「答过的题又出现一次」或者「跳过了一题」—— 后者正是我们花力气防的静默错误。
  */
+import { guardErrorOf, SessionGuardError } from '@/lib/sessionFlow';
+
 export interface QuizSnapshot {
   locale: 'zh' | 'en';
   /** 背景题:id → 选项下标 */
@@ -13,6 +15,8 @@ export interface QuizSnapshot {
   answers: Record<string, number>;
   status: 'in_progress' | 'survey' | 'completed';
   complete: boolean;
+  /** cookie 当前所属的 session。之后每次写入都带上它 —— 见 api/_lib/sessionGuard.ts */
+  sessionId: string;
 }
 
 export class QuizAuthError extends Error {
@@ -42,6 +46,8 @@ async function post<T>(action: string, args: Record<string, unknown> = {}): Prom
     throw new Error(`non-JSON response from quiz (${res.status})`);
   }
   if (!res.ok) {
+    const guard = guardErrorOf(res.status, parsed);
+    if (guard) throw new SessionGuardError(guard);
     throw new Error((parsed as { error?: string } | null)?.error ?? `quiz failed (${res.status})`);
   }
   return parsed as T;
@@ -49,8 +55,8 @@ async function post<T>(action: string, args: Record<string, unknown> = {}): Prom
 
 export const quizApi = {
   bootstrap: () => post<QuizSnapshot>('bootstrap'),
-  saveProfile: (id: string, optionIndex: number) =>
-    post<QuizSnapshot>('profile', { answers: { [id]: optionIndex } }),
-  saveAnswer: (questionId: string, optionIndex: number) =>
-    post<QuizSnapshot>('answer', { question_id: questionId, option_index: optionIndex }),
+  saveProfile: (id: string, optionIndex: number, sessionId: string) =>
+    post<QuizSnapshot>('profile', { answers: { [id]: optionIndex }, session_id: sessionId }),
+  saveAnswer: (questionId: string, optionIndex: number, sessionId: string) =>
+    post<QuizSnapshot>('answer', { question_id: questionId, option_index: optionIndex, session_id: sessionId }),
 };

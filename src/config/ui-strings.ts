@@ -90,6 +90,11 @@ export const UI_STRINGS = {
     zh: '还有答案在保存,稍等一两秒再提交。',
     en: 'Some answers are still saving — try again in a second.',
   },
+  /** 写入守卫回 session_changed 时:这个页面属于另一份测评(这台设备上换了登录)。见 api/_lib/sessionGuard.ts */
+  'session.changed': {
+    zh: '这个页面已经过期:这台设备上登录的是另一份测评。正在为你重新打开……',
+    en: 'This page is out of date — this device is now signed in to a different assessment. Reopening it for you…',
+  },
   'quiz.someFailed': {
     zh: '有 {n} 题没保存成功,已定位到第一题,重选一下就会重试。',
     en: '{n} answer(s) failed to save — jumped you to the first; re-pick to retry.',
