@@ -171,6 +171,19 @@ Deno.serve(async (req: Request) => {
   const jwt = req.headers.get('X-Admin-Token')?.trim() ?? '';
   let jwtEmail: string | null = null;
   if (jwt) {
+    /**
+     * ⚠️ **这里必须用 `getUser`,不能换成 `getClaims`。**
+     *
+     * `getUser` 每次都回源 GoTrue 的 `/user`,由服务端判断这个会话是否还有效 ——
+     * 被吊销的会话(管理员点了退出,`signOut` 默认 `scope: 'global'`;或在 Dashboard
+     * 里被登出)**立即**失效。
+     * `getClaims` 对非对称签名的 token **只在本地验签、不回源**(auth-js 源码:只有
+     * `HS*` 或没有 `kid` 时才退回 `getUser`)⇒ 被吊销的会话在 JWT 过期(`exp`)之前
+     * 照样能进后台。本项目发布的就是非对称签名键(PROGRESS「线上 Auth 配置」)。
+     *
+     * 换它的理由会很诱人(省一次网络往返,文档也推荐),而代价不会出现在任何测试里 ——
+     * 它只在「有人想把一个会话踢出去」的那一刻才显形。
+     */
     const { data, error } = await supa.auth.getUser(jwt);
     if (error) console.warn(`admin jwt rejected: ${error.message}`);
     jwtEmail = normalizeAdminEmail(data?.user?.email ?? null);

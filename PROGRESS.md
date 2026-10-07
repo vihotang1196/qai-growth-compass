@@ -76,6 +76,9 @@
   (前端拿一把已失效的 key 去 Supabase Auth,得到一个语义无关的鉴权错误)。
   这与上一条是同一族 —— **配置改了但产物没改**,只是介质从函数换成了构建产物。
   `npm run smoke` 里有一条专门守它([那一节](#轮换-anon-key-时最容易漏的一步))。
+- **不要在这个仓库运行 `supabase config push`。** `config.toml` 没有 `[auth]` 段,
+  push 会把 CLI 的默认值推上生产(`site_url` 变成 `127.0.0.1`,后台登录链接全坏)。
+  线上 Auth 配置只在 Dashboard 里改,改完回[线上 Auth 配置](#线上-auth-配置)记值和日期。
 
 ---
 
@@ -98,14 +101,14 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`main` = `fd05c59`。测试基线:**Node 367 / Deno 217,十四道门全绿**。
+当前分支基线:`main` = `e90dd39`(`feat/admin-login-neutral` 待合)。测试基线:**Node 390 / Deno 217,十四道门全绿**。
 
 
 ---
 
 ## 当前未完成
 
-> ⚠️ **这一节在 2026-08-13 被整节重写过一次,因为它过期了。**
+> ⚠️ **这一节在 2026-08-14 被整节重写过一次,因为它过期了。**
 > 它当时列着 8 条,而前 7 条早已做完并验过 —— 而它是[必读四节](#从这里开始--交接给一个没看过对话记录的人)
 > 里的第 3 节。**一份过期的「还剩什么」比没有更糟**:它会把下一个人送去做已经做完的事,
 > 同时藏住真正剩下的那几件。
@@ -113,7 +116,19 @@
 > 这与这份文档里反复出现的那类失败同形 —— **一句没有任何东西在验证的声明**,
 > 只是这次它出现在「未完成清单」自己身上。收工时更新这一节,和写变更日志一样是硬要求。
 
-**代码这一侧到头了。** 剩下的全部要真实场景才能推进,所以按「需要什么才能做」分组。
+**代码这一侧到头了。** 剩下的全部要真实场景或 Dashboard 操作才能推进,所以按「需要什么才能做」分组。
+
+### ⓪ 现在就能做的:线上 Auth,四步,顺序不能反(2026-10-07 加)
+
+生产开着自助注册(【实测】`disable_signup=false`),任何人都能建 `auth.users` 行、
+让我们的发件身份发信。代码侧(AdminLogin 不建用户、不显示原文)在 `feat/admin-login-neutral`。
+
+1. **前端上线**(那条分支合进 main)→ `npm run smoke`:部署检查全过,`[配置]` 那条**红**、exit 3
+2. **你在 Dashboard 关掉「Allow new users to sign up」**
+3. **smoke 的 `[配置]` 那条转绿**、exit 0
+4. **接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后)
+
+为什么不能反、每一步的判据、以及 13 项待你在 Dashboard 确认的值:[线上 Auth 配置](#线上-auth-配置)。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -157,7 +172,6 @@ S5/S6 的开放回答上有没有可分辨的差别。
 - **`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
   再决定 `api/_lib/lambdaEnv.ts` 那段注入是保留 / 改值 / 删掉
   (它可能变成没必要,也可能变成有害)
-- **上线前**:换掉 Supabase 内置 SMTP
 - **`PostgrestError` 的 `code`/`details`/`hint` 被 ~37 处 `.message` 降级丢掉** ——
   `errorKind.ts` 只在 admin 那一处兑现了,其余单独一轮
 
@@ -1142,7 +1156,7 @@ Map 的值是**理由字符串**,不是 `true` —— 一个只有名字的白�
 | 项 | 为什么不在 `build` 里 |
 |---|---|
 | `check:deno` / `test:deno` / `check:cross` | 需要 deno,而 Vercel 构建环境没有。在 `npm run verify` 里 |
-| `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测 |
+| `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测。**两类检查、两个退出码**:部署检查失败 exit 1;部署全过、只有 `[配置]` 期望没满足 exit 3(那类的修法在 Dashboard,不是重新部署 —— 分开是为了不让它挡住部署验收,见[上线顺序](#上线顺序)) |
 | `npm run config:check` | 改 config 时才跑(`config:apply` 会先跑它)。32 项校验,**先校验后落地** |
 
 ⚠️ **已知开着的洞:`verify` 靠人记得跑。** Vercel 只跑 `npm run build`,所以需要 deno 的三项
@@ -2776,7 +2790,7 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 
 | | |
 |---|---|
-| **上线前必做:换掉内置 SMTP** | Supabase 内置邮件服务**只能发给 project 成员**,而且有限流(验收时触发了 `EMAIL RATE LIMIT EXCEEDED`)。只影响后台登录邮件 —— 学员链接走 GHL,不受影响。上线前接自己的 SMTP(Resend 之类) |
+| **上线前必做:换掉内置 SMTP** | Supabase 内置邮件服务**只能发给 project 成员**,而且有限流(验收时触发了 `EMAIL RATE LIMIT EXCEEDED`)。只影响后台登录邮件 —— 学员链接走 GHL,不受影响。上线前接自己的 SMTP(Resend 之类)。⚠️ 2026-10-07:**必须排在关自助注册之后**,见[上线顺序](#上线顺序) |
 | EXPORT CSV 未实测 | 验收时库里只有一行记录。等有真实数据了一起验。公式注入与 BOM 都有单元测试覆盖,没验的是「点下去真的下载了一个 Excel 能打开的文件」 |
 
 ## 待你操作
@@ -2784,7 +2798,7 @@ createClient(url, anonKey, { auth: { flowType: 'pkce', ... } })
 | | |
 |---|---|
 | `admin_users` insert | `insert into public.admin_users (email, name) values ('jianan1196@gmail.com', '<名字>');` —— **邮箱必须小写**,函数侧会 `trim().toLowerCase()` 再比,大小写不一致会永远 403 而看起来像「我明明插了记录」 |
-| Supabase Auth 配置 | Site URL + Redirect URLs,见下 |
+| Supabase Auth 配置 | Site URL + Redirect URLs。⚠️ 这里原本写着「见下」,而下面什么都没有 —— 线上 Auth 配置在仓库里一直是零记录。2026-10-07 补上:[线上 Auth 配置](#线上-auth-配置) |
 | Vercel 环境变量 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`(**带** `VITE_` 前缀,前端登录要用) |
 
 ---
@@ -7316,7 +7330,246 @@ Node 370 / Deno 217,十四道门全绿。
 
 ---
 
+# 线上 Auth 配置
+
+> **只关系到 `/admin`。** 学员链路不经过 Supabase Auth:magic link 由我们生成
+> (`_shared/token.ts` 的 `magicLink()`)、由 GHL 发送,`auth.users` 里没有学员
+> (【实测 2026-10-07】`assessment_entitlements` 120 行,按邮箱能对上 auth 用户的只有 1 行,
+> 就是名单里的管理员本人)。
+>
+> Stage 5 那张「待你操作」表里原本写着「Site URL + Redirect URLs,见下」,而下面什么都没有 ——
+> **线上 Auth 配置在这个仓库里一直是零记录。** 这一节补上它。
+> ⚠️ **改了 Dashboard 就回来改值、写日期** —— 否则这一节会变成又一份没人验证的声明。
+
+## Auth 实测值
+
+全部是只读观测,没读邮箱、没读任何密钥。
+
+| 项 | 值 | 怎么测的 | 日期 |
+|---|---|---|---|
+| `disable_signup` | **`false`** —— 自助注册开着。⚠️ 目标是 `true`,见[上线顺序](#上线顺序) | `GET /auth/v1/settings`,publishable key 取自线上 bundle。smoke 的 `[配置]` 那一项就是它 | 2026-10-07 |
+| `mailer_autoconfirm` | `false`(即「Confirm email」开着) | 同上 | 2026-10-07 |
+| 开着的登录方式 | 只有 email(`external` 里只有 `email: true`) | 同上 | 2026-10-07 |
+| `flowType` | `pkce` | 线上 bundle 里有 `flowType:"pkce"`;源码 `src/lib/supabase.ts` | 2026-10-07 |
+| redirectTo | `${window.location.origin}/admin` | 线上 bundle 里有 `emailRedirectTo`;源码 `AdminLogin.tsx` | 2026-10-07 |
+| JWT 签名键 | JWKS 发布 1 把 **ES256**(非对称) | `GET /auth/v1/.well-known/jwks.json`。它决定了 `assessment-admin` 不能把 `getUser` 换成 `getClaims`(见那一行的注释) | 2026-10-07 |
+| `auth.users` | 2 行。1 行在 `admin_users` 里;**1 行不在**:`2026-10-07 03:33:33 UTC` 建,未确认、从未登录,11ms 后 `confirmation_sent_at` 有值 —— 「陌生邮箱 → 建用户 + 发信」真的发生过的标本。**决定:不删** | `supabase db query --linked`,只取计数与时间戳 | 2026-10-07 |
+
+⚠️ **两个读数会骗人**(都是「一个混在一起的零 / 非零」):
+
+- **`encrypted_password` 2/2 非空 —— 不代表有人设过密码。** OTP 给新邮箱注册时,
+  GoTrue 会自己填一个临时密码【推断】。拿它判断「谁有密码」,这个查法是瞎的。
+- **`auth.audit_log_entries` 是 0 行**,而名单内那位 08-12 还登录过 ⇒ **Auth 审计不写这张表**。
+  这里的 0 是「我看不见」,不是「没发生过」。要查谁什么时候请求过登录,去 Logs。
+
+## 待 Viho 在 Dashboard 确认
+
+位置是**大致**的(Dashboard 的菜单会改)。填完写日期。
+
+| # | 项 | 大致位置 | 值 | 确认日期 |
+|---|---|---|---|---|
+| 1 | Site URL | Authentication → URL Configuration | | |
+| 2 | Redirect URLs(至少要有 `https://compass.qiai.tech/admin`;本地开发要登后台的话加 `http://localhost:5173/admin`) | 同上 | | |
+| 3 | 自定义 SMTP 是否已接(host / 发件人)—— 03:33 那封确认信**发出去了**,说明要么对方是项目成员、要么已经接了自定义 SMTP,我分辨不出来 | Authentication → Emails → SMTP | | |
+| 4 | 每小时发信上限(⚠️ magic link、确认信共用这一个额度 —— 刷满了后台一小时收不到登录信) | Authentication → Rate Limits | | |
+| 5 | 每用户发信间隔 | 同上 | | |
+| 6 | Magic Link / Confirm signup 模板的现有内容 | Authentication → Emails → Templates | | |
+| 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项) | Authentication → Providers → Email | | |
+| 8 | CAPTCHA 开没开(⚠️ 一开,现有的 `signInWithOtp` 不带 captchaToken 就会坏) | Authentication → Attack Protection | | |
+| 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
+| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | | |
+| 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
+| 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | | |
+| 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | | |
+
+## Auth 规则
+
+### 禁止在本仓库运行 `supabase config push`
+
+- `config.toml` **没有 `[auth]` 段**【实测】⇒ CLI 用它自己的默认值。
+  【实测 `supabase init`,CLI 2.110.0】:`site_url = "http://127.0.0.1:3000"`、
+  `additional_redirect_urls = ["https://127.0.0.1:3000"]`、`enable_signup = true`、
+  `[auth.email] enable_signup = true`、`[auth.rate_limit] email_sent = 2`、无 SMTP、无自定义模板。
+- push 会把它们推上生产【推断】—— `site_url` 一变,后台 magic link 全部失效;注册开关被打回 `true`。
+- **这条规则不需要那个推断被证实**:验证它的唯一办法就是跑一次。
+  而 CLI 的 `config` 只有 `push` 一个子命令,没有只读 diff【实测 help】。
+- 改 Auth 配置走 Dashboard,改完回[上面](#auth-实测值)写值和日期。
+- `config.toml` 头注释里也写了这一条 —— 那是准备跑它的人会看的地方。
+
+### 关注册之后,新增管理员 = 两步,缺一不可
+
+1. **Dashboard → Authentication → Users → 建用户**,勾「Auto Confirm」。
+   不要用「Invite」:邀请信的链接是 implicit 形式(`#access_token=`)【推断】,
+   而我们的客户端是 PKCE —— auth-js 对 PKCE 客户端收到的 implicit 回调直接报错
+   (`Not a valid PKCE flow url.`,【实测源码】);何况它落在 Site URL(学员首页),
+   那一页根本不实例化 Supabase 客户端。
+2. **`insert into public.admin_users (email, name) values ('<小写邮箱>', '<名字>');`**
+   —— 邮箱一律小写,函数侧 `trim().toLowerCase()` 再比。
+
+- **缺第 1 步**:`shouldCreateUser: false` + 注册已关 ⇒ GoTrue 不发信,而页面显示的是中性句 ⇒
+  **人在等一封永远不来的信,页面不会说为什么。** 那正是中性句的代价 —— 所以这一步必须写在这里。
+- **缺第 2 步**:能登录,然后 403。
+
+### 已知限制(暂不处理)
+
+- **magic link 必须在发起请求的同一个浏览器里打开。** PKCE 的 code verifier 存在发起方浏览器的
+  localStorage;auth-js 只有在 URL 带 `code` **且**本地有 verifier 时才去换 session
+  (`_isPKCECallback`,【实测源码】)。换设备打开 = **静默**拿不到 session。
+  中性句里已经写了这半句 —— 它是管理员最可能撞上、又最看不出原因的失败。
+- **邮件网关预取。** 默认模板的链接指向 GoTrue 的 `/verify`,安全网关预取那一次 GET
+  会把一次性 token 用掉【推断】—— 症状是「一点开就说已失效」。
+- **为什么不处理**:后台只有一个人、用自己的邮箱;根治(模板改 `{{ .TokenHash }}` + 新落地页 +
+  `verifyOtp`)是 2026-10-07 明确不做的一项。**出现「点开就失效」时,先怀疑这两条。**
+
+### 接受的残余:文案层之外的存在性泄露
+
+页面不再显示 GoTrue 的原文,但 **HTTP 层的差别还在**:DevTools 的 Network,
+或拿公开 key 直接调 `/auth/v1/otp`,照样看得到 200 与 422;耗时也不同(存在的邮箱要同步发信)。
+2026-10-07 决定接受这两样(同一类:前端修不了),只修文案层。
+中性句挡的是「页面把答案告诉一个随手试的人」,不是「挡住一个会开 DevTools 的人」。
+
+## 上线顺序
+
+| 步 | 动作 | 谁 | 完成的判据 |
+|---|---|---|---|
+| ① | 前端上线(`feat/admin-login-neutral` 合进 main = Vercel 部署) | Viho | `SUPABASE_PUBLISHABLE_KEY=… npm run smoke -- --base https://compass.qiai.tech`:「部署检查」全过,`[配置]` 那条**红**,**exit 3** |
+| ② | Dashboard 关掉「Allow new users to sign up」 | Viho | — |
+| ③ | smoke 的 `[配置]` 那条转绿 | — | **exit 0** —— 这是那一项**第一次真实的绿**,之前只有变异让它绿过 |
+| ④ | 接自定义 SMTP | Viho | 管理员收得到登录信;回[上面](#待-viho-在-dashboard-确认)填第 3 行 |
+
+**为什么不能反:**
+
+- **②在①之前**:旧页面会把 `signup_disabled` / `otp_disabled` 的原文显示出来 ⇒
+  **关注册这一步本身就成了一个「这个邮箱是不是管理员」的查询器。**
+- **④在②之前**:注册开着时接自定义 SMTP,等于给任何人一个用我们的发件身份往任意地址发信的入口。
+
+**为什么不会死锁**:smoke **不挡任何部署** —— 它不在 `build` / `verify` / `deploy:functions` 里,
+仓库也没有 CI(【实测】`package.json` 的三条链里都没有它;`.github` 不存在)。真正可能死锁的是**验收**:
+如果 `[配置]` 那条和部署检查共用 exit 1,①的验收就要等②,而②又要等①验收过。
+所以它单独计 **exit 3** —— ①看「部署检查」那一行;`[配置]` 那条照样红、照样非零,直到②做完。
+⚠️ 跑 smoke 时**要带** `SUPABASE_PUBLISHABLE_KEY`,否则 key 一致性那条按原设计报 unverified、exit 1。
+
+---
+
+# Admin 登录页:不建用户、不显示原文 + smoke 加一类「配置期望」
+
+承接 2026-10-07 那次 Auth 只读审计。按 Viho 的决定:**只用 magic link**;不加密码、不做忘记密码、
+不做后端 `amr` 检查、不做 MFA、不改模板;耗时差与 HTTP 层的差别接受,只修文案层;**不碰生产**。
+
+## 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/adminAuthMessages.ts`(新) | 纯判定 `adminLoginNotice(error)` → 三个文案 key 之一;接缝 `requestAdminLink()` **从不抛、只返回 key**,`shouldCreateUser: false` 写在这里 |
+| `src/lib/adminAuthMessages.test.ts`(新) | 20 条。错误由**真的 supabase-js 客户端**产生(只换掉 `fetch`),不手搓 |
+| `src/pages/admin/AdminLogin.tsx` | 改用 `requestAdminLink`;组件里**没有任何能装下原始报错的 state**;发送按钮 60 秒冷却(注释写明只是 UX) |
+| `src/config/ui-strings.ts` | 删 `admin.login.sent`(它说「已发出」—— 对一半情况是假话);加 `neutral` / `networkError` / `unexpected` / `cooldown`,中英两份 |
+| `supabase/functions/assessment-admin/index.ts` | `getUser` 那一行加注释:不能换成 `getClaims` |
+| `scripts/smoke-deploy.mjs` | 新增 `[配置]` 一项 + 按类别的退出码;抓 bundle 抽成两条检查共用的 `fetchBundle()`(原 key 检查的措辞不变) |
+| `supabase/config.toml` | 头注释:不要在这里跑 `supabase config push` |
+
+## 三个结果,不是两个
+
+要求是「拿到 HTTP 响应 → 同一句;只有网络失败 → 单独一句」。实现时多出**第三种**:
+**既不是 HTTP 响应、也不是网络失败** —— 例如前端缺环境变量时 `supabaseAuth()` 直接抛,
+或浏览器禁用存储时 PKCE 的 verifier 存不进去(都是**一个请求都没发**)。
+
+它不能落进 neutral(那会对管理员说「已发出」而什么都没发生 —— 兜底落在成功侧),
+也不该借 networkError 的字样(让人去查一个没坏的网络)。所以给了它**自己的字样**。
+它不泄露任何东西:那几种情况与输入的是哪个邮箱无关。
+
+判别依据是 auth-js 的**类名**,不只是 `status`【实测源码 `lib/fetch.js`】:
+
+| auth-js 给的 | 实际发生了什么 | 判成 |
+|---|---|---|
+| `AuthApiError` | 非 2xx、JSON 体 | neutral |
+| `AuthRetryableFetchError` status > 0 | 5xx | neutral |
+| `AuthUnknownError`(**没有 status**) | 非 2xx、非 JSON 体 | neutral |
+| `AuthRetryableFetchError` status = 0 | `fetch` 自己抛了 | networkError |
+| 其余(含 `AuthInvalidCredentialsError` —— **它带 400,但一个请求都没发**) | — | unexpected |
+
+⚠️ 最后那一行就是「只看 status 是不是数字」会错的地方:客户端自己造的错误也带 status。
+
+## 第 7 项:不加构建门,理由与替代
+
+评估的是「admin 登录相关页面不得渲染 GoTrue 的原始 `error.message`」做成一道构建门。**结论:不做。**
+
+1. **按字面扫 `.message` 有盲区**,而且盲区都很自然:`const { message } = err`、`String(err)`、
+   `` `${err}` ``、`JSON.stringify(err)`、把错误对象整个传给子组件。
+   本项目自己的规矩([`check:dim` 那条](#三处必须知道的细节)):
+   **做不到全覆盖就别装 —— 有盲区的守卫比没有守卫更糟,它制造假安全感。**
+2. **还会误报**:`console.warn(err)` 不是渲染,而它恰好是排查「换 key 忘了重新构建」时唯一的线索
+   (那时页面只会显示中性句)。
+3. **它守的东西本身有上限**:HTTP 层的差别在 DevTools 里照样看得到(上面「接受的残余」)。
+
+**替代是结构性的**:错误对象在 `requestAdminLink` 里**就地终结**,它从不抛、只返回 key ——
+组件手里根本拿不到错误对象,也就没有东西可以渲染。测试用一个哨兵串:
+先断言它**真的进了** `error.message`(否则「页面上没有它」是一条无事可做的断言,判断标准 1 推论三),
+再断言每一种结果里都没有它。
+
+**按第 0 条造回起因**:旧代码没有接缝,所以把起因(「原文流到页面要显示的东西里」)
+**在接缝里造回去** —— 让 `requestAdminLink` 返回 `error.message` → **2 条红**。
+⚠️ 这是「在新形状里重现起因」,不是「对旧代码本身跑」—— 旧代码没有可测的接缝,那一步做不到,如实写在这里。
+
+剩下的盲区也如实写:**JSX 里新加一个 `string` 类型的 state 去装原文**,没有任何东西拦。
+它至少是一处看得见的 diff,而不是一次悄悄的漂移。
+
+**五次变异全红**:原文外流(2 条红)/ 去掉 `shouldCreateUser: false`(线上 body 那条红)/
+把 422 判到另一句(3 条红)/ 只按 status 判(2 条红)/ 把所有 `AuthRetryableFetchError` 当网络失败(3 条红)。
+每次都逐字还原(`shasum` 前后一致)。
+
+## 第 8 项:`getUser` 那一行在 `assessment-admin/index.ts`,不在 `_shared/adminAuth.ts`
+
+后者只有纯判定,没有 `getUser`。注释加在真正调用的那一行。
+
+写注释之前先核了一件事:上一轮审计把「`getClaims` 要等 JWT 过期」标的是【推断】。
+【实测 auth-js 源码】:`getClaims` 只在 `alg` 是 `HS*` 或没有 `kid` 时才退回 `getUser`;
+非对称签名的 token **只在本地验签、不回源**。而【实测 JWKS】本项目发布的是 ES256 ——
+所以这条在本项目上成立,注释可以写成事实。
+⚠️ 「`getUser` 能让被吊销的会话**立即**失效」依赖 GoTrue 在 `/user` 上检查会话是否还在
+【推断,没有端到端实测 —— 那需要在生产上吊销一个会话】。
+
+## smoke 新项:按第 0 条先证明它现在对生产是红的
+
+```
+  ✗ [配置] 线上 Auth 关闭了自助注册(/auth/v1/settings → disable_signup === true)
+      project ojtqufednqxxwdiopkyn 开着自助注册(disable_signup=false)—— 任何人都能用公开 key
+      建 auth.users 行、让我们的发件身份发信。
+      ...
+[smoke] 部署检查:9/9 通过
+[smoke] 配置期望:0/1 通过
+[smoke] 部署检查全部通过;配置期望有 1 条未满足(exit 3)—— 部署本身没问题,线上配置还没到位
+```
+
+⚠️ 那次运行里「部署检查 9/9」是把本地期望 key **设成 bundle 里那一把**跑出来的 ——
+**那一条在那次运行里是同义反复**,只为走到 exit 3 的分支。不带 key 的那次是 8/9(key 那条 unverified)、exit 1。
+
+两次变异:把字段名读错(模拟上游改名)→ 落进**自己的字样**「无法判定……收到的键:…」,不是通过;
+把判定反过来 → 这一项变绿、整次 exit 0。逐字还原。
+**真实的绿要等[上线顺序](#上线顺序)第 ③ 步** —— 那之前它只被变异绿过,这一点不假装。
+
+## 未做
+
+- Vercel Preview 的 `VITE_SUPABASE_URL`:本机没装 Vercel CLI、仓库没 link,跳过,进了[待确认清单](#待-viho-在-dashboard-确认)第 12 行
+- `verify` 靠人记得跑的那个洞仍在:这一轮的 20 条测试只在 `npm test` 里,Vercel 不跑它
+
+Node 390 / Deno 217,十四道门全绿。
+
+---
+
 ## 变更日志
+
+- 2026-10-07 — **Admin 登录页:不建用户、不显示原文 + smoke 加「配置期望」+ 线上 Auth 配置补档**。
+  生产开着自助注册(【实测】`disable_signup=false`),而登录页 `signInWithOtp` 没传
+  `shouldCreateUser`(auth-js 默认 `true`)、失败时原样显示 GoTrue 的 `err.message` ——
+  关注册这一步因此会变成枚举入口,顺序是「前端先上、再关注册、再接 SMTP」。
+  ①`adminAuthMessages.ts`:三个结果(多出的那个兜底有自己的字样,落在失败侧);
+  判别靠 auth-js 的类名而不只是 status(`AuthInvalidCredentialsError` 带 400 但没发请求)
+  ②**第 7 项不做构建门**:按字面扫 `.message` 有盲区,替代是让错误对象在接缝里终结 + 哨兵测试
+  ③smoke 分两类、`[配置]` 单独 exit 3 —— 否则前端上线的验收要等关注册,而关注册要等验收:死锁
+  ④`getUser` 不能换 `getClaims`:先核了源码与 JWKS(ES256)才写成事实
+  ⑤[线上 Auth 配置](#线上-auth-配置):实测值、13 项待确认、两条规则、两条已知限制、上线顺序。
+  Stage 5 那个空着的「见下」指过来了
 
 - 2026-08-12 — **标签写回实测通过(15 条 seed 全被收口拦下、真实那行 5 个标签与分数对得上),
   而验过之后立刻找出两个洞**:①**我上一轮埋的**:finalize 传 `applied = null`,

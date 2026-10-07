@@ -23,6 +23,21 @@
  * 那只做一次索引查询然后返回 /expired,不建 session、不下 cookie、不写任何表。
  * 刻意【不】测 assessment-login-request 的 POST:那会写一行 login_attempts
  * 并消耗 IP 限流额度。改用 GET 换 405,同样能证明代理解析出了正确的函数名。
+ *
+ * 【两类检查,两个退出码】
+ *   deploy(默认)—— 「这次部署好没好」:代理、rewrite、bundle 里的 key、cron 可达
+ *   config        —— 「线上配置对不对」:改它要人去 Dashboard 点,不是重新部署能修的
+ *
+ *   exit 0  全部通过
+ *   exit 1  有 deploy 检查没过 —— 这次部署有问题
+ *   exit 3  deploy 全过,只有 config 没过 —— 部署本身没问题,线上配置还没到位
+ *   (exit 2 是用法错误,见下面 --base)
+ *
+ * 为什么要分:config 那几条的修法排在**前端上线之后**(例:关自助注册必须等新版
+ * AdminLogin 上线,否则旧页面会把 422 原文显示出来)。如果它们和 deploy 检查共用
+ * exit 1,前端上线后的验收就永远过不了 —— 而关注册又要等验收过了才做:死锁。
+ * 分开之后,部署验收看「部署检查」那一行;config 那条照样红、照样非零,直到配置改对。
+ * **它不会变成一条可以忽略的绿** —— 那正是「打印了但不判断」(判断标准 2)。
  */
 
 import { createHash } from 'node:crypto';
@@ -44,7 +59,31 @@ if (!base) {
   process.exit(2);
 }
 
-/** @type {{name: string, run: () => Promise<string|null>}[]} */
+/**
+ * 线上首页引用的那个模块脚本 —— 两条检查共用,只抓一次。
+ * 失败时返回 `{ error }`,由调用方加 `unverified:` 前缀(措辞沿用原先那条 key 检查)。
+ *
+ * 【为什么从 bundle 取,而不是从本地环境变量取】要回答的是「线上这个页面**实际**
+ * 连的是什么」—— 本地变量说的是「应该连什么」,那是两个东西。
+ */
+let bundlePromise = null;
+function fetchBundle() {
+  bundlePromise ??= (async () => {
+    const htmlRes = await fetch(`${base}/`, { redirect: 'follow' });
+    if (!htmlRes.ok) return { error: `首页 ${htmlRes.status}` };
+    const html = await htmlRes.text();
+    const m = /<script[^>]+src="([^"]+\.js)"/i.exec(html);
+    if (!m) return { error: '首页 HTML 里找不到模块脚本' };
+    const jsRes = await fetch(new URL(m[1], base).toString());
+    if (!jsRes.ok) return { error: `bundle ${jsRes.status}` };
+    return { js: await jsRes.text() };
+  })();
+  return bundlePromise;
+}
+
+const uniq = (matches) => [...new Set(matches ?? [])];
+
+/** @type {{kind?: 'deploy'|'config', name: string, run: () => Promise<string|null>}[]} */
 const checks = [
   {
     name: '代理把 GET 转给 assessment-auth(证明函数名解析正确)',
@@ -162,16 +201,9 @@ const checks = [
           '这不算通过。换 key 之后请带上它再跑一次。'
         );
       }
-      const htmlRes = await fetch(`${base}/`, { redirect: 'follow' });
-      if (!htmlRes.ok) return `unverified:首页 ${htmlRes.status}`;
-      const html = await htmlRes.text();
-      const m = /<script[^>]+src="([^"]+\.js)"/i.exec(html);
-      if (!m) return 'unverified:首页 HTML 里找不到模块脚本';
-
-      const jsUrl = new URL(m[1], base).toString();
-      const jsRes = await fetch(jsUrl);
-      if (!jsRes.ok) return `unverified:bundle ${jsRes.status}`;
-      const js = await jsRes.text();
+      const bundle = await fetchBundle();
+      if (bundle.error) return `unverified:${bundle.error}`;
+      const { js } = bundle;
 
       if (js.includes(expected)) return null;
       /**
@@ -213,6 +245,77 @@ const checks = [
         `bundle 里的公开 key 与本地的不一致 —— 多半是改了环境变量但没重新构建部署。` +
         `bundle: ${kind(bundled)} fp=${bundled ? fp(bundled) : '(抓不到)'} iat=${issued(bundled)} | ` +
         `local: ${kind(expected)} fp=${fp(expected)} iat=${issued(expected)}`
+      );
+    },
+  },
+  {
+    /**
+     * 【线上 Auth 关闭了自助注册】GET `/auth/v1/settings`(公开端点,零写入),
+     * 断言 `disable_signup === true`。
+     *
+     * 为什么前端那层不够:AdminLogin 已经显式传 `shouldCreateUser: false`,
+     * 但那只管得住**这个页面**。公开 key 就在 bundle 里,注册开着时任何人都能直接调
+     * `/auth/v1/signup` 或 `/otp` 建 auth.users 行、让我们的发件身份发信。
+     *
+     * 【查的是哪个项目】Supabase URL 与公开 key 都从线上 bundle 里取 ——
+     * 也就是后台登录页**实际在连**的那个项目。只打印 project ref,不打印 key。
+     *
+     * 【kind: config】它红的时候 exit 3,不是 1 —— 修法是去 Dashboard 关开关,
+     * 而那一步按上线顺序排在前端上线之后。见文件头「两类检查,两个退出码」。
+     */
+    kind: 'config',
+    name: '线上 Auth 关闭了自助注册(/auth/v1/settings → disable_signup === true)',
+    async run() {
+      const bundle = await fetchBundle();
+      if (bundle.error) return `unverified:${bundle.error}`;
+
+      const urls = uniq(bundle.js.match(/https:\/\/[a-z0-9]+\.supabase\.co/g));
+      if (urls.length !== 1) {
+        return `unverified:bundle 里有 ${urls.length} 个 Supabase URL,期望 1 个 —— 说不清后台连的是哪个项目`;
+      }
+      // 与上面那条 key 检查同一个优先级:新的 publishable 优先,legacy JWT 兜底
+      const publishable = uniq(bundle.js.match(/sb_publishable_[A-Za-z0-9_-]+/g));
+      const keys = publishable.length
+        ? publishable
+        : uniq(bundle.js.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g));
+      if (keys.length !== 1) {
+        return `unverified:bundle 里有 ${keys.length} 把公开 key 形状的串,期望 1 把`;
+      }
+
+      const ref = new URL(urls[0]).hostname.split('.')[0];
+      const res = await fetch(`${urls[0]}/auth/v1/settings`, { headers: { apikey: keys[0] } });
+      if (!res.ok) {
+        return (
+          `unverified:project ${ref} 的 /auth/v1/settings 回 ${res.status}` +
+          `(401 多半是 bundle 里那把 key 已失效 —— 看上面那条 key 检查)`
+        );
+      }
+      let settings;
+      try {
+        settings = await res.json();
+      } catch {
+        return `unverified:project ${ref} 的 /auth/v1/settings 不是 JSON`;
+      }
+
+      const value = settings?.disable_signup;
+      if (value === true) return null;
+      if (value === false) {
+        return (
+          `project ${ref} 开着自助注册(disable_signup=false)—— 任何人都能用公开 key\n` +
+          `      建 auth.users 行、让我们的发件身份发信。\n` +
+          `      修法:Dashboard → Authentication → 关掉「Allow new users to sign up」。\n` +
+          `      ⚠️ 顺序:在新版 AdminLogin 上线之后(否则旧页面会把 422 原文显示出来),\n` +
+          `      在接自定义 SMTP 之前。见 PROGRESS「线上 Auth 配置」。`
+        );
+      }
+      /**
+       * 兜底:既不是 true 也不是 false。**落在失败侧,而且用自己的字样** ——
+       * 借「开着注册」的名字会让人去 Dashboard 查一件没发生的事,
+       * 而落在通过侧就是这道检查自己被一次改名悄悄关掉了。
+       */
+      return (
+        `无法判定:project ${ref} 的 disable_signup 是 ${JSON.stringify(value)},不是布尔值 ——\n` +
+        `      字段可能改名了,这条检查可能要改。收到的键:${Object.keys(settings ?? {}).join(', ')}`
       );
     },
   },
@@ -289,8 +392,12 @@ for (const file of cronFiles) {
 
 console.log(`\n冒烟检查 → ${base}\n`);
 
-let failed = 0;
+const tally = { deploy: { failed: 0, total: 0 }, config: { failed: 0, total: 0 } };
 for (const check of checks) {
+  // 没写 kind 的一律按 deploy 算 —— 默认落在更严的那一侧(exit 1)
+  const kind = check.kind === 'config' ? 'config' : 'deploy';
+  const tag = kind === 'config' ? '[配置] ' : '';
+  tally[kind].total += 1;
   let error;
   try {
     error = await check.run();
@@ -298,16 +405,26 @@ for (const check of checks) {
     error = `请求本身失败:${err instanceof Error ? err.message : String(err)}`;
   }
   if (error) {
-    failed += 1;
-    console.error(`  ✗ ${check.name}\n      ${error}`);
+    tally[kind].failed += 1;
+    console.error(`  ✗ ${tag}${check.name}\n      ${error}`);
   } else {
-    console.log(`  ✓ ${check.name}`);
+    console.log(`  ✓ ${tag}${check.name}`);
   }
 }
 
+const line = ({ failed, total }) => `${total - failed}/${total} 通过`;
 console.log('');
-if (failed) {
-  console.error(`[smoke] FAILED —— ${failed}/${checks.length} 条未通过`);
+console.log(`[smoke] 部署检查:${line(tally.deploy)}`);
+console.log(`[smoke] 配置期望:${line(tally.config)}`);
+if (tally.deploy.failed) {
+  console.error(`[smoke] FAILED —— 部署检查有 ${tally.deploy.failed} 条未通过(exit 1)`);
   process.exit(1);
+}
+if (tally.config.failed) {
+  console.error(
+    `[smoke] 部署检查全部通过;配置期望有 ${tally.config.failed} 条未满足(exit 3)—— ` +
+      `部署本身没问题,线上配置还没到位`,
+  );
+  process.exit(3);
 }
 console.log(`[smoke] OK —— ${checks.length}/${checks.length} 条通过。零写入,可反复跑。`);

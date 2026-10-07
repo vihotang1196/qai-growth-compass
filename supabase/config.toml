@@ -1,5 +1,11 @@
 # Supabase 本地配置。
 #
+# ⚠️ 不要在这个仓库运行 `supabase config push`。
+# 这个文件里没有 [auth] 段 —— 线上 Auth 配置只在 Dashboard 里改。而没有 [auth] 段时,
+# CLI 用它自己的默认值(site_url = "http://127.0.0.1:3000"、enable_signup = true ……),
+# push 就会把它们推上生产:site_url 一变,后台登录链接全部失效。
+# 线上的实测值与原委见 PROGRESS.md「线上 Auth 配置」。
+#
 # project_id 由 `supabase link --project-ref <ref>` 写入。ref 不是密钥
 # (它出现在每个 API URL 里),CLI 写进来之后直接 commit,别为它加 gitignore ——
 # 那会连下面的 verify_jwt / import_map 声明一起丢掉。

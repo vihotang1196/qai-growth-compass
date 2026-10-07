@@ -205,7 +205,28 @@ export const UI_STRINGS = {
     zh: '输入你的邮箱,我们会发一条登录链接。只有在允许名单里的邮箱能进后台。',
     en: 'Enter your email and we will send a sign-in link. Only allow-listed emails can enter.',
   },
-  'admin.login.sent': { zh: '登录链接已发出,请查收邮箱。', en: 'Sign-in link sent — check your inbox.' },
+  /**
+   * 请求登录链接之后的三句(选哪句见 src/lib/adminAuthMessages.ts)。
+   *
+   * 【neutral 是「如果……」句式,而且成功也显示它】只要拿到了 HTTP 响应就显示这一句 ——
+   * 包括「邮箱不存在」「被限流」「服务端出错」。所以它不能说「已发送」:
+   * 那对一半的情况是假话,而用两句不同的话又等于告诉对方这个邮箱是不是管理员。
+   * 「同一个浏览器」那半句是 PKCE 的硬约束(code verifier 存在发起请求的浏览器里),
+   * 写在这里是因为它是管理员最可能撞上、又最看不出原因的失败。
+   */
+  'admin.login.neutral': {
+    zh: '如果这个邮箱有后台权限,登录链接已经发出。请在发起请求的同一个浏览器里打开它。',
+    en: 'If this email has admin access, a sign-in link is on its way. Open it in the same browser you requested it from.',
+  },
+  'admin.login.networkError': {
+    zh: '网络错误,请求没有发出去。请检查网络后重试。',
+    en: 'Network error — the request did not go out. Check your connection and try again.',
+  },
+  'admin.login.unexpected': {
+    zh: '页面出了问题,请求没有发出去。请刷新后重试;仍然不行请联系技术支持。',
+    en: 'Something went wrong on this page and the request was not sent. Reload and try again; if it keeps happening, contact support.',
+  },
+  'admin.login.cooldown': { zh: '{n} 秒后可再次发送', en: 'Send again in {n}s' },
   'admin.login.action': { zh: '发送登录链接', en: 'Send sign-in link' },
   'admin.forbidden': {
     zh: '这个账号不在后台允许名单里。换个账号,或者联系管理员把你加进名单。',
