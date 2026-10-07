@@ -83,6 +83,51 @@ function fetchBundle() {
 
 const uniq = (matches) => [...new Set(matches ?? [])];
 
+/**
+ * ── 「请求到了函数,拿到的是函数自己的 401」──
+ *
+ * 学员链路上每个函数都要被 smoke 碰到一次:代理白名单漏一个(report-file 那次)、
+ * Vercel 路由丢一个,都只会在那个函数上露出来。所有这些请求都**不带凭证**,
+ * 而每个 handler 都在任何写库 / 外发之前就验凭证、回 401(逐个对过源码)—— 所以零写入。
+ *
+ * 判据要两样都对:状态 401 **且** body 是 `{"error":"unauthorized"}`。
+ * 代理拒绝时回的是 404 `{"error":"not_found"}`;只看「不是 404」会放过别的层回的东西。
+ */
+async function reachesOwn401(path, init, { proxied = true } = {}) {
+  const res = await fetch(`${base}${path}`, init);
+  const text = await res.text();
+  let error;
+  try {
+    error = JSON.parse(text)?.error;
+  } catch {
+    error = undefined;
+  }
+  if (proxied && res.status === 404 && error === 'not_found') {
+    return '404 not_found —— 这是代理的白名单拒绝(api/[...path].ts 的 ALLOWED),请求没到函数';
+  }
+  if (res.status !== 401 || error !== 'unauthorized') {
+    return `期望 401 {"error":"unauthorized"},实际 ${res.status}:${text.slice(0, 120)}`;
+  }
+  return null;
+}
+
+const POST_EMPTY = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
+
+/**
+ * ── 区域 ──
+ * 2026-10-07 把 Vercel 函数从 iad1 挪到 sin1(`vercel.json` 的 `regions`),Edge Function 跟着调用方
+ * 落到 ap-southeast-1,与新加坡的库同区。auth(读一次库)热的从约 1.4 秒降到约 0.4 秒。
+ * **区域错了一切照常工作、只是慢回去** —— 没有任何东西会报错,所以要在这里看。
+ */
+const EXPECTED_VERCEL_REGION = 'sin1';
+const EXPECTED_EDGE_REGION = 'ap-southeast-1';
+
+/** `x-vercel-id` 形如 `sin1::sin1::abc-123`:倒数第二段是函数区域;静态响应只有两段(没有函数区域) */
+function functionRegionOf(xVercelId) {
+  const parts = (xVercelId ?? '').split('::');
+  return parts.length >= 3 ? parts[parts.length - 2] : null;
+}
+
 /** @type {{kind?: 'deploy'|'config', name: string, run: () => Promise<string|null>}[]} */
 const checks = [
   {
@@ -111,31 +156,59 @@ const checks = [
      * 【为什么有这一条】2026-10-07 实测:报告页「生成 X 版 PDF」按钮调的这个函数,
      * 代理的 ALLOWED 里一直没有 —— 请求在代理那一层就被回了 404 not_found,从没到过函数。
      * 前面两条只验 auth / login-request,所以 smoke 一直是绿的。
-     *
-     * 【判据要两样都对】函数自己的 401 是 `{"error":"unauthorized"}`;
-     * 代理拒绝时回的是 404 `{"error":"not_found"}`。只看「不是 404」不够 ——
-     * 别的层(SPA rewrite、Vercel 自己的 404)也可能回一个不是 401 的东西。
-     * 不带 cookie,所以在 verifySession 那一步就返回,零写入。
      */
     name: '代理把 POST 转给 assessment-report-file(未鉴权 → 函数自己的 401,不是代理的 404)',
+    run: () => reachesOwn401('/api/assessment-report-file', POST_EMPTY),
+  },
+  // quiz / score:method → 环境变量 → 解析 JSON → verifySession → 401;之前没有一次读写库
+  {
+    name: '代理把 POST 转给 assessment-quiz(未鉴权 → 函数自己的 401)',
+    run: () => reachesOwn401('/api/assessment-quiz', POST_EMPTY),
+  },
+  {
+    name: '代理把 POST 转给 assessment-score(未鉴权 → 函数自己的 401)',
+    run: () => reachesOwn401('/api/assessment-score', POST_EMPTY),
+  },
+  // report:serviceClient() 只构造客户端、不发请求;没有 rt、没有 cookie → 401
+  {
+    name: '代理把 GET 转给 assessment-report(未鉴权 → 函数自己的 401)',
+    run: () => reachesOwn401('/api/assessment-report', { method: 'GET' }),
+  },
+  // render-pdf 是 Vercel 自己的路由,不经代理;没有 X-Internal-Secret → 401,在建 Supabase 客户端之前
+  {
+    name: 'render-pdf 可达(无内部密钥 → 函数自己的 401)',
+    run: () => reachesOwn401('/api/render-pdf', POST_EMPTY, { proxied: false }),
+  },
+  {
+    name: `Vercel 函数跑在 ${EXPECTED_VERCEL_REGION}(代理与 render-pdf 的 x-vercel-id)`,
     async run() {
-      const res = await fetch(`${base}/api/assessment-report-file`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      });
-      const text = await res.text();
-      let error;
-      try {
-        error = JSON.parse(text)?.error;
-      } catch {
-        error = undefined;
+      const probes = [
+        ['代理', await fetch(`${base}/api/assessment-login-request`, { method: 'GET' })],
+        ['render-pdf', await fetch(`${base}/api/render-pdf`, POST_EMPTY)],
+      ];
+      const bad = probes
+        .map(([label, res]) => [label, res.headers.get('x-vercel-id')])
+        .filter(([, id]) => functionRegionOf(id) !== EXPECTED_VERCEL_REGION)
+        .map(([label, id]) => `${label}: x-vercel-id=${id ?? '(没有)'}`);
+      if (bad.length) {
+        return (
+          `期望函数区域 ${EXPECTED_VERCEL_REGION},实际 ${bad.join(';')}。` +
+          `一切照常工作、只是慢 —— 先看 vercel.json 的 regions 还在不在`
+        );
       }
-      if (res.status === 404 && error === 'not_found') {
-        return '404 not_found —— 这是代理的白名单拒绝(api/[...path].ts 的 ALLOWED),请求没到函数';
-      }
-      if (res.status !== 401 || error !== 'unauthorized') {
-        return `期望 401 {"error":"unauthorized"},实际 ${res.status}:${text.slice(0, 120)}`;
+      return null;
+    },
+  },
+  {
+    name: `Edge Function 跑在 ${EXPECTED_EDGE_REGION}(x-sb-edge-region,与新加坡的库同区)`,
+    async run() {
+      const res = await fetch(`${base}/api/assessment-login-request`, { method: 'GET' });
+      const region = res.headers.get('x-sb-edge-region');
+      if (region !== EXPECTED_EDGE_REGION) {
+        return (
+          `期望 ${EXPECTED_EDGE_REGION},实际 ${region ?? '(响应头里没有 x-sb-edge-region —— 判定不了)'}。` +
+          `Edge Function 跟着调用方的区域走:先看上一条(Vercel 函数区域)`
+        );
       }
       return null;
     },

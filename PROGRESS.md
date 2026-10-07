@@ -83,6 +83,8 @@
 - **不要在这个仓库运行 `supabase config push`。** `config.toml` 没有 `[auth]` 段,
   push 会把 CLI 的默认值推上生产(`site_url` 变成 `127.0.0.1`,后台登录链接全坏)。
   线上 Auth 配置只在 Dashboard 里改,改完回[线上 Auth 配置](#线上-auth-配置)记值和日期。
+- **每场课开课前 10 分钟跑一次 smoke**(带 `SUPABASE_PUBLISHABLE_KEY`,用 Dashboard 里以 `ZSlE` 结尾的那把)——
+  它把学员链路上每个函数都碰一次,顺带预热。理由、数字与局限见[课前流程](#课前流程每场课)。
 - **函数日志里出现 `[object Object]` 时**:那是一个数据库错误被原样抛出、message 丢了
   ([成因](#postgresterror-盘点与第-0-批))。去 **Dashboard → Logs 看 Postgres / API 日志**,
   按函数名和时间对照。⚠️ 这是**【推断】**:没有实测过 Postgres 日志一定记下了那条错误。
@@ -111,7 +113,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`docs/predeploy-results` 建在 `eb4d416` 上(课前两次部署的记录 + 演练准备,2026-10-07)。测试基线:**Node 402 / Deno 220,十五道门全绿**。
+当前分支基线:`feat/smoke-reach-and-region` 建在 `855ee80` 上(smoke 补强 + 课前流程,2026-10-07)。测试基线:**Node 402 / Deno 220,十五道门全绿**。
 
 
 ---
@@ -147,7 +149,7 @@
 还开着的两件与 Auth 相关:**Resend 账号是否由公司掌控**(待确认第 15 行 —— 账号失联则 Admin 登录邮件中断);
 以及待确认清单里其余没填的行。
 
-为什么不能反、每一步的判据、以及 15 项待你在 Dashboard 确认的值(第 3、10、12 行已填,第 13 行填了一半):[线上 Auth 配置](#线上-auth-配置)。
+为什么不能反、每一步的判据、以及 17 项待你在 Dashboard 确认的值(第 3、10、12 行已填,第 13 行填了一半;16、17 是 2026-10-07 改区域后加的):[线上 Auth 配置](#线上-auth-配置)。
 
 ### ① 课前两件:report-file 放行、函数区域改 sin1 —— ✅ 2026-10-07 都已上线
 
@@ -1220,7 +1222,7 @@ Map 的值是**理由字符串**,不是 `true` —— 一个只有名字的白�
 | 项 | 为什么不在 `build` 里 |
 |---|---|
 | `check:deno` / `test:deno` / `check:cross` | 需要 deno,而 Vercel 构建环境没有。在 `npm run verify` 里 |
-| `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测。**两类检查、两个退出码**:部署检查失败 exit 1;部署全过、只有 `[配置]` 期望没满足 exit 3(那类的修法在 Dashboard,不是重新部署 —— 分开是为了不让它挡住部署验收,见[上线顺序](#上线顺序)) |
+| `npm run smoke -- --base <url>` | 它发真实请求,**只能在部署之后跑**。守的是 `api/[...path].ts` 代理链 —— 那条路径本地无处可测。**两类检查、两个退出码**:部署检查失败 exit 1;部署全过、只有 `[配置]` 期望没满足 exit 3(那类的修法在 Dashboard,不是重新部署 —— 分开是为了不让它挡住部署验收,见[上线顺序](#上线顺序))。**2026-10-07 起部署检查 16 条**:学员链路上每个函数都要被碰一次、拿到函数自己的 401(auth、login-request、quiz、score、report、report-file、render-pdf —— 代理漏放行或路由丢了,都只会在那个函数上露出来);外加两条区域检查(Vercel 函数 `::sin1`、Edge Function `ap-southeast-1` —— 区域错了只会变慢、不会报错)。新加的几条在生产已经是绿的,所以按第 0 条用**本地变异**证明它们会红,见[课前流程](#课前流程每场课) |
 | `npm run config:check` | 改 config 时才跑(`config:apply` 会先跑它)。32 项校验,**先校验后落地** |
 | `npm run check:db-errors` | **只报告**:原样 `throw` supabase-js 的 `error`(普通对象)的地方。2026-10-07 全量 **49 处**,所以现在进构建链只会是永远红;课后第 1、2 批迁完,第 4 批再接进 `build`。自带自检(先证明抓得到起因),盲区写在脚本头部。见[盘点](#postgresterror-盘点与第-0-批) |
 
@@ -7460,6 +7462,8 @@ Node 370 / Deno 217,十四道门全绿。
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | **已删**(Viho 在 Dashboard 删的;【实测】`auth.users` 现只剩管理员 1 行)。**是谁建的:待 Viho 补充**(这一半没填完) | 2026-10-07 |
 | 14 | `default` 那把 publishable key(结尾 `Cd4x`)的用途 —— 网站不用它;删不删等第一场课后,删之前先确认没有别的东西在用它 | Project Settings → API Keys | | |
 | 15 | **Resend 账号(`jianan1196`)是否由公司掌控** —— 这个账号失联,Admin 登录邮件就会中断(Supabase 的 SMTP 用的是它下面的 API key) | Resend → Settings / Team | | |
+| 16 | **cron 在 sin1 是否照常触发** —— 2026-10-07 函数区域从 iad1 改成 sin1;按 Vercel 文档 cron 是 HTTP 触发、与区域无关,但没有实际看到它在新区域跑过 | Vercel → 项目 → Cron Jobs(看三条的最近一次执行) | | |
+| 17 | **sin1 的区域计价** —— 区域计价可能与 iad1 不同;第一场课后看一眼用量 | Vercel → Usage | | |
 
 ## Auth 规则
 
@@ -8062,7 +8066,53 @@ Edge Function 跟着调用方落到了新加坡,与数据库同区 —— 不需
 
 ---
 
+# 课前流程(每场课)
+
+2026-10-07 Viho 定的:**开课前 10 分钟跑一次 smoke**,同时当预热。
+
+```
+SUPABASE_PUBLISHABLE_KEY=<Dashboard 里以 ZSlE 结尾的那把> npm run smoke -- --base https://compass.qiai.tech
+```
+
+exit 0 → 开课;exit 1 → 看是哪一条部署检查红了;exit 3 → 只有 `[配置]` 没到位(修法在 Dashboard)。
+
+## 为什么(实测的数字)
+
+- **Supabase Edge Function 真冷时,头 2–3 次请求各要 2.2–2.9 秒**,之后 0.23–0.38 秒
+  (2026-10-07 改区域后,quiz / score / report 第一次在 `ap-southeast-1` 跑时测到的 —— 唯一一组「保证冷」的样本,
+  见[冷启动实测](#冷启动实测只测量2026-10-07))。
+- Vercel 这一层(代理、render-pdf)新部署后的第一次与热的几乎一样,可以忽略。
+- 空闲 31 分钟后的第一次请求**没有变慢** —— 所以开课前 10 分钟暖过的函数,到学员进来时大概率还热着。
+- smoke 现在会把学员链路上**每个函数都碰一次**:auth、login-request、quiz、score、report、report-file、render-pdf。
+
+## 局限(接受)
+
+- **预热只能暖热一个实例。** 学员同时涌入时,平台新开的实例仍可能是冷的 —— 接受。
+- 冷的时候头 **2–3 次**都慢,而 smoke 对每个函数只碰 1–2 次,所以一次 smoke 未必把它完全暖透。
+- 它暖不到 **Chromium**:smoke 打 render-pdf 走的是无密钥 → 401 那条路,只加载了模块,没启动浏览器。
+  当天第一份 PDF 仍可能带着 Chromium 的冷启动 —— 那段有多长,是彩排要测的。
+
+## smoke 这一轮补的(2026-10-07)
+
+- 学员链路上之前没被碰到的四个:quiz、score、report、render-pdf —— 每条都对过 handler:
+  在验凭证那一步就回函数自己的 401,之前没有任何读写库或外发。四条与 report-file 共用一个判据
+  (`reachesOwn401`):401 **且** body 是 `{"error":"unauthorized"}`;代理拒绝时的 404 `not_found` 单独报。
+- 两条区域检查:Vercel 函数的 `x-vercel-id` 倒数第二段是 `sin1`(代理与 render-pdf 各验一次);
+  `x-sb-edge-region` 是 `ap-southeast-1`。响应头缺失时报「判定不了」,不放过。
+- **按第 0 条**:生产已经是绿的,所以用本地变异证明它们会红 ——
+  ①期望值改成 `iad1` / `us-east-1` → 两条区域检查都红、exit 1(部署检查 14/16),报出的是实际的 `sin1::sin1::…` 与 `ap-southeast-1`;
+  ②quiz 那条改成一个代理不放行的名字 → 红,报的是「代理的白名单拒绝」。每次都逐字还原(`shasum` 一致)。
+- 对生产:**部署检查 16/16、配置期望 1/1、exit 0**。
+
+---
+
 ## 变更日志
+
+- 2026-10-07 — **smoke 补强 + [课前流程](#课前流程每场课)**。smoke 部署检查 11 → 16 条:学员链路上 quiz、score、report、
+  render-pdf 之前没被碰过,现在每个都要拿到函数自己的 401;加两条区域检查(`::sin1`、`ap-southeast-1`)。
+  生产已经是绿的,按第 0 条用本地变异证明会红(区域期望改 iad1 → 两条红;quiz 改成代理不放行的名字 → 红)。
+  课前流程:开课前 10 分钟跑一次 smoke,理由是 Supabase 真冷时头 2–3 次各 2.2–2.9 秒;局限(只暖一个实例、暖不到 Chromium)写明并接受。
+  待确认清单加 16(cron 在 sin1 是否照常触发)、17(sin1 计价)
 
 - 2026-10-07 — **[课前两次部署](#课前两次部署report-file-放行函数区域改-sin12026-10-07) + [演练准备](#测试批次端到端演练只读准备2026-10-07)**。
   ①**report-file 放行**(`9aeab8f`):smoke 新加的那条先对生产跑红、上线后绿;新增**第十五道门** `check:proxy-allowlist`
