@@ -10,6 +10,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { parseFieldMap, type FieldMap } from './ghlVerify.ts';
+import { dbFail, dbLogLine } from './dbError.ts';
 
 const SETTINGS_KEY = 'ghl_field_map';
 const TTL_MS = 10 * 60 * 1000;
@@ -39,7 +40,9 @@ export async function getFieldMap(
       .select('value')
       .eq('key', SETTINGS_KEY)
       .maybeSingle();
-    if (error) throw new Error(`app_settings read failed: ${error.message}`);
+    // 必须抛(不能回空映射):拿不到映射就验不了字段,syncToGhl 据此判 TRANSIENT。
+    // 原来包成 `new Error(message)`,code / hint 丢了
+    if (error) dbFail({ fn: 'getFieldMap', op: 'app_settings.select ghl_field_map' }, error);
     if (data?.value && typeof data.value === 'object') {
       cache = { map: data.value as FieldMap, atMs: now };
       return cache.map;
@@ -51,7 +54,7 @@ export async function getFieldMap(
   const { error: upErr } = await supa
     .from('app_settings')
     .upsert({ key: SETTINGS_KEY, value: map, updated_at: new Date().toISOString() }, { onConflict: 'key' });
-  if (upErr) console.error(`app_settings upsert failed: ${upErr.message}`);
+  if (upErr) console.error(dbLogLine({ fn: 'getFieldMap', op: 'app_settings.upsert ghl_field_map' }, upErr));
   cache = { map, atMs: now };
   return map;
 }

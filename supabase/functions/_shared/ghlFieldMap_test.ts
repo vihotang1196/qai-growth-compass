@@ -201,7 +201,9 @@ Deno.test('app_settings 读失败要抛 —— syncToGhl 据此判 TRANSIENT', a
     const err = await assertRejects(() =>
       getFieldMap(fakeSupa(calls, null, { readError: 'connection reset' }), { nowMs: 0 }),
     );
-    assertStringIncludes((err as Error).message, 'app_settings read failed');
+    // 2026-10-07 起抛的是 DbError:message 里有操作名,也有底层原因(原来只有一句话)
+    assertStringIncludes((err as Error).message, 'app_settings.select');
+    assertStringIncludes((err as Error).message, 'connection reset');
     assertEquals(calls.fetches.length, 0); // 读失败时不该继续回源
   } finally {
     restore();

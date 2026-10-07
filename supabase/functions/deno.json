@@ -4,7 +4,8 @@
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.110.8",
     "@std/assert": "jsr:@std/assert@1.0.10",
     "../../api/_lib/lang.js": "../../api/_lib/lang.ts",
-    "../../api/_lib/pdfState.js": "../../api/_lib/pdfState.ts"
+    "../../api/_lib/pdfState.js": "../../api/_lib/pdfState.ts",
+    "../../api/_lib/dbError.js": "../../api/_lib/dbError.ts"
   },
   "tasks": {
     "test": "deno test --allow-read --allow-env=GHL_PRIVATE_TOKEN,GHL_LOCATION_ID _shared/",

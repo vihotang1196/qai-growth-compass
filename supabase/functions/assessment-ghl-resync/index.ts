@@ -16,6 +16,9 @@ import { serviceClient } from '../_shared/supa.ts';
 import { secretMatches } from '../_shared/secret.ts';
 import { buildWritebackPayload, syncToGhl, type WritebackResult } from '../_shared/ghlWriteback.ts';
 import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { dbFail, describeError } from '../_shared/dbError.ts';
+
+const FN = 'assessment-ghl-resync';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const json = (body: unknown, status = 200) =>
@@ -96,8 +99,8 @@ Deno.serve(async (req: Request) => {
         .or(`ghl_tags_next_retry_at.is.null,ghl_tags_next_retry_at.lte.${nowIso}`)
         .limit(BATCH_CAP + 1),
     ]);
-    if (fieldRes.error) throw fieldRes.error;
-    if (tagRes.error) throw tagRes.error;
+    if (fieldRes.error) dbFail({ fn: FN, op: 'assessment_results.select (fields due)' }, fieldRes.error);
+    if (tagRes.error) dbFail({ fn: FN, op: 'assessment_results.select (tags due)' }, tagRes.error);
 
     /**
      * 【跳过 CONFIG / AUTH 行】这两类失败把 next_retry_at 置成了 null,而「从没试过 /
@@ -155,7 +158,7 @@ Deno.serve(async (req: Request) => {
       .from('assessment_survey')
       .select('session_id, responses')
       .in('session_id', sessionIds);
-    if (svErr) throw svErr;
+    if (svErr) dbFail({ fn: FN, op: 'assessment_survey.select (batch)' }, svErr);
     const surveyBy = new Map(
       (surveys ?? []).map((s) => [s.session_id as string, (s.responses ?? {}) as Record<string, unknown>]),
     );
@@ -251,7 +254,7 @@ Deno.serve(async (req: Request) => {
       results,
     });
   } catch (err) {
-    console.error(`resync failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`resync failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });

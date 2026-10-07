@@ -17,6 +17,9 @@ import { generateAccessToken, magicLink } from '../_shared/token.ts';
 import { parseLang } from '../_shared/lang.ts';
 import type { EntitlementWarning } from '../_shared/entitlementWarnings.ts';
 import { parseWebhookPayload } from '../_shared/webhookPayload.ts';
+import { dbFail, describeError } from '../_shared/dbError.ts';
+
+const FN = 'assessment-ghl-webhook';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -55,7 +58,7 @@ async function resolveCohort(
       .eq('source_tag', cohortTag)
       .eq('is_active', true)
       .maybeSingle();
-    if (error) throw error;
+    if (error) dbFail({ fn: FN, op: 'assessment_cohorts.select by source_tag' }, error);
     if (data) return { cohort_id: data.id, source: 'tag' };
   }
 
@@ -64,7 +67,7 @@ async function resolveCohort(
     .select('id')
     .eq('is_default', true)
     .maybeSingle();
-  if (defError) throw defError;
+  if (defError) dbFail({ fn: FN, op: 'assessment_cohorts.select default' }, defError);
 
   if (!def) {
     // seed migration 里有断言,正常不该走到这里。走到了就是有人手动删了默认批次
@@ -174,7 +177,7 @@ Deno.serve(async (req: Request) => {
       p_lang: langParse.kind === 'set' ? langParse.lang : null,
       p_warnings: allWarnings.length ? allWarnings : null,
     });
-    if (error) throw error;
+    if (error) dbFail({ fn: FN, op: 'rpc upsert_assessment_entitlement' }, error);
 
     const row = (Array.isArray(data) ? data[0] : data) as UpsertRow | undefined;
     if (!row) throw new Error('upsert_assessment_entitlement returned no row');
@@ -206,8 +209,7 @@ Deno.serve(async (req: Request) => {
       lang: langParse.kind === 'set' ? langParse.lang : undefined,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`webhook failed for ${value.ghl_contact_id}: ${message}`);
+    console.error(`webhook failed for ${value.ghl_contact_id}: ${describeError(err).log}`);
     // 回 500 让 GHL 的 workflow 显示失败并可重试;不回显内部细节
     return json({ error: 'internal_error' }, 500);
   }

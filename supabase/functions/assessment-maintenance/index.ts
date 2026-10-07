@@ -17,6 +17,9 @@
  */
 import { serviceClient } from '../_shared/supa.ts';
 import { secretMatches } from '../_shared/secret.ts';
+import { dbFail, describeError } from '../_shared/dbError.ts';
+
+const FN = 'assessment-maintenance';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 const RETENTION_DAYS = 30;
@@ -49,12 +52,12 @@ Deno.serve(async (req: Request) => {
       .from('assessment_login_attempts')
       .delete({ count: 'exact' })
       .lt('created_at', cutoff);
-    if (error) throw error;
+    if (error) dbFail({ fn: FN, op: 'assessment_login_attempts.delete (retention)' }, error);
 
     console.log(`retention: deleted ${count ?? 0} login attempts older than ${cutoff}`);
     return json({ ok: true, deleted: count ?? 0, cutoff });
   } catch (err) {
-    console.error(`retention failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`retention failed: ${describeError(err).log}`);
     return json({ error: 'internal_error' }, 500);
   }
 });

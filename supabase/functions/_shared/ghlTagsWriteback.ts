@@ -31,6 +31,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { classifyGhlError, type GhlErrorClass } from './ghlVerify.ts';
+import { dbLogLine } from './dbError.ts';
 import { ghlContactRequest } from './ghlContact.ts';
 import { deriveTags, TAG_NAMESPACE, type TagInput } from './ghlTags.ts';
 
@@ -62,11 +63,15 @@ async function recordTagFailure(
   nowMs: number,
 ): Promise<void> {
   console.error(`${klass}: [${logTag}] tags for session ${sessionId}: ${detail}`);
-  const { data } = await supa
+  const { data, error: attemptsErr } = await supa
     .from('assessment_results')
     .select('ghl_sync_attempts')
     .eq('session_id', sessionId)
     .maybeSingle();
+  // 读不到就按第一次算 —— 退避会从头开始;原来连这一行日志都没有
+  if (attemptsErr) {
+    console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.select ghl_sync_attempts', session: sessionId }, attemptsErr));
+  }
   const attempts = ((data?.ghl_sync_attempts as number) ?? 0) + 1;
   const { error } = await supa
     .from('assessment_results')
@@ -85,7 +90,7 @@ async function recordTagFailure(
       ghl_tags_next_retry_at: klass === 'TRANSIENT' ? nextRetryAt(attempts, nowMs) : null,
     })
     .eq('session_id', sessionId);
-  if (error) console.error(`failed to record tag failure for ${sessionId}: ${error.message}`);
+  if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.update (record tag failure)', session: sessionId }, error));
 }
 
 /**
@@ -130,7 +135,7 @@ export async function syncTagsToGhl(
       .from('assessment_results')
       .update({ ghl_tags_synced: true, ghl_tags_last_error: null, ghl_tags_next_retry_at: null })
       .eq('session_id', sessionId);
-    if (error) console.error(`failed to mark tags synced for ${sessionId}: ${error.message}`);
+    if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.update (tags already in sync)', session: sessionId }, error));
     return { attempted: false, ok: true, added: [], removed: [], detail: 'already in sync' };
   }
 
@@ -210,7 +215,7 @@ export async function syncTagsToGhl(
       ghl_tags_applied: tags,
     })
     .eq('session_id', sessionId);
-  if (error) console.error(`failed to record applied tags for ${sessionId}: ${error.message}`);
+  if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.update (record applied tags)', session: sessionId }, error));
 
   return { attempted: true, ok: true, added, removed };
 }

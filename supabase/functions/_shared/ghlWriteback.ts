@@ -20,6 +20,7 @@ import { classifyGhlError, verifyWrittenFields, type GhlErrorClass } from './ghl
 import { getFieldMap } from './ghlFieldMap.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 import { ghlContactRequest, type ContactRequestResult } from './ghlContact.ts';
+import { dbLogLine } from './dbError.ts';
 
 export interface WritebackResult {
   total: number;
@@ -193,7 +194,7 @@ export async function syncToGhl(
     .from('assessment_results')
     .update({ ghl_synced: true, ghl_last_error: null, ghl_next_retry_at: null })
     .eq('session_id', sessionId);
-  if (error) console.error(`[${logTag}] failed to mark ghl_synced for ${sessionId}: ${error.message}`);
+  if (error) console.error(dbLogLine({ fn: `syncToGhl/${logTag}`, op: 'assessment_results.update (mark ghl_synced)', session: sessionId }, error));
   return { attempted: true, ok: true };
 }
 
@@ -211,11 +212,15 @@ async function recordFailure(
   logTag: string,
 ): Promise<void> {
   console.error(`${klass}: [${logTag}] session ${sessionId}: ${detail}`);
-  const { data } = await supa
+  const { data, error: attemptsErr } = await supa
     .from('assessment_results')
     .select('ghl_sync_attempts')
     .eq('session_id', sessionId)
     .maybeSingle();
+  // 读不到就按第一次算 —— 退避会从头开始;原来连这一行日志都没有
+  if (attemptsErr) {
+    console.error(dbLogLine({ fn: `syncToGhl/${logTag}`, op: 'assessment_results.select ghl_sync_attempts', session: sessionId }, attemptsErr));
+  }
   const attempts = ((data?.ghl_sync_attempts as number) ?? 0) + 1;
 
   const patch: Record<string, unknown> = {
@@ -239,5 +244,5 @@ async function recordFailure(
         : null,
   };
   const { error } = await supa.from('assessment_results').update(patch).eq('session_id', sessionId);
-  if (error) console.error(`failed to record sync failure for ${sessionId}: ${error.message}`);
+  if (error) console.error(dbLogLine({ fn: `syncToGhl/${logTag}`, op: 'assessment_results.update (record sync failure)', session: sessionId }, error));
 }

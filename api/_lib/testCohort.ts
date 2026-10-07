@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { dbLogLine } from './dbError.js';
 
 /**
  * 「这一行属于测试 / 演示批次吗」—— **所有对外出口的收口判断**。
@@ -64,7 +65,7 @@ export async function isTestEntitlement(
     .eq('id', entitlementId)
     .maybeSingle();
   if (error) {
-    console.error(`isTestEntitlement(${entitlementId}) failed: ${error.message}`);
+    console.error(dbLogLine({ fn: 'isTestEntitlement', op: 'assessment_entitlements.select cohort.is_test', entitlement: entitlementId }, error));
     return false;
   }
   return isTestCohort((data as { cohort?: { is_test?: boolean | null } | null } | null)?.cohort);
@@ -85,7 +86,7 @@ export async function isTestSessionCohort(
     .eq('id', sessionId)
     .maybeSingle();
   if (error) {
-    console.error(`isTestSessionCohort(${sessionId}) failed: ${error.message}`);
+    console.error(dbLogLine({ fn: 'isTestSessionCohort', op: 'assessment_sessions.select cohort.is_test', session: sessionId }, error));
     return false;
   }
   const row = data as {

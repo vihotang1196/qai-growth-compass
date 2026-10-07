@@ -22,9 +22,12 @@ import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 import { classifyError } from '../_shared/errorKind.ts';
+import { dbFail } from '../_shared/dbError.ts';
 import { LANGS, parseLang } from '../_shared/lang.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+
+const FN = 'assessment-admin';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' };
 
@@ -284,7 +287,7 @@ Deno.serve(async (req: Request) => {
           .select('session_id')
           .eq('session_id', sessionId)
           .maybeSingle();
-        if (resErr) throw resErr;
+        if (resErr) dbFail({ fn: FN, op: 'assessment_results.select (report_link)', session: sessionId }, resErr);
         if (!res) return json({ error: 'no_result', detail: '这个 session 还没算出结果' }, 409);
 
         const rt = await signRenderToken(sessionId, internal, Date.now());
@@ -386,7 +389,7 @@ Deno.serve(async (req: Request) => {
           .select(SEND_COLS)
           .eq('id', id)
           .maybeSingle();
-        if (error) throw error;
+        if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select (resend/rotate)', entitlement: id }, error);
         if (!ent) return json({ error: 'not_found' }, 404);
 
         let target = ent as SendTarget;
@@ -408,7 +411,7 @@ Deno.serve(async (req: Request) => {
             .from('assessment_entitlements')
             .update({ access_token: token, access_revoked_at: null })
             .eq('id', id);
-          if (rotErr) throw rotErr;
+          if (rotErr) dbFail({ fn: FN, op: 'assessment_entitlements.update access_token (rotate)', entitlement: id }, rotErr);
           target = { ...target, access_token: token };
           console.log(`admin ${verdict.email} rotated the token for entitlement ${id}`);
         } else if (ent.access_revoked_at) {
@@ -479,7 +482,7 @@ Deno.serve(async (req: Request) => {
           },
           { onConflict: 'session_id,lang' },
         );
-        if (resetErr) throw resetErr;
+        if (resetErr) dbFail({ fn: FN, op: 'assessment_report_files.upsert (render_pdf reset)', session: sessionId, lang: targetLang }, resetErr);
 
         const base = Deno.env.get('APP_BASE_URL');
         const secret = Deno.env.get('INTERNAL_FN_SECRET');
@@ -511,7 +514,7 @@ Deno.serve(async (req: Request) => {
           .from('assessment_entitlements')
           .update({ access_revoked_at: new Date().toISOString() })
           .eq('id', id);
-        if (error) throw error;
+        if (error) dbFail({ fn: FN, op: 'assessment_entitlements.update (revoke)', entitlement: id }, error);
         // 不发新链接。这是「彻底停用」,不是「换一条」
         console.log(`admin ${verdict.email} revoked entitlement ${id}`);
         return json({ ok: true });
@@ -555,7 +558,7 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
     .from('assessment_cohorts')
     .select('id, name, is_test, event_date')
     .order('created_at', { ascending: false });
-  if (cErr) throw cErr;
+  if (cErr) dbFail({ fn: FN, op: 'assessment_cohorts.select (survey_insights)' }, cErr);
 
   const { data: rowsRaw, error: rErr } = await supa
     .from('assessment_survey')
@@ -576,7 +579,7 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
         'id, name, phone_e164, email_lower, cohort_id, cohort:assessment_cohorts(name, is_test)))',
     )
     .eq('session.status', 'completed');
-  if (rErr) throw rErr;
+  if (rErr) dbFail({ fn: FN, op: 'assessment_survey.select (survey_insights)' }, rErr);
 
   const all = (rowsRaw ?? []) as unknown as SurveyInsightRow[];
   /**
@@ -663,7 +666,7 @@ async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string)
     .from('assessment_cohorts')
     .select('id, name, is_test, event_date')
     .order('created_at', { ascending: false });
-  if (cErr) throw cErr;
+  if (cErr) dbFail({ fn: FN, op: 'assessment_cohorts.select (funnel)' }, cErr);
 
   const { data: entRows, error: eErr } = await supa
     .from('assessment_entitlements')
@@ -672,7 +675,7 @@ async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string)
         'cohort:assessment_cohorts(is_test), ' +
         'session:assessment_sessions(id, status, profile)',
     );
-  if (eErr) throw eErr;
+  if (eErr) dbFail({ fn: FN, op: 'assessment_entitlements.select (funnel)' }, eErr);
 
   const all = (entRows ?? []) as unknown as FunnelEntitlementRow[];
   const inScope = all.filter((r) =>
@@ -686,7 +689,7 @@ async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string)
       .from('assessment_answers')
       .select('session_id')
       .in('session_id', sessionIds);
-    if (aErr) throw aErr;
+    if (aErr) dbFail({ fn: FN, op: 'assessment_answers.select (funnel)' }, aErr);
     for (const a of (ansRows ?? []) as { session_id: string }[]) answered.add(a.session_id);
   }
 
@@ -729,7 +732,7 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
     .from('assessment_cohorts')
     .select('id, name, is_test, event_date')
     .order('created_at', { ascending: false });
-  if (cErr) throw cErr;
+  if (cErr) dbFail({ fn: FN, op: 'assessment_cohorts.select (cohort_dashboard)' }, cErr);
 
   const { data: resultRows, error: rErr } = await supa
     .from('assessment_results')
@@ -738,7 +741,7 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
         'session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
     )
     .eq('session.status', 'completed');
-  if (rErr) throw rErr;
+  if (rErr) dbFail({ fn: FN, op: 'assessment_results.select (cohort_dashboard)' }, rErr);
 
   const rows = (resultRows ?? []) as unknown as DashboardResultRow[];
   const inScope = rows.filter((r) => {
@@ -754,7 +757,7 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
       .from('assessment_answers')
       .select('question_id, option_index')
       .in('session_id', sessionIds);
-    if (aErr) throw aErr;
+    if (aErr) dbFail({ fn: FN, op: 'assessment_answers.select (cohort_dashboard)' }, aErr);
     answers = (ansRows ?? []) as { question_id: string; option_index: number }[];
   }
 
@@ -806,7 +809,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
        )`,
     )
     .order('created_at', { ascending: false });
-  if (error) throw error;
+  if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select (roster)' }, error);
 
   const rows = (data ?? []) as unknown as RosterRow[];
   /**

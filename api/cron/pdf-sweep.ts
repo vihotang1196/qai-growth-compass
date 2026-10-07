@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { pickSecretKeyFromPlainEnv } from '../_lib/apiKeys.js';
 import { isTestCohort } from '../_lib/testCohort.js';
+import { dbFail, describeError } from '../_lib/dbError.js';
 import {
   MAX_PDF_ATTEMPTS,
   pdfSweepReason,
@@ -102,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .neq('pdf_status', 'ready')
       .lt('pdf_attempts', MAX_PDF_ATTEMPTS)
       .order('created_at', { ascending: true });
-    if (error) throw error;
+    if (error) dbFail({ fn: 'pdf-sweep', op: 'assessment_report_files.select (due rows)' }, error);
 
     const now = Date.now();
     /**
@@ -186,7 +187,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       results,
     });
   } catch (err) {
-    console.error(`pdf-sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`pdf-sweep failed: ${describeError(err).log}`);
     return res.status(500).json({ error: 'sweep_failed' });
   }
 }
