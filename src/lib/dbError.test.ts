@@ -133,6 +133,20 @@ describe('dbError redaction', () => {
     }
   });
 
+  // 单独出现的 +60(马来西亚)E.164:不在 Key()=() / Failing row 里,分别出现在 message / details / hint。
+  // 紧凑形式即使没有 `+` 那条规则也会被「8–15 位独立数字」接住;带空格和横线的形式只靠 `+` 那条 ——
+  // 所以两种都放,任何一条规则被删都有一种会漏出来
+  it('a standalone +60 E.164 number is redacted in message, details and hint', async () => {
+    const MY_COMPACT = '+60123456789';
+    const MY_SPACED = '+60 12-345 6789';
+    const err = await pgError('P0001', `could not notify ${MY_COMPACT}`, `last tried ${MY_SPACED}`, `retry ${MY_COMPACT} later`);
+    for (const out of everywhere(err)) {
+      expectNoFragment(out, MY_COMPACT, 6);
+      expect(out).not.toContain('345 6789');
+    }
+    for (const out of logs(err)) expect(out).toContain('P0001');
+  });
+
   // 64 位十六进制(identifier_hash 那种)也换掉
   it('64-char hex (identifier_hash style) is redacted', async () => {
     const err = await pgError('23505', 'duplicate key', null, `hash ${HEX64} seen twice`);
