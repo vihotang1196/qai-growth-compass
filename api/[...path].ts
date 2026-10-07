@@ -23,8 +23,20 @@ import { pickPublishableKey, supabaseKeyHeaders } from './_lib/apiKeys.js';
  * 【只放浏览器会直接调的函数】assessment-ghl-webhook 不在这里(GHL 直连 Supabase,
  * 服务器到服务器没有 cookie 参与);assessment-maintenance 也不在(它由
  * api/cron/retention.ts 用 INTERNAL_FN_SECRET 调,不该从浏览器可达)。
+ *
+ * 【这张清单有门守着】`check:proxy-allowlist` 会把它和前端实际调用的函数、
+ * supabase/functions 下实际存在的函数各比一次。`assessment-report-file` 曾经漏在这里
+ * (前端从 e2b7041 起就在调它,请求在这一层被回 404),那道门就是为这件事立的。
  */
-const ALLOWED = new Set(['assessment-auth', 'assessment-login-request', 'assessment-admin', 'assessment-quiz', 'assessment-score', 'assessment-report']);
+const ALLOWED = new Set([
+  'assessment-auth',
+  'assessment-login-request',
+  'assessment-admin',
+  'assessment-quiz',
+  'assessment-score',
+  'assessment-report',
+  'assessment-report-file',
+]);
 
 /**
  * 允许透传给浏览器的 cookie 名 —— 白名单,只放我们自己签发的。

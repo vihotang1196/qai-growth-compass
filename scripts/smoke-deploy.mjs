@@ -107,6 +107,40 @@ const checks = [
     },
   },
   {
+    /**
+     * 【为什么有这一条】2026-10-07 实测:报告页「生成 X 版 PDF」按钮调的这个函数,
+     * 代理的 ALLOWED 里一直没有 —— 请求在代理那一层就被回了 404 not_found,从没到过函数。
+     * 前面两条只验 auth / login-request,所以 smoke 一直是绿的。
+     *
+     * 【判据要两样都对】函数自己的 401 是 `{"error":"unauthorized"}`;
+     * 代理拒绝时回的是 404 `{"error":"not_found"}`。只看「不是 404」不够 ——
+     * 别的层(SPA rewrite、Vercel 自己的 404)也可能回一个不是 401 的东西。
+     * 不带 cookie,所以在 verifySession 那一步就返回,零写入。
+     */
+    name: '代理把 POST 转给 assessment-report-file(未鉴权 → 函数自己的 401,不是代理的 404)',
+    async run() {
+      const res = await fetch(`${base}/api/assessment-report-file`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      const text = await res.text();
+      let error;
+      try {
+        error = JSON.parse(text)?.error;
+      } catch {
+        error = undefined;
+      }
+      if (res.status === 404 && error === 'not_found') {
+        return '404 not_found —— 这是代理的白名单拒绝(api/[...path].ts 的 ALLOWED),请求没到函数';
+      }
+      if (res.status !== 401 || error !== 'unauthorized') {
+        return `期望 401 {"error":"unauthorized"},实际 ${res.status}:${text.slice(0, 120)}`;
+      }
+      return null;
+    },
+  },
+  {
     name: '无效 token 走完整链路:代理 → 函数 → 数据库 → /expired,且不下 cookie',
     async run() {
       const res = await fetch(`${base}/api/assessment-auth`, {
