@@ -47,6 +47,10 @@
 
 **几条走位常识:**
 
+- **Claude Code 窗口必须在本仓库根目录启动**(第一条命令 `git rev-parse --show-toplevel`,
+  输出不是这个仓库就停下,什么都不做)。
+  **遇到其他仓库的守卫或钩子拦截时,停下汇报给 Viho —— 不得使用任何逃生门或绕过方式,
+  即使对方文档里写了逃生门。** 那道门守的是那个仓库的东西,能不能绕不由这边判断。
 - **共享代码跨三个运行时**,每个的扩展名规则不同,写错的下场是**部署成功、运行时才炸**:
 
   | 位置 | 运行时 | 相对导入怎么写 |
@@ -128,7 +132,7 @@
 3. **smoke 的 `[配置]` 那条转绿**、exit 0
 4. **接自定义 SMTP**(原先挂在 D 里的「上线前换掉内置 SMTP」挪到这里 —— 它必须排在第 2 步之后)
 
-为什么不能反、每一步的判据、以及 13 项待你在 Dashboard 确认的值:[线上 Auth 配置](#线上-auth-配置)。
+为什么不能反、每一步的判据、以及 13 项待你在 Dashboard 确认的值(第 3、10 行 2026-10-07 已填):[线上 Auth 配置](#线上-auth-配置)。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -7370,14 +7374,14 @@ Node 370 / Deno 217,十四道门全绿。
 |---|---|---|---|---|
 | 1 | Site URL | Authentication → URL Configuration | | |
 | 2 | Redirect URLs(至少要有 `https://compass.qiai.tech/admin`;本地开发要登后台的话加 `http://localhost:5173/admin`) | 同上 | | |
-| 3 | 自定义 SMTP 是否已接(host / 发件人)—— 03:33 那封确认信**发出去了**,说明要么对方是项目成员、要么已经接了自定义 SMTP,我分辨不出来 | Authentication → Emails → SMTP | | |
+| 3 | 自定义 SMTP 是否已接(host / 发件人)—— 03:33 那封确认信**发出去了**,说明要么对方是项目成员、要么已经接了自定义 SMTP,我分辨不出来 | Authentication → Emails → SMTP | **内置**(Dashboard 显示 built-in email service 横幅),尚未接自定义 SMTP。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
 | 4 | 每小时发信上限(⚠️ magic link、确认信共用这一个额度 —— 刷满了后台一小时收不到登录信) | Authentication → Rate Limits | | |
 | 5 | 每用户发信间隔 | 同上 | | |
 | 6 | Magic Link / Confirm signup 模板的现有内容 | Authentication → Emails → Templates | | |
 | 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项) | Authentication → Providers → Email | | |
 | 8 | CAPTCHA 开没开(⚠️ 一开,现有的 `signInWithOtp` 不带 captchaToken 就会坏) | Authentication → Attack Protection | | |
 | 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
-| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | | |
+| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
 | 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | | |
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | | |
@@ -7558,6 +7562,13 @@ Node 390 / Deno 217,十四道门全绿。
 ---
 
 ## 变更日志
+
+- 2026-10-07 — **补档:启动目录规则 + Dashboard 三项**。
+  过程记录:上一轮会话误开在其他仓库目录,并使用了该仓库的逃生门。已清理。
+  已立[从这里开始](#从这里开始--交接给一个没看过对话记录的人)里那条「必须在本仓库根目录启动、
+  别的仓库的门拦住就停下汇报」的规则。
+  [待确认清单](#待-viho-在-dashboard-确认)第 3、10 行按 Viho 的 Dashboard 截图填上:
+  SMTP 是内置的、两条安全通知都关着
 
 - 2026-10-07 — **Admin 登录页:不建用户、不显示原文 + smoke 加「配置期望」+ 线上 Auth 配置补档**。
   生产开着自助注册(【实测】`disable_signup=false`),而登录页 `signInWithOtp` 没传
