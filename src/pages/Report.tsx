@@ -10,6 +10,7 @@ import ReportFileActions from './ReportFileActions';
 import { cardsFor } from '../../api/_lib/reportFiles';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload, requestReportFile} from '@/lib/reportApi';
+import { openFreshPdf } from '@/lib/openPdf';
 import { badgeForScore } from '@/lib/scoring';
 import { isPriorityMismatch } from '../../api/_lib/surveySignals';
 import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type ActionLibrary } from '@/lib/reportContent';
@@ -146,8 +147,11 @@ export default function Report() {
       const fresh = await fetchReport();
       setData(fresh);
       setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
-      const file = fresh.files?.find((f) => f.lang === lang);
-      if (file?.url) window.open(file.url, '_blank', 'noopener');
+      // 当前页跳转,不开新窗口 —— 开新窗口在 await 之后会被手机浏览器当成弹窗拦掉(见 lib/openPdf.ts)
+      openFreshPdf(fresh, lang, {
+        assign: (url) => window.location.assign(url),
+        open: (url, target, features) => window.open(url, target, features),
+      });
     } finally {
       setOpening(false);
     }
