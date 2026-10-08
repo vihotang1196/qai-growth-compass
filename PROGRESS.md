@@ -115,7 +115,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`docs/acceptance-pdf-fix` 建在 `52f68b1` 上(转场验收 + PDF 里去掉「带走这份报告」,2026-10-08)。测试基线:**Node 456 / Deno 220,十六道门全绿**。
+当前分支基线:`docs/chromium-149` 建在 `5a054e6` 上(chromium 149 升级,2026-10-08)。测试基线:**Node 461 / Deno 220,十六道门全绿**。
 
 
 ---
@@ -260,6 +260,14 @@ Viho 在手机上以学员身份走完全程(测试 entitlement `2d732b39-0e1a-4
   而 PDF 的分页没有任何检查在守
 当时另开的那个任务(先写红的测试、出本地前后截图、停下等决定)**不启动**,留到课后。
 
+### ⑧ 冻结前三件(Viho 2026-10-08 定)—— 一、chromium 149 ✅ 已上线;二、三 进行中
+
+冻结前把能做的都做完,按顺序、每部分单独提交 / 部署 / 验证,任何一部分不符合预期就停下汇报。
+
+1. ✅ **chromium 149**(`5a054e6`)—— 本地前后比对版式不变;线上真实渲染一次通过;回滚方案写好。见[那一节](#chromium-149-升级2026-10-08)
+2. **A 组:LiveSlide 现场字号**(只改前端、只动 LiveSlide)—— 进行中
+3. **B / C 组:课后校准的准备**(只读脚本 + 文案导出 + 流程,不改线上、不部署)—— 未开始
+
 ### A. 需要一次真实投影(现场当场就能改)
 
 **会场投影距离下的字号够不够。** 只有「在我的屏幕上不难看」被验过;
@@ -305,9 +313,12 @@ S5/S6 的开放回答上有没有可分辨的差别。
   需要什么条件才能测,列在那一节,待 Viho 决定~~
   ✅ **2026-10-07 彩排时测到了**:sin1 上的第一次渲染(含 Chromium 冷启动)**8.9 秒**,离 60 秒上限约 51 秒余量;
   热的那次 6.4 秒。原先在 iad1 测的两次约 16 秒(热的)—— 区域换到库旁边之后,冷的也比原先热的快。见[彩排结果](#彩排结果2026-10-07)
-- **`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
-  再决定 `api/_lib/lambdaEnv.ts` 那段注入是保留 / 改值 / 删掉
-  (它可能变成没必要,也可能变成有害)
+- ✅ ~~**`@sparticuz/chromium` 149 升级** —— 单独一轮。**先读新版 `helper.js` 的探测函数**,
+  再决定 `api/_lib/lambdaEnv.ts` 那段注入是保留 / 改值 / 删掉~~
+  **2026-10-08 已上线(`5a054e6`)**:149.0.0 + puppeteer-core 25.1.0(都精确钉住),Node 仍 22.x;注入**保留、值不变**(149 里与 Vercel 分支选同一个目录);
+  149 删了 `chromium.font()`,改成自己下载;`vercel.json` 加 `includeFiles`(旧版追踪器会把 Chromium 本体漏掉)。
+  本地前后比对版式不变;线上经测试 entitlement Z 真实渲染一次:`Skia/PDF m149`、9.66 秒、没有转圈方块。回滚方案也在那一节。
+  见[chromium 149 升级](#chromium-149-升级2026-10-08)
 - ~~**`PostgrestError` 的 `code`/`details`/`hint` 被 ~37 处 `.message` 降级丢掉** ——
   `errorKind.ts` 只在 admin 那一处兑现了,其余单独一轮~~
   ⚠️ **已更正(2026-10-07)**:**前提错了。** supabase-js 返回的 `error` 是**普通对象**,不是 Error ——
@@ -8709,8 +8720,167 @@ config 里 `action_library.*.root_cause` 只有中文(不是 zh/en 成对的形�
 
 ---
 
+# chromium 149 升级(2026-10-08)
+
+冻结前三件的第一件(Viho 定:冻结前能做的都做完;每部分单独提交、部署、验证,不符合预期就停)。**结果:符合预期,已上线(`5a054e6`)。**
+
+## 为什么升 —— 原始记录说的是兼容性,不是安全修复
+
+[平台地基漂移](#平台地基漂移钉住运行时版本本项目第一次纯外部环境失败)那次(2026-08-06):Vercel 默认 Node 从 22 漂到 24,
+`@sparticuz/chromium@131` 只认到 22。当时选 A(钉 Node 22.x),把 B(升 149 —— 第一个明确声明 `^22.17.0 || >=24.0.0` 的版本)
+单独留一轮:131→149 跨 18 个大版本、要连带升 puppeteer、会重开字体那条链,两件事一起动失败了分不清是哪件。
+所以理由是**兼容性 + 版本落后**:我们被钉在 Node 22 和一个 2024 年末的 Chromium 上,而 Node 22 的维护期有尽头 ——
+到那时再升,就是在压力下同时动两件事。PDF 渲染器只打开我们自己的页面,版本落后带来的安全面很小。
+这一轮的价值是**把升级做成一个我们主动做、能验证的动作**。
+
+## 改了什么(`5a054e6`)
+
+| 项 | 之前 | 之后 | 理由 |
+|---|---|---|---|
+| `@sparticuz/chromium` | `^131.0.1` | **`149.0.0`,精确钉住** | 它的 README:「Breaking changes may occur at the 'patch' level」 |
+| `puppeteer-core` | `^23.10.0`(装的是 23.11.1 ↔ Chrome 131.0.6778.204) | **`25.1.0`,精确** ↔ Chrome 149.0.7827.22 | 按 puppeteer 的配对:25.0.4 对 148、**25.1.0 对 149**、25.2.0 起对 150。149 自己的开发依赖写的是 `^25.0.4`,不钉的话新装会漂到对 150+ 的版本 |
+| Node | 22.x | **不变** | 不在同一轮动两件事。149 已允许 24,课后可单独升 |
+| 中文兜底字体 | `chromium.font()` 下到 `$HOME/.fonts`,再复制到 `/tmp/fonts` | 149 **删掉了 `font()`**。改成自己的 `fetchToFile` 直接下到 `/tmp/fonts`(fontconfig 扫的目录),先写 `.part` 再改名;热实例上文件已在且够大就不重下 | 不改的话每一份 PDF 都是 `chromium.font is not a function`。先写临时名:断在一半时最终路径上不留截断文件(截断在 1MB 之后也能骗过大小检查) |
+| `lambdaEnv` 注入 | | **保留,值不变** | 见下 |
+| `vercel.json` | | render-pdf / font-probe 加 `includeFiles: node_modules/@sparticuz/chromium/bin/**` | 见下 —— **这一轮最要紧的发现** |
+| puppeteer 25 的类型 | | font-probe 的 `setContent` 改等 `load`(后面原有的 `document.fonts.ready` 才是字体信号);render-pdf 的 `pageerror` 参数按 `unknown` 处理 | `tsc -b` 拦下的,两处 |
+
+测试:`src/lib/lambdaEnv.test.ts` 按新签名重写,**先红后绿** —— 对旧实现 12 条里 **7 条红**(旧实现把下载器当成只收 url 的 `font()`、只往 `$HOME/.fonts` 下;`fetchToFile` 不存在);
+另 5 条是错误归一化(判断标准 9 那组),行为本来就没变,绿着。实现后 12/12。新增的几条:热实例不重下、偏小的残留要重下、断在一半不留文件、`fetchToFile` 非 200 抛带状态码的 Error 且不留文件。
+**Node 456 → 461 / Deno 220,verify exit 0。**
+
+## `lambdaEnv` 的决定(那条「先读新版 `helper.js` 再决定」)
+
+149 的顶层探测只剩一个函数 `isRunningInAmazonLinux2023`:`AWS_EXECUTION_ENV` / `AWS_LAMBDA_JS_RUNTIME` 含 `20.x/22.x/24.x`(或 CodeBuild 镜像)→ true;
+否则 **`VERCEL` 有值且 Node ≥ 20 → true**(149 新加的 Vercel 分支)。只有 al2023 一个分支,131 的 al2 分支与 `al2.tar.br` 都删了。
+
+- **无害**:注入的 `AWS_Lambda_nodejs22.x` 走第一条,与 Vercel 分支选的是**同一个目录**;没有别的分支可选,带不到错的库目录
+- **不删**:删了就要靠 `VERCEL` 在**函数运行时**可见 —— 那取决于项目设置「Automatically expose System Environment Variables」,仓库里看不到,本轮也没在运行时观测过。
+  冻结前不往渲染链路里引一个没观测过的前提
+- **想删的话**:先让 font-probe 打印 `VERCEL`、确认有值,再删那一行;`assertChromiumEnvReady()` 会在探测没进时直接说出来
+
+文件头的「升级时必须重新确认」已改写成 149 的探测逻辑与这个决定。
+
+## `includeFiles`:Vercel 的依赖追踪可能把 Chromium 本体漏掉
+
+149 用 `fileURLToPath(import.meta.url)` + `join(…, '..', 'bin')` 定位那几个 `.br` 压缩包(131 是 `__dirname`)。
+用 `@vercel/nft`(Vercel 打包函数时用的依赖追踪器)离线追 render-pdf 的依赖:
+
+| | nft 0.27.3(仓库里 `@vercel/node` 带的那版) | nft 1.11.0(最新) |
+|---|---|---|
+| 131 | 73.7 MB,`bin/` 5 个都在 | 同 |
+| 149 | **4.0 MB,`bin/` 一个都没有** | 73.7 MB,`bin/` 4 个都在 |
+
+**Vercel 构建时用哪个版本的追踪器,从仓库里看不到。** 漏掉的症状是**部署成功、渲染时**才报
+`The input directory ".../bin" does not exist` —— 每一份 PDF 都失败,而构建链与 smoke 都是绿的(smoke 打 render-pdf 走的是 401 那条路,不启动浏览器)。
+所以显式写 `includeFiles`,不赌追踪器 —— 与「依赖运行时二进制的东西,不让平台默认值决定」是同一条规则。
+线上那次真实渲染证实了 bin 在包里(见下)。
+
+**函数体积**:render-pdf 的依赖闭包(puppeteer-core + chromium + supabase-js,nft 1.11.0 追)**升级前 73.7 MB,升级后 73.7 MB** ——
+`bin/` 66.2 → 69.6 MB,puppeteer 25 少了 40 个传递依赖(代理、解压那一串),正好抵掉;`api/` 源码 0.16 MB。Vercel Node 函数上限 250 MB(未压缩)。
+
+## 本地前后比对(代理观测)
+
+**方法**:@sparticuz 的二进制是 Linux 版,本机(macOS arm64)跑不了,也没有 Docker。所以用**同一分支号**的 Chrome for Testing headless-shell
+(Google 官方发布,macOS arm64):131.0.6778.204 配 puppeteer-core 23.11.1,149.0.7827.22 配 25.1.0
+(@sparticuz 二进制里读出来的是 131.0.6778.0 / 149.0.7827.0 —— 同一分支)。
+
+- launch 参数用**各自版本真实的** `chromium.args`;页面步骤照抄 `render-pdf.ts`:视口 900×1400 @2x、等 `__REPORT_READY__`、同样的 `page.pdf` 参数;
+  分享卡 1080 视口 @1x、等 `__CARD_READY__`、两张元素截图
+- 前端:main 的构建产物。数据:**测试条目 X 的真实报告数据**(以 X 的身份只读取一次 zh / en 两份;取前取后各做一次 8 项哈希快照,逐字一致 = 零写入),签名链接换成本地文件
+- PDF 用 PDFKit 逐页按 2 倍渲成 PNG;像素用 pixelmatch(阈值 0.1,抗锯齿像素单独判);每页抽出文字比对
+- **与生产的差别**(所以结论是代理观测):字形光栅化走 CoreText 不走 FreeType / fontconfig;中文兜底层没装;不经代理与 Edge Function。
+  Linux 那一侧由下面的线上渲染验
+- **噪声底**:同一版本跑两遍 —— PDF 逐像素相同;分享卡最多 7 个像素差 1/255
+
+| 产物 | 页数 | 每页文字 | 像素 |
+|---|---|---|---|
+| zh PDF | 7 / 7,尺寸相同 | 归一化后逐页一致 | 7 页全同,只有 p3 有 6 个像素差 1/255 |
+| en PDF | 7 / 7 | 同上 | 7 页全同,只有 p3 有 7 个像素差 1/255 |
+| 4 张分享卡 | — | — | 约 1.1% 的像素有差、单通道最大 58/255;pixelmatch 判为**非抗锯齿的 0 个**;82% 的差 ≤ 4/255。放大看是雷达粗线与字形边缘的抗锯齿 |
+
+「文字归一化」指两处**只在文字层、不在画面上**的变化:149 在每个图形处多一个对象占位符 U+FFFC;
+131 把 ffi / ff 连字抽成 NUL(英文版「Tra\0c」「Di\0culty」「o\0er」),149 抽成正确的「Traffic」「Difficulty」「offer」——
+复制 / 搜索英文 PDF 时 149 反而更对。**版式、字体、分页没有任何变化 → 上线。**
+
+## 上线
+
+`5a054e6` 推送 04:28:58 UTC → Vercel 部署 04:29:58 完成(GitHub 上 Vercel 的提交状态)→
+**启动检查**:render-pdf、font-probe 无密钥各回函数自己的 401、`sin1::sin1`(两者都在模块顶层导入 chromium,模块加载失败会是 500)→
+smoke 04:30:30:**部署检查 16/16、配置期望 1/1、exit 0**(部署前的基线同样是 16/16 + 1/1)。
+
+**部署范围**:只有 Vercel 函数。前端产物与 main 的构建**逐字节相同**(前端只动了两处注释);没有 Supabase 函数受影响,没跑 `deploy:functions`。
+
+smoke 要的 publishable key 这次从 `supabase projects api-keys`(管理接口)现取 `qai_compass` 那一把,只在 shell 变量里;
+核了指纹 `e951ded3`、结尾 `ZSlE`,与[Auth 实测值](#auth-实测值)一致。**不能拿线上 bundle 里那把去比 bundle** —— 那是判断标准 8 的自证。
+
+## 线上真实渲染:新建测试 entitlement Z
+
+**Z = `d409313c-a8cd-491b-a46f-37a4879a1ef8`**(`seed-test-chromium149-20261008`,`seed-test-cohort`,`is_test = true`,zh;
+姓名 `CHROMIUM149 TEST (not real)`、电话 `+44 7700 900149`、邮箱 `…@example.invalid`)。建法同[彩排](#彩排结果2026-10-07):
+`supabase db query --linked` 调 `upsert_assessment_entitlement`,批次用 CTE 查,**同 `ghl_contact_id` 已存在就不调**(不让 on-conflict 去更新任何已有行);token 在库里生成,只在 shell 变量里。
+
+经公网接口以学员身份:登录 → 背景题 3 道 → 正式题 15 道(每次 0.55–0.79 秒)→ 问卷 → 出分。**答案照抄 X**,好让新渲的 PDF 能与 X 那份 131 渲的逐页对照。
+
+- 第一次提交问卷被拒(400 `missing_required S1`):我按库里的**存储形状**(语义字段名)发了,接口收的是题号 + 选项下标。校验在写库之前 ——
+  没有写入;出分随之回 409 `survey_missing`,也没有写入。换成接口格式(`S1…S7`)后通过
+- **写入与预期一致**:entitlement 1 行;session 1 行;答案 15 行;问卷 1 行;结果 1 行(`ghl_last_error` / `ghl_tags_last_error` = `CONFIG: test cohort — … intentionally skipped`,没有外发);
+  session / entitlement → completed;report_files(zh)1 行 ready、`pdf_attempts` 0、`pdf_last_error` 与 `share_card_error` 都空;Storage 1 份 PDF + 2 张分享卡。
+  下载 PDF 前后,Z 与 X 的快照都逐字一致
+- **Z 保留不清理**(与之前几条测试 entitlement 一样)
+
+**耗时**(新部署后的第一次渲染 —— 部署之后、它之前,库里没有任何 PDF 状态变化;和彩排一样,渲染前跑过 smoke,只加载了模块、没启动浏览器):
+
+| | 出分 → 开始渲染 | 渲染 | 出分 → 就绪 |
+|---|---|---|---|
+| **149,本次(新部署后第一次)** | 1.06 秒 | **9.66 秒** | 10.73 秒 |
+| 131,sin1 上第一次(10-07 彩排) | 1.0 秒 | 8.9 秒 | 9.8 秒 |
+| 131,热的(10-07 英文版) | — | 6.4 秒 | — |
+
+每组只有一个样本,差 0.8 秒说明不了什么;可能的来源是 149 的 `chromium.br` 大 4.4 MB(冷启动要解压)。**离 60 秒上限约 50 秒。**
+
+**PDF 检查**(下载下来,PDFKit 逐页转图片):
+- 元数据 `Producer` = **`Skia/PDF m149`**;X 那份是 `Skia/PDF m131` —— 两边都看了,所以这一条区分得开「线上真的在跑 149」
+- 6 页逐页看:中文字形完整、墨色是实的;**没有转圈方块,没有「正在生成」**,「带走这份报告」整节不在;链接注解 0、没有 `?t=`、没有站点地址;
+  PDF 里写下的透明度值集合与 X 完全相同(没有停在淡入中途的块)
+- **与 X(131 渲、同一组答案)逐页对照**:页数 6 / 6、每页第一行相同(分页相同);p2 / p3 / p5 像素全同。差异全部对得上数据或前端,不是渲染:
+  p1「本期基准 · 18 → 19 份样本」与虚线基准多边形微移(Z 进了样本池);p4 批次差值与「同一档 5 → 6 人」;
+  p6 末尾 X 还带着「带走这份报告 / 正在生成中文版…」和那个菱形(X 是 `52f68b1` 之前渲的)。分享卡的非抗锯齿差异 17 / 3 个像素,放大看是字形与圆环边缘
+
+## 回滚方案
+
+出问题时(PDF 渲不出来、`pdf_last_error` 出现新错误、版式不对):
+
+1. `git revert 5a054e6` —— 只这一个提交。**已核过**:在临时工作树里 revert 之后的树与 `debdbbc`(升级前、verify 过的那一版)逐字相同;
+   之后的提交不碰它改的那 11 个文件,所以收工时再核一次即可(见变更日志)。然后 `npm install`(锁文件随 revert 回到 131 / puppeteer 23)→ `npm run verify`
+2. 快进合并 main → 推送 → 等 GitHub 上 Vercel 的提交状态变 success
+3. 启动检查:render-pdf / font-probe 无密钥 → 函数自己的 401、`sin1::sin1`;smoke 16/16 + 1/1、exit 0
+4. **证明真的回去了**:下一份真实 PDF 的元数据 `Producer` 是 `Skia/PDF m131`、`pdf_last_error` 为空。
+   要主动验:用测试 entitlement Z 在报告页点「生成英文版」(写 Z 的 report_files en 一行 + Storage 3 个对象,都在测试批次里),取下来看 Producer;
+   或者由有 `INTERNAL_FN_SECRET` 的人跑 font-probe(不写库,只验能起 Chromium、字体在)
+5. 已经用 149 渲出来的 PDF 不用重渲:版式与 131 一致(上面两次对照)
+
+回滚只牵连 Vercel 函数;不碰前端、不碰 Supabase 函数与数据。
+
+## 顺带记下的
+
+- **这一轮差点漏掉的那件,只在「用同一个工具复现部署环境的一步」里才看得见。** 本地渲染比对、单元测试、构建链、smoke 都不会发现 `bin/` 没进函数包 ——
+  那是部署打包这一步的行为。用 Vercel 自己的追踪器离线追一次才看到(判断标准 14:观测环境要与运行环境一致;
+  而这里能做到一致的,恰好是打包器本身,不是浏览器)
+- 149 的 `fonts.tar.br` 里 `fonts.conf` 与 131 逐字相同;Open Sans 少了 Light 一款(报告不用 300 字重的系统字体)
+- 当前已有 152、153。下一次升级可以照这一节的方法再走一遍(比对脚本在那次会话的临时目录里,没进仓库;做法都写在上面)
+
+---
+
 ## 变更日志
 
+- 2026-10-08 — **[chromium 149 升级](#chromium-149-升级2026-10-08)(`5a054e6`)**,当前未完成 D 那一项完成。
+  `@sparticuz/chromium` 149.0.0 + `puppeteer-core` 25.1.0(精确钉住;Node 仍 22.x);149 删了 `chromium.font()` → 自己下载到 `/tmp/fonts`(先红后绿 7 条);
+  `lambdaEnv` 注入保留、值不变;`vercel.json` 加 `includeFiles`(nft 0.27.3 追 149 时 `bin/` 一个都没带上)。
+  本地同分支号 headless-shell 前后比对:PDF 像素全同(≤7 个像素差 1/255)、页数与每页文字一致,分享卡只有抗锯齿差异;函数体积 73.7 → 73.7 MB。
+  部署只涉及 Vercel 函数;启动检查 401 / `sin1::sin1`;smoke 16/16 + 1/1、exit 0。
+  线上新建测试 entitlement Z(`d409313c`)以学员身份走完全程:新部署后第一次渲染 9.66 秒(131 冷的那次 8.9 秒)、`Skia/PDF m149`、没有转圈方块 / 「正在生成」;
+  与 X(131 渲、同一组答案)逐页对照,差异全部对得上数据或前端。回滚 = `git revert 5a054e6`(已在临时工作树核过能干净回到 `debdbbc`)
 - 2026-10-08 — **[转场验收通过](#viho-的手机验收) + PDF 修复(`52f68b1`)**,当前未完成 ⑥ 完成。
   X 的写入与预期完全一致(不多不少;`pdf_attempts` 就绪后为 0 —— 修复 ③ 第一次在生产上看到)。
   PDF 检查(透明度值、逐页深浅、逐页看图、分享卡;对照转场前的 `2d732b39`):没有半透明或淡色的块,**但转圈方块被截成了菱形** ——
