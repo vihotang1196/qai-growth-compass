@@ -40,7 +40,12 @@
     "check:migrations": "node scripts/check-migrations-applied.mjs",
     "tags:list": "deno run --allow-read --config supabase/functions/deno.json scripts/print-ghl-tags.ts",
     "seed:test": "node scripts/seed-test-data.ts",
-    "seed:test:clean": "node scripts/seed-test-data.ts --clean --yes"
+    "seed:test:clean": "node scripts/seed-test-data.ts --clean --yes",
+    "calib:questions": "node scripts/calibration/question-stats.ts",
+    "calib:baseline": "node scripts/calibration/baseline-candidates.ts",
+    "calib:cost": "node scripts/calibration/cost-sensitivity.ts",
+    "calib:priority": "node scripts/calibration/priority-mismatch.ts",
+    "calib:actions": "node scripts/calibration/export-action-library.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",
