@@ -1,7 +1,9 @@
+import type { CSSProperties } from 'react';
 import config from '@/config/assessment-config.json';
 import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import { useT } from '@/lib/i18n';
 import type { UiKey } from '@/config/ui-strings';
+import { LIVE_SCALE, scaled } from '@/lib/liveScale';
 import type { CohortAggregatePayload } from './CohortDashboard';
 
 const DIMENSIONS = config.dimensions;
@@ -49,14 +51,26 @@ export default function LiveSlide({
   aggregate,
   cohortName,
   isTest,
+  scale = LIVE_SCALE.initial,
 }: {
   slide: LiveSlideKey;
   aggregate: CohortAggregatePayload;
   /** null = 全部批次 */
   cohortName: string | null;
   isTest: boolean;
+  /**
+   * 整体字号,百分比(70–150,默认 100)。讲课的人在现场按 + / − / 0 调,见 `src/lib/liveScale.ts`。
+   *
+   * 【乘在每一个长度上,不只字号】间距、条形高度、雷达宽度一起变 —— 只放大字的话,
+   * 150% 时字会挤出自己的格子。100% 时每一个值都与加这个参数之前逐字相同。
+   */
+  scale?: number;
 }) {
   const { tk, locale } = useT();
+  /** 这一屏所有 vmin 长度都经过它 —— 漏掉一处,那一处就不跟着缩放(liveScale.test.ts 逐个比对) */
+  const v = (n: number) => scaled(n, scale);
+  /** 非 vmin 的长度(rem)同一个系数,三位小数 */
+  const r = (rem: number) => `${Math.round(rem * scale * 10) / 1000}rem`;
   const L = <T,>(zh: T, en: T): T => (locale === 'en' ? en : zh);
   const a = aggregate;
 
@@ -80,8 +94,8 @@ export default function LiveSlide({
    * ─────────────────────────────────────────────────────────────────────────────
    */
   const BigBar = ({ label, count, max }: { label: string; count: number; max: number }) => (
-    <div className="flex items-center" style={{ gap: '2vmin' }}>
-      <span className="shrink-0 text-right font-body" style={{ width: '22vmin', fontSize: '3vmin' }}>
+    <div className="flex items-center" style={{ gap: v(2) }}>
+      <span className="shrink-0 text-right font-body" style={{ width: v(22), fontSize: v(3) }}>
         {label}
       </span>
       {/* 轨道:它的存在就是「数字在同一列」这件事的载体 —— 去掉它,x 就又跟着数值跑 */}
@@ -89,15 +103,15 @@ export default function LiveSlide({
         <span
           className="block bg-accent"
           style={{
-            height: '5vmin',
+            height: v(5),
             width: `${max === 0 ? 0 : (count / max) * 100}%`,
-            minWidth: count ? '0.6vmin' : 0,
+            minWidth: count ? v(0.6) : 0,
           }}
         />
       </span>
       <span
         className="shrink-0 whitespace-nowrap text-right font-head font-bold"
-        style={{ width: '9vmin', fontSize: '3.6vmin' }}
+        style={{ width: v(9), fontSize: v(3.6) }}
       >
         {count}
       </span>
@@ -108,13 +122,17 @@ export default function LiveSlide({
   const weakMax = Math.max(0, ...Object.values(a.weakestCounts));
 
   return (
-    <div className="flex h-full w-full flex-col bg-paper text-ink" style={{ padding: '4vmin' }}>
+    <div className="flex h-full w-full flex-col bg-paper text-ink" style={{ padding: v(4) }}>
       {/* 批次名 + 屏名:每一屏都有,因为任何一屏都可能是被投出去的那一屏 */}
-      <header className="flex shrink-0 items-baseline justify-between" style={{ gap: '3vmin' }}>
-        <h2 className="font-head font-bold uppercase tracking-tight" style={{ fontSize: '4vmin' }}>
+      <header className="flex shrink-0 items-baseline justify-between" style={{ gap: v(3) }}>
+        <h2 className="font-head font-bold uppercase tracking-tight" style={{ fontSize: v(4) }}>
           {cohortName ?? tk('live.allCohorts')}
         </h2>
-        <span className="font-body opacity-60" style={{ fontSize: '2.4vmin' }}>
+        {/*
+          屏名不换行、不被挤:放大到 150% 时在 4:3 屏上,长批次名会把它挤成「最弱维度分 / 布」。
+          要换行的只能是批次名(它在左边,换在词与词之间)。100% 时任何分辨率都放得下,不受影响。
+        */}
+        <span className="shrink-0 whitespace-nowrap font-body opacity-60" style={{ fontSize: v(2.4) }}>
           {tk(`live.slide.${slide}` as UiKey)}
         </span>
       </header>
@@ -126,15 +144,15 @@ export default function LiveSlide({
       {isTest && (
         <div
           className="shrink-0 bg-ink text-center font-head font-bold uppercase text-paper"
-          style={{ marginTop: '2vmin', padding: '1.4vmin', fontSize: '2.6vmin', letterSpacing: '0.06em' }}
+          style={{ marginTop: v(2), padding: v(1.4), fontSize: v(2.6), letterSpacing: '0.06em' }}
         >
           {tk('live.testBanner')}
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '3vmin' }}>
+      <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: v(3) }}>
         {a.n === 0 ? (
-          <p className="text-center font-body" style={{ fontSize: '3vmin' }}>
+          <p className="text-center font-body" style={{ fontSize: v(3) }}>
             {tk('live.empty')}
           </p>
         ) : slide === 'headline' ? (
@@ -159,24 +177,34 @@ export default function LiveSlide({
             ─────────────────────────────────────────────────────────────────────
           */
           <div className="text-center">
-            <div className="font-head font-bold leading-none" style={{ fontSize: `${HEADLINE_MAIN_VMIN}vmin` }}>
+            <div className="font-head font-bold leading-none" style={{ fontSize: v(HEADLINE_MAIN_VMIN) }}>
               {a.averageTotal === null ? '—' : a.averageTotal.toFixed(1)}
             </div>
             <div
               className="font-body uppercase tracking-widest"
-              style={{ marginTop: '2vmin', fontSize: '3vmin', opacity: 0.6 }}
+              style={{ marginTop: v(2), fontSize: v(3), opacity: 0.6 }}
             >
               {tk('live.avgTotal')}
             </div>
             <div
               className="font-body"
-              style={{ marginTop: '4vmin', fontSize: `${HEADLINE_SUB_VMIN}vmin`, opacity: 0.6 }}
+              style={{ marginTop: v(4), fontSize: v(HEADLINE_SUB_VMIN), opacity: 0.6 }}
             >
               {tk('live.completedCount').replace('{n}', String(a.n))}
             </div>
           </div>
         ) : slide === 'radar' ? (
-          <div className="mx-auto" style={{ width: '62vmin' }}>
+          /*
+            【雷达组件是报告页的,带着两样不跟 vmin 走的尺寸】figure 上的 `max-w-xl`(36rem = 576px)
+            与图例的 `text-xs`(12px)。只缩放 vmin 的话,1920×1080 上按 + 雷达纹丝不动(早就被 576px 卡住),
+            图例在任何比例下都是 12px。所以这里把那个上限挪到外层、乘上同一个系数,图例字号也一样 ——
+            100% 时宽度仍是 min(62vmin, 36rem)、图例仍是 0.75rem,与加缩放之前逐像素相同。
+            只在这一层用后代选择器改,不动 RadarPentagon 本身(报告与分享卡也用它)。
+          */
+          <div
+            className="mx-auto [&_figcaption]:text-[length:var(--live-legend)] [&_figure]:max-w-none"
+            style={{ width: `min(${v(62)}, ${r(36)})`, '--live-legend': r(0.75) } as CSSProperties}
+          >
             <RadarPentagon
               axes={buildRadarAxes(DIMENSIONS, a.dimensionMeans, {}, dimLabel)}
               scale={SCALE}
@@ -187,17 +215,17 @@ export default function LiveSlide({
             />
           </div>
         ) : slide === 'tier' ? (
-          <div className="mx-auto w-full" style={{ maxWidth: '86vmin' }}>
+          <div className="mx-auto w-full" style={{ maxWidth: v(86) }}>
             {TIERS.map((t) => (
-              <div key={t.key} style={{ marginBottom: '1.6vmin' }}>
+              <div key={t.key} style={{ marginBottom: v(1.6) }}>
                 <BigBar label={L(t.zh, t.en)} count={a.tierCounts[t.key] ?? 0} max={tierMax} />
               </div>
             ))}
           </div>
         ) : (
-          <div className="mx-auto w-full" style={{ maxWidth: '86vmin' }}>
+          <div className="mx-auto w-full" style={{ maxWidth: v(86) }}>
             {DIMENSIONS.map((d) => (
-              <div key={d.key} style={{ marginBottom: '1.6vmin' }}>
+              <div key={d.key} style={{ marginBottom: v(1.6) }}>
                 <BigBar label={L(d.zh, d.en)} count={a.weakestCounts[d.key] ?? 0} max={weakMax} />
               </div>
             ))}

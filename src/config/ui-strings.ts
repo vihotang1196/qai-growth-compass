@@ -364,7 +364,7 @@ export const UI_STRINGS = {
   'live.exitFullscreen': { zh: '退出全屏', en: 'Exit full screen' },
   'live.prev': { zh: '上一屏', en: 'Previous' },
   'live.next': { zh: '下一屏', en: 'Next' },
-  'live.hint': { zh: '左右方向键切换。不会自动切屏。', en: 'Arrow keys to move. Never auto-advances.' },
+  'live.hint': { zh: '左右方向键切换,不会自动切屏。+ / − 调字号,0 复位。', en: 'Arrow keys to move; never auto-advances. + / − to resize, 0 to reset.' },
   'live.testBanner': { zh: '⚠️ 演示数据 · 以下全部是造的,不是真实学员', en: '⚠️ DEMO DATA — none of this is real' },
   'live.allCohorts': { zh: '全部批次(不含测试)', en: 'All cohorts (excl. test)' },
   'live.slide.headline': { zh: '本批概况', en: 'At a glance' },
