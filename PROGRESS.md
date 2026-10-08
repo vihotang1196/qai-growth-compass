@@ -8860,7 +8860,9 @@ smoke 要的 publishable key 这次从 `supabase projects api-keys`(管理接口
 出问题时(PDF 渲不出来、`pdf_last_error` 出现新错误、版式不对):
 
 1. `git revert 5a054e6` —— 只这一个提交。**已核过**:在临时工作树里 revert 之后的树与 `debdbbc`(升级前、verify 过的那一版)逐字相同;
-   之后的提交不碰它改的那 11 个文件,所以收工时再核一次即可(见变更日志)。然后 `npm install`(锁文件随 revert 回到 131 / puppeteer 23)→ `npm run verify`
+   之后的提交里只有课后校准那一轮动了其中的 `package.json`(加 `calib:*` 几行,与依赖不在同一段)——
+   **收工时又核了一次:revert 在 main(`aa92b0c`)与 `feat/calibration-prep`(`b066e61`)上都能干净应用,改动 11 个文件**。
+   然后 `npm install`(锁文件随 revert 回到 131 / puppeteer 23)→ `npm run verify`
 2. 快进合并 main → 推送 → 等 GitHub 上 Vercel 的提交状态变 success
 3. 启动检查:render-pdf / font-probe 无密钥 → 函数自己的 401、`sin1::sin1`;smoke 16/16 + 1/1、exit 0
 4. **证明真的回去了**:下一份真实 PDF 的元数据 `Producer` 是 `Skia/PDF m131`、`pdf_last_error` 为空。
