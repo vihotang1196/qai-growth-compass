@@ -47,6 +47,7 @@
 
 **几条走位常识:**
 
+- **冻结期(2026-10-11 起,到第一场课结束)先读[冻结期规则](#冻结期规则2026-10-11-起)**:只修阻碍学员完成测评或拿到报告的问题,不改 config;已知回滚方案都在那一节。
 - **Claude Code 窗口必须在本仓库根目录启动**(第一条命令 `git rev-parse --show-toplevel`,
   输出不是这个仓库就停下,什么都不做)。
   **遇到其他仓库的守卫或钩子拦截时,停下汇报给 Viho —— 不得使用任何逃生门或绕过方式,
@@ -115,8 +116,53 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`docs/keys-and-real-calibration` 建在 `feat/calibration-prep`(`78dc820`)上,一起快进合进 main(2026-10-08)。测试基线:**Node 475 / Deno 220,十六道门全绿**。
+当前分支基线:`docs/freeze-rules` 建在 `2dfadab` 上(冻结期规则 + 课后待办,2026-10-08)。测试基线:**Node 475 / Deno 220,十六道门全绿**。**10-11 起冻结**,见[冻结期规则](#冻结期规则2026-10-11-起)。
 
+
+---
+
+## 冻结期规则(2026-10-11 起)
+
+**时间**:2026-10-11(星期日)起冻结,**到第一场课(10-13 星期二)结束为止**。(Viho 2026-10-08 定)
+
+### 冻结期只修什么
+
+**只修「会阻碍学员完成测评或拿到报告」的问题。** 判据是学员这一侧:打不开链接 / 登录不进、答案存不上、问卷交不了或出不了分、
+报告页打不开、PDF 生成不出来或下载不了。不在范围内的:外观、文案、后台与现场模式、英文版缺口、校准 —— 都等课后。
+
+- **冻结期不改任何 config**:报告上的文案、代价金额、错配提示、行动清单是每次打开时按当前 config 现算的,
+  改 config 会让已出分学员的网页报告立即变化,而已生成的 PDF 不变(见[真实数据上的校准分析](#真实数据上的校准分析2026-10-08只读))
+- **每一次修复都要走完**:小分支 → `npm run verify` → 快进合并 → 推送 → 等 GitHub 上 Vercel 的状态 success →
+  对改到的部分做启动检查 → smoke(钥匙串的 key,见[课前流程](#课前流程每场课))**exit 0**;
+  动到 Supabase 函数的用 `npm run deploy:functions`,只部署受影响的函数
+- **每一次修复都在 PROGRESS 写一句「为什么不能等到课后」** —— 说清楚哪些学员、卡在哪一步。说不出来,就是可以等
+- 能用下面的回滚解决的,**优先回滚**:回滚回到的是一个验证过的状态,新写的修复不是
+
+### 已知的回滚方案
+
+每一个都在 2026-10-08 用临时工作树实测过(基于 main `2dfadab`):按下面的顺序 revert 能干净应用;
+前端那三个跑过 `tsc -b` 与全部单元测试,chromium 那个按 revert 后的锁文件 `npm ci` 之后跑过完整构建链(十六道门 + tsc + vite)与单元测试。
+**revert 要提交在分支上**(pre-commit 钩子拒绝直接在 main 提交),一次回滚一个、各自部署验证 —— 同时回滚几个,出了问题就分不清是哪一个。
+main 之后再往前走的话,先照同样的办法再试一次(`git worktree add --detach <临时目录> main` → `git revert --no-commit …`)。
+
+| 回滚什么 | 命令(按这个顺序) | 部署范围 | 回滚成功的判据 | 回滚之后的样子 | 2026-10-08 实测 |
+|---|---|---|---|---|---|
+| **chromium 149** | `git revert --no-edit 5a054e6` → `npm install`(锁文件回到 131 / puppeteer 23)→ `npm run verify` | 只有 Vercel 函数(render-pdf、font-probe) | ① GitHub 上 Vercel 状态 success ② render-pdf 无密钥 POST、font-probe 无密钥 → 各回函数自己的 401、`sin1::sin1`(模块加载失败会是 500)③ smoke exit 0 ④ **下一份真实 PDF 的元数据 `Producer` = `Skia/PDF m131`**、`pdf_last_error` 为空。要主动验:测试 entitlement Z 在报告页点「生成英文版」(写 Z 的 en 一行 + Storage 3 个对象,都在测试批次,**要 Viho 同意**),或由有 `INTERNAL_FN_SECRET` 的人跑 font-probe(不写库) | 渲染回到 131;已用 149 渲的 PDF 不用重渲(版式与 131 一致,见[那一节](#chromium-149-升级2026-10-08)) | 干净;`npm ci` → 131.0.1 / 23.11.1;构建通过;测试 470/470 |
+| **转场 + PDF 菱形修复** | **先** `git revert --no-edit 52f68b1`,**再** `git revert --no-edit 3836cdd`。**反过来会冲突**(`Report.tsx`、`motion.css`、`motion.test.ts`)—— `52f68b1` 是在转场之上修的菱形。**不要只回滚 `52f68b1`**:那会把菱形放回每一份自动 PDF | 只有前端 | ① 新 bundle 文件名变了 ② 新 JS / CSS 里 `qai-reveal-on`、`qai-spinner`、`startViewTransition` 都是 **0 处**(现在是 JS 1 / 2 / 5 处、CSS 2 / 2 / 0 处 —— 都由 `3836cdd` 引入,所以「消失」区分得开)③ smoke exit 0 | 按钮按压反馈、换页转场、保存失败的「重试」都没了,回到 10-07 之前。**自动 PDF 里会重新出现「带走这份报告」那一节**(纯文字「正在生成中文版…」,没有菱形、没有链接 —— 与 10-07 之前的 PDF 一样,但这是 Viho 10-08 决定不要的东西) | 干净;tsc 通过;测试 446/446 |
+| **LiveSlide 现场字号** | `git revert --no-edit 1b9c245` | 只有前端 | ① 新 bundle 文件名变了 ② 新 JS 里 `compass_live_scale` 0 处、JS / CSS 里 `live-legend` 0 处(现在 JS 1 / 2、CSS 0 / 2)③ smoke exit 0 ④ 现场模式里按 + 不再变 | 回到固定字号;浏览器里存的比例留在那里,没人读,无害。**它不影响学员**,所以按上面的规则不算冻结期该修的 —— 现场模式出问题时先按 0 复位、或者不投那一屏;要不要在冻结期回滚由 Viho 当场定 | 干净;tsc 通过;测试 461/461 |
+
+三者之间:只有「转场 + 菱形」两个提交之间有顺序依赖;chromium 与两项前端回滚互不依赖。四个一起回滚按「LiveSlide → 菱形 → 转场 → chromium」与「chromium → 菱形 → 转场 → LiveSlide」两种顺序都实测过:干净、构建通过、测试 427/427。
+
+### 开课当天
+
+1. **开课前 10 分钟**:跑 smoke,同时当预热 ——
+   ```
+   SUPABASE_PUBLISHABLE_KEY="$(security find-generic-password -s qai-compass-publishable-key -w)" npm run smoke -- --base https://compass.qiai.tech
+   ```
+   exit 0 → 开课;exit 1 → 看哪一条部署检查红了(钥匙串里没有那一项时,key 比对那一条会报 unverified);exit 3 → 只有 `[配置]` 没到位,修法在 Dashboard。细节见[课前流程](#课前流程每场课)
+2. **投影**:后台「现场模式」→ 选本场批次 → 在页面空白处点一下 → 全屏投影 → 第 2 屏站到后排看,+ / − 调到看得清。说明:[`docs/live-mode-guide.md`](docs/live-mode-guide.md)
+3. smoke 暖不到 Chromium:当天第一份 PDF 带冷启动,约 10 秒(149 上实测 9.66 秒),离 60 秒上限很远
+4. 出了问题:先按上面的「只修什么」判断;能回滚就回滚,走完验证再继续
 
 ---
 
@@ -131,6 +177,27 @@
 > 只是这次它出现在「未完成清单」自己身上。收工时更新这一节,和写变更日志一样是硬要求。
 
 **代码这一侧到头了。** 剩下的全部要真实场景或 Dashboard 操作才能推进,所以按「需要什么才能做」分组。
+
+### 课后待办(按优先级,2026-10-08 整理)
+
+下面的编号指本节里的详细条目(⓪–⑩、A–D)与[待 Viho 在 Dashboard 确认](#待-viho-在-dashboard-确认)那张表的行号。
+**P0 先于任何校准改动做**;P1 是校准本身;P2 不急但不能丢。
+
+| 优先 | 事项 | 为什么 | 第一步 / 前提 | 谁 |
+|---|---|---|---|---|
+| **P0** | **legacy JWT key(anon / service_role)的状态与停用**(⑨) | service_role 的片段出现过一次;PROGRESS 没记录 legacy 是否已 Disable | **先查有没有东西在用它**。代码的事实(2026-10-08 读过):所有取 key 的地方都是「新 key 优先、legacy 兜底」—— Edge Function 读平台注入的 `SUPABASE_SECRET_KEYS`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;Vercel 的 render-pdf / pdf-sweep 读 `SUPABASE_SECRET_KEY`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;代理、cron、前端读 publishable、兜底 anon。所以要在运行环境里确认:Vercel 上三个新变量都在、Edge Function 拿得到 `SUPABASE_SECRET_KEYS`、GHL 与任何外部工具没有带 legacy key。然后看 Dashboard 状态 → Disable(可逆)→ 跑[Disable 之后的验收清单](#disable-之后的验收清单) → 再迁 JWT signing keys、revoke legacy secret | Viho(Dashboard、Vercel、GHL)+ 我(验收清单) |
+| **P0** | **GHL 里由标签触发的工作流**(新) | 改错配判据、重同步标签、改档位都会改动学员的标签;标签若触发工作流,就可能给学员发消息 | 列出所有以 `assessment_*` 标签为触发条件的工作流,各自会不会对学员发消息 —— 这是第 5 条和任何「重同步 GHL」选项的前提 | Viho |
+| **P0** | **Viho 名下的待确认** | 都是「出事时才会发现」的依赖 | 第 13 行:03:33 那个名单外用户是谁建的 · 第 15 行:**Resend 账号是否由公司掌控**(失联 = Admin 登录邮件中断)· 第 16 行:**cron 在 sin1 的运行记录**(Vercel → Cron Jobs 看三条的最近一次执行) | Viho |
+| **P0** | **结果没有记录所用的 config 版本**(⑩) | 不先解决,之后每一次校准改动都无法追溯「谁的报告受了影响、当时看到什么」 | 在五种修法里选一种(记版本号 / 内容指纹 / 报告快照 / 前端保留历史 config / 只在页面说明),**先于第 5–8 条上线** | Viho 定,我做 |
+| P1 | **错配判据**(C) | 现有判据触发 **82%**(70–90%);39% 的人最弱两维平分,weakest[0] 由维度顺序决定 | 人工看「选了次弱」与「错配」两组的 S5 / S6 开放回答(后台问卷洞察);定判据,同时定已发报告与已打标签怎么处理(依赖上面两条 P0) | Viho 定 |
+| P1 | **代价换算:背景题两题的最高档**(P2 询盘量 300、P3 客单价 RM 30,000) | 两题都选最高档的人,报告里的月度代价到 **RM 1,090,000**;这是档位取值的问题,不是系数的问题 | 决定最高档代表值,或给显示金额设上限;系数本身要外部依据(测评数据给不出) | Viho 定 |
+| P1 | **action_library 语气**(B3) | 只有本人能判 | Viho 读 `docs/review/action-library-review.md` / `.csv` 标注;定下来的改进 config | Viho |
+| P1 | **基准线算法、档位区间、题目**(B1 / B2) | 71% 在最低一档;四维中位数比均值低 0.3–0.7;造流量 / 增价值的题相关偏低(样本还不够下结论) | 按 [`docs/post-class-calibration.md`](docs/post-class-calibration.md) 的顺序重跑脚本;档位区间是产品决定 | Viho 定 |
+| P2 | **英文版的根因与代价假设缺翻译**(D) | 英文报告里这两处是中文;现在 105 条真实 entitlement 全是 zh | 补 `root_cause` 与假设的英文;同时定 `check:i18n-parity` 要不要认这种形状 | 我写,Viho 审 |
+| P2 | **2px 墨边框**(⑦) | 改变所有页面的外观,可能让 PDF 每块多 2px、影响分页 | 先写红的测试 + 前后截图 + PDF 前后比对(chromium 那次的做法),停下等决定 | 我做,Viho 定 |
+| P2 | **真机验证**(⑤) | 安卓 Chrome、iPhone Safari、App 内置浏览器都没验过 | 安卓真机走一遍:已完成的人打开答题页、下载第一次就开 | Viho |
+| P2 | 其余待确认 | | 第 14 行 `default` publishable key 的用途;第 17 行 sin1 计价;第 12 行 Preview 环境指向哪个库;第 1、2、4–9、11 行 Auth 设置 | Viho |
+| P2 | 技术债 | | `verify` 只靠人记得跑(要 CI 时上 GitHub Actions);`lambdaEnv` 注入可删的前提(运行时确认 `VERCEL` 有值);chromium 152 / 153 与 Node 24;函数日志 `[object Object]` 与 Postgres 日志对照那条【推断】(第一次真实出错时验) | 我 |
 
 ### ⓪ 线上 Auth,四步,顺序不能反(2026-10-07 加)—— ✅ 2026-10-07 四步全部完成
 
@@ -9164,6 +9231,11 @@ Viho 2026-10-08 要求用真实范围把四个脚本各跑一次。**只读、�
 
 ## 变更日志
 
+- 2026-10-08 — **[冻结期规则](#冻结期规则2026-10-11-起) + [课后待办](#课后待办按优先级2026-10-08-整理)**,进入冻结前的最后一轮。
+  先合了 `docs/post-merge-smoke`(`2dfadab`):verify exit 0;线上前端合并前后逐字节相同;smoke 05:53:23 UTC(钥匙串的 key)16/16 + 1/1、exit 0;没有未合并的分支。
+  冻结期规则:10/11 起到第一场课结束,只修阻碍学员完成测评或拿到报告的问题,不改 config,每次修复走完 verify + smoke 并写明为什么不能等。
+  回滚方案集中列出并在临时工作树里实测:chromium(`5a054e6`)、转场 + 菱形(**先 `52f68b1` 再 `3836cdd`,反过来冲突**)、LiveSlide(`1b9c245`);
+  各自的判据与回滚后的样子(转场回滚会让「带走这份报告」以纯文字回到 PDF)。课后待办按 P0 / P1 / P2 整理。
 - 2026-10-08 — **key 的如实说明 + 真实数据分析 + 合并课后校准分支**。
   [smoke 取 key 那件事](#smoke-取-key-的方式以及一次不该出现的片段2026-10-08):`supabase projects api-keys` 跑了 4 次,返回内容含 legacy `service_role`(按完整处理)与遮罩过的 secret;
   完整 key 没有出现在任何输出 / 日志 / 文件里,但 04:27 那一次屏幕输出带出了 service_role 的片段(违反本项目「连截断都不该出现」的规则)—— 登记为当前未完成 ⑨,开课前不轮换;
