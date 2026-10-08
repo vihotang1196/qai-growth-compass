@@ -8233,6 +8233,7 @@ SUPABASE_PUBLISHABLE_KEY="$(security find-generic-password -s qai-compass-publis
   ```
   printf %s "$(security find-generic-password -s qai-compass-publishable-key -w)" | shasum -a 256 | cut -c1-8
   ```
+- **2026-10-08 已在 Viho 的 Mac 上设置好**:核对指纹 `e951ded3`,与 `qai_compass` 一致;随后用这条命令跑的 smoke 16/16 + 1/1、exit 0
 - **之后每次**:用上面那条 smoke 命令。第一次读钥匙串时 macOS 可能弹窗问是否允许,点「允许」
 - 钥匙串里没有这一项时,命令取到空串 ⇒ smoke 的 key 比对报 unverified、exit 1 —— **失败是关着的**,不会假绿
 - **轮换 publishable key 时**:同一条 `add-generic-password -U` 更新钥匙串那一项(`-U` = 已存在就更新),否则 smoke 会报 bundle 与本地不一致
@@ -9169,6 +9170,9 @@ Viho 2026-10-08 要求用真实范围把四个脚本各跑一次。**只读、�
   课前流程改成从钥匙串取 publishable key(命令只可能返回它)。
   [真实数据上的校准分析](#真实数据上的校准分析2026-10-08只读):51 人;71% 在最低档;现有错配判据触发 82%;C2 一边倒 78%;任一代价系数 ±10% 会改变 74–96% 的人的显示数字;逐条写了样本量够不够。
   **冻结前不改任何 config**(理由:文案 / 金额 / 提示现算,网页立即变而 PDF 不变)。⑩ 登记结构性问题:结果没有记录 config 版本,列了五种修法,不做决定。
+  **合并**:`feat/calibration-prep` 与这一轮的文档一起快进合进 main(`fbe04ac`),verify exit 0(Node 475 / Deno 220);
+  前端产物合并前后逐字节相同 —— 本地构建 main vs 分支的 `dist/` 3 个文件相同,线上部署前后 `index.html` / `index-CNygYPob.js` / `index-Ca2cZTpU.css` 的 sha256 相同;
+  Vercel 05:38:29 UTC 部署完成;smoke 05:44:20 UTC(key 取自钥匙串)**16/16 + 1/1、exit 0**,日志里没有 key。
 - 2026-10-08 — **[课后校准的准备](#课后校准的准备2026-10-08)**(本地分支 `feat/calibration-prep`,**未推送、未部署**)。
   `scripts/calibration/` 四个只读分析脚本(每题分布 / 难度 / 相关;基准线候选值 vs 现用;cost_model 每个系数 ±10%;错配判据 A/B/C/D)+ action_library 审阅稿导出;
   只读由语法保证(FROM 子查询)、查询里不取任何个人信息、默认排除测试批次、`--scope=test` 可只跑测试批次;启动自检。用测试数据全部跑通。
