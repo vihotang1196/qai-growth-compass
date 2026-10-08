@@ -5,7 +5,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
  * font-probe 与 render-pdf 起的是同一个 Chromium,缺 NSS 的问题一模一样;
  * 只修 render-pdf 的话,这个探针会继续 500,而它恰好是我们用来判断环境好坏的那把尺。
  */
-import { assertChromiumEnvReady, installFallbackFont } from './_lib/lambdaEnv.js';
+import { assertChromiumEnvReady, fetchToFile, installFallbackFont } from './_lib/lambdaEnv.js';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
@@ -19,7 +19,7 @@ import puppeteer from 'puppeteer-core';
  * 验三件事:
  *   1. 常用字走 CDN 上的 subset woff2  → 正常显示
  *   2. 生僻字(subset 里【故意】没有,见 scripts/subset-fonts.mjs 的
- *      FALLBACK_PROBE_CHARS)回落到 chromium.font() 装的完整 otf → 也必须正常显示
+ *      FALLBACK_PROBE_CHARS)回落到 installFallbackFont 装进 /tmp/fonts 的完整 otf → 也必须正常显示
  *   3. VITE_CDN_FONT_BASE 与 CDN_FONT_BASE 是否指向同一个地方
  *
  * 第 2 条依赖 @font-face 家族名与系统字体家族名【不同】。若两者同名,
@@ -171,7 +171,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
      * fontconfig 就一个字体都没有。见 api/_lib/lambdaEnv.ts。
      */
     const execPath = await chromium.executablePath();
-    const font = await installFallbackFont((u) => chromium.font(u), `${cdnBase()}NotoSansSC-Regular.otf`);
+    // 149 起没有 chromium.font():自己下载,直接落进 fontconfig 扫的 /tmp/fonts(见 lambdaEnv.ts)
+    const font = await installFallbackFont(fetchToFile, `${cdnBase()}NotoSansSC-Regular.otf`);
     console.log(
       `CJK fallback font ready: ${font.path} (${font.bytes} bytes). ` +
         `/tmp/fonts before=${JSON.stringify(font.dirBefore)} after=${JSON.stringify(font.dirAfter)}`,
@@ -185,7 +186,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const page = await browser.newPage();
     await page.setViewport({ width: 900, height: 1000, deviceScaleFactor: 2 });
-    await page.setContent(html(baseCheck), { waitUntil: 'networkidle0' });
+    /**
+     * puppeteer 25 起 setContent 不再接受 networkidle0(类型里排除了)。等 load,再等 document.fonts.ready ——
+     * 后者才是「字体到位」的那个信号,探针要截的正是字体。
+     */
+    await page.setContent(html(baseCheck), { waitUntil: 'load' });
     await page.evaluateHandle('document.fonts.ready');
 
     const png = await page.screenshot({ type: 'png', fullPage: true });

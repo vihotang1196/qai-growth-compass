@@ -6,7 +6,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  * ESM 按 import 出现的顺序求值被导入模块,所以「写在上面」就是「先执行」。
  * scripts/check-api-imports.mjs 有一条规则守这个顺序 —— 它验证过会红。
  */
-import { assertChromiumEnvReady, installFallbackFont } from './_lib/lambdaEnv.js';
+import { assertChromiumEnvReady, fetchToFile, installFallbackFont } from './_lib/lambdaEnv.js';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
 import { createClient } from '@supabase/supabase-js';
@@ -235,10 +235,10 @@ async function renderReport(sessionId: string, lang: Lang): Promise<RenderOutcom
    */
   /**
    * 【验证字体真的落地了 —— NSS 通了不代表这条路通】
-   * chromium.font() 把文件下到 `$HOME/.fonts/`(HOME 默认 /tmp)。它 resolve 只代表
-   * 下载流程走完,不代表文件可用:CDN 出网失败、写盘失败、或者早先某次留下一个 0 字节的
-   * 残留文件(它见到 existsSync 就直接 resolve,不校验大小)都会让兜底层静默失效。
+   * 下载 resolve 只代表流程走完,不代表文件可用:CDN 出网失败、写盘失败、或者早先某次留下的
+   * 残留文件都会让兜底层静默失效(131 的 chromium.font() 见到文件在就直接 resolve,不校验大小)。
    * 实测症状:生僻字渲染成【纯空白】—— 容器里没有任何字体覆盖那些码位。
+   * installFallbackFont 落地后量大小,不够就抛。
    */
 
   /**
@@ -293,8 +293,9 @@ async function renderReport(sessionId: string, lang: Lang): Promise<RenderOutcom
    */
   const execPath = await chromium.executablePath();
 
+  // 149 起没有 chromium.font():自己下载,直接落进 fontconfig 扫的 /tmp/fonts(见 lambdaEnv.ts)
   const font = await installFallbackFont(
-    (u) => chromium.font(u),
+    fetchToFile,
     `${env('CDN_FONT_BASE').replace(/\/$/, '')}/NotoSansSC-Regular.otf`,
   );
   console.log(
@@ -368,7 +369,9 @@ async function renderReport(sessionId: string, lang: Lang): Promise<RenderOutcom
       if (consoleLines.length < 40) consoleLines.push(`[${m.type()}] ${m.text()}`.slice(0, 300));
     });
     page.on('pageerror', (e) => {
-      if (consoleLines.length < 40) consoleLines.push(`[pageerror] ${e.message}`.slice(0, 300));
+      // puppeteer 25 起这里给的是 unknown(页面可以 throw 任何东西,不一定是 Error)
+      const msg = e instanceof Error ? e.message : String(e);
+      if (consoleLines.length < 40) consoleLines.push(`[pageerror] ${msg}`.slice(0, 300));
     });
     page.on('requestfailed', (r) => {
       if (failedRequests.length < 20) {

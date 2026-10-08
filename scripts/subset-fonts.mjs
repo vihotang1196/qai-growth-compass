@@ -22,7 +22,7 @@
  * (.venv 已 gitignore)
  *
  * 覆盖范围:CJK 基本区 + 拉丁 + 数字 + 常用标点。
- * subset 之外的生僻字由 chromium.font() 装的完整字体兜底(PDF)或系统字体兜底(网页)。
+ * subset 之外的生僻字由 installFallbackFont 装进 /tmp/fonts 的完整字体兜底(PDF)或系统字体兜底(网页)。
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -64,7 +64,7 @@ const NON_CJK_RANGES = [
  *      必须 100% 覆盖,一个字都不能漏
  *
  * 两者之外的生僻字(主要出现在学员姓名与开放题原文)按既有兜底走:
- *   网页 → 系统中文字体;PDF → chromium.font() 装的完整 otf。
+ *   网页 → 系统中文字体;PDF → installFallbackFont 装进 /tmp/fonts 的完整 otf。
  */
 const CJK_SOURCES = ['src/config/assessment-config.json', 'src/config/ui-strings.ts'];
 

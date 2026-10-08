@@ -7,7 +7,7 @@
  *
  * 家族名规则见 brutalist.css 里的注释与 PROGRESS.md 0.14:
  *   'Noto Sans SC Subset'  ← 这里声明的 webfont(常用字)
- *   'Noto Sans SC'         ← PDF 渲染时 chromium.font() 装的完整字体(生僻字兜底)
+ *   'Noto Sans SC'         ← PDF 渲染时 installFallbackFont 装进 /tmp/fonts 的完整字体(生僻字兜底)
  * 两者名字必须不同,否则兜底层失效。
  */
 

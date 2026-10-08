@@ -104,7 +104,7 @@
    * 家族名顺序是有意义的,不要重排:
    *   1. 拉丁字体(Sora / Plus Jakarta Sans)先吃拉丁字母与数字
    *   2. 'Noto Sans SC Subset' = CDN 上的 subset woff2,吃常用中文
-   *   3. 'Noto Sans SC'        = PDF 渲染时 chromium.font() 装进 fontconfig 的
+   *   3. 'Noto Sans SC'        = PDF 渲染时 installFallbackFont 装进 fontconfig 的
    *                              完整字体,吃 subset 之外的生僻字
    *
    * ⚠️ 第 2 与第 3 的家族名必须不同。若 @font-face 也叫 'Noto Sans SC',
