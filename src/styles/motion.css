@@ -92,4 +92,9 @@
     opacity: 1 !important;
     transform: none !important;
   }
+  /* 转圈的小方块不进纸:2026-10-08 在 X 的中文 PDF 里它被截在转到一半的角度,成了一个菱形 */
+  .qai-spinner {
+    animation: none !important;
+    display: none !important;
+  }
 }

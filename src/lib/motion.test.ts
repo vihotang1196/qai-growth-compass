@@ -112,8 +112,11 @@ describe('motion.css only moves when the system allows motion', () => {
     expect(outside).toEqual([]);
   });
 
-  // PDF 渲染器用打印媒体出 PDF —— 报告块一块都不能停在淡入的中途
-  it('print turns the report and page entrances off', () => {
+  /**
+   * PDF 渲染器用打印媒体出 PDF —— 报告块一块都不能停在淡入的中途;
+   * 转圈的小方块也不能进去(2026-10-08:X 的中文 PDF 里它被截在转到一半的角度,成了一个菱形)。
+   */
+  it('print turns the report and page entrances off, and the spinner too', () => {
     const printSelectors: string[] = [];
     postcss.parse(MOTION_CSS).walkAtRules('media', (at) => {
       if (!/\bprint\b/.test(at.params)) return;
@@ -123,7 +126,7 @@ describe('motion.css only moves when the system allows motion', () => {
         }
       });
     });
-    expect(printSelectors).toEqual(expect.arrayContaining(['.qai-enter', '.qai-stagger > *', '[data-reveal]']));
+    expect(printSelectors).toEqual(expect.arrayContaining(['.qai-enter', '.qai-stagger > *', '[data-reveal]', '.qai-spinner']));
   });
 
   // 报告页:块与块间隔约 50 毫秒,总时长不超过 600 毫秒

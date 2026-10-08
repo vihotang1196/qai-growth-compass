@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import config from '@/config/assessment-config.json';
-import { Button, Card, CardBody, CardHeader, CardTitle } from '@/components/brutalist';
+import { Card, CardBody } from '@/components/brutalist';
 import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleMark';
 import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
 import { useT } from '@/lib/i18n';
-import ReportFileActions from './ReportFileActions';
+import Section from './ReportSection';
+import ReportTakeaway from './ReportTakeaway';
 import { cardsFor } from '../../api/_lib/reportFiles';
 import { QuizAuthError } from '@/lib/quizApi';
 import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload, requestReportFile} from '@/lib/reportApi';
@@ -514,25 +515,19 @@ export default function Report() {
         </Section>
       )}
 
-      {/* 8. PDF / 打印 */}
-      <Section title={tk('report.section.share')}>
-        <ReportFileActions
-          files={data?.files ?? []}
-          current={locale}
-          currentStatus={pdf.status}
-          pollDone={pollDone}
-          opening={opening}
-          generating={generating}
-          onOpen={(l) => void openFlight.run(() => openPdfIn(l))}
-          onGenerate={(l) => void generateFlight.run(() => generateIn(l))}
-        />
-        {/* 打印保底(print.css)—— 自动 PDF 失败时这条路仍然可用,所以永远保留 */}
-        <div className="mt-3">
-          <Button className="no-print" variant="outline" onClick={() => window.print()}>
-            {tk('report.pdf.print')}
-          </Button>
-        </div>
-      </Section>
+      {/* 8. PDF / 打印 —— PDF 渲染与打印时整节不出现,见 ReportTakeaway.tsx */}
+      <ReportTakeaway
+        renderMode={isRenderMode()}
+        files={data?.files ?? []}
+        current={locale}
+        currentStatus={pdf.status}
+        pollDone={pollDone}
+        opening={opening}
+        generating={generating}
+        onOpen={(l) => void openFlight.run(() => openPdfIn(l))}
+        onGenerate={(l) => void generateFlight.run(() => generateIn(l))}
+        onPrint={() => window.print()}
+      />
     </Shell>
   );
 }
@@ -604,19 +599,6 @@ function LevelTag({ kind, value, label }: { kind: 'difficulty' | 'impact'; value
   };
   const tone = (kind === 'difficulty' ? difficulty : impact)[value] ?? 'bg-paper text-ink';
   return <span className={`border-brutal border-line px-2 py-0.5 font-head font-bold ${tone}`}>{label}</span>;
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="report-section">
-      <Card shadow="base" padding="md">
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-        <CardBody>{children}</CardBody>
-      </Card>
-    </section>
-  );
 }
 
 function Shell({ children, stagger = false }: { children: React.ReactNode; stagger?: boolean }) {
