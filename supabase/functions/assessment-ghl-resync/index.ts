@@ -2,6 +2,7 @@
  * assessment-ghl-resync —— GHL 写回的重试 sweep(D2 的消费端)。
  *
  * 挑 ghl_synced=false 且 ghl_next_retry_at 已过(或为 null)的结果,重新走一次写回。
+ * 2026-10-14 起还补第三样:换过链接、魔法链接字段没写成的 entitlement(`_shared/ghlMagicLink.ts`)。
  * 内部接口,鉴权走 X-Internal-Secret(与 assessment-maintenance 同一套),不对外、不进
  * /api 代理白名单。由 Vercel Cron 定时调,也可手动 curl 触发一次。
  *
@@ -16,6 +17,7 @@ import { serviceClient } from '../_shared/supa.ts';
 import { secretMatches } from '../_shared/secret.ts';
 import { buildWritebackPayload, syncToGhl, type WritebackResult } from '../_shared/ghlWriteback.ts';
 import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { sweepMagicLinks, type LinkSweepSummary } from '../_shared/ghlMagicLink.ts';
 import { dbFail, describeError } from '../_shared/dbError.ts';
 
 const FN = 'assessment-ghl-resync';
@@ -70,6 +72,29 @@ Deno.serve(async (req: Request) => {
 
   const supa = serviceClient();
   const nowIso = new Date().toISOString();
+
+  /**
+   * 【魔法链接字段:与结果那两半各自独立】换过链接、没写成的 entitlement(2026-10-14)。
+   * 放在最前、单独 try:它出错只停它自己,不拖字段 / 标签的重试;APP_BASE_URL 缺了也只停这一半
+   * (拼链接要它)。返回里永远有 `links` 这个键 —— 有没有它,直接说明跑的是哪一版(与 `candidates` 同一个理由)。
+   */
+  let links: LinkSweepSummary | { error: string };
+  const appBaseUrl = Deno.env.get('APP_BASE_URL');
+  if (!appBaseUrl) {
+    console.error('resync: APP_BASE_URL is not configured — magic link sweep skipped');
+    links = { error: 'APP_BASE_URL missing' };
+  } else {
+    try {
+      links = await sweepMagicLinks(supa, appBaseUrl, nowIso, BATCH_CAP);
+      if (links.tried > 0 || links.candidates.raw > 0) {
+        console.log(`resync: magic links ${links.synced}/${links.tried}, candidates ${JSON.stringify(links.candidates)}, skippedTestCohort ${links.skippedTestCohort}`);
+      }
+      if (links.capped) console.log(`resync: magic link sweep hit batch cap ${BATCH_CAP}, more remain — run again`);
+    } catch (err) {
+      console.error(`resync: magic link sweep failed: ${describeError(err).log}`);
+      links = { error: 'magic link sweep failed' };
+    }
+  }
 
   try {
     /**
@@ -149,7 +174,7 @@ Deno.serve(async (req: Request) => {
     };
 
     if (batch.length === 0) {
-      return json({ ok: true, swept: 0, note: 'nothing due for retry', candidates });
+      return json({ ok: true, swept: 0, note: 'nothing due for retry', candidates, links });
     }
 
     // 一次拉齐这批 session 的问卷,避免逐条查库
@@ -247,6 +272,7 @@ Deno.serve(async (req: Request) => {
       ok: true,
       swept: batch.length,
       candidates,
+      links,
       fields: { tried: fieldsTried, synced: fieldsOk },
       tags: { tried: tagsTried, synced: tagsOk },
       skippedTestCohort,

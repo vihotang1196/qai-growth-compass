@@ -14,8 +14,8 @@
 import { serviceClient } from '../_shared/supa.ts';
 import { adminVerdict, normalizeAdminEmail } from '../_shared/adminAuth.ts';
 import { missingKeys } from '../_shared/env.ts';
-import { generateAccessToken } from '../_shared/token.ts';
 import { sendMagicLink, type SendTarget } from '../_shared/resendLink.ts';
+import { rotateAndSend } from '../_shared/rotateLink.ts';
 import { toCsv } from '../_shared/csv.ts';
 import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
@@ -395,39 +395,29 @@ Deno.serve(async (req: Request) => {
         if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select (resend/rotate)', entitlement: id }, error);
         if (!ent) return json({ error: 'not_found' }, 404);
 
-        let target = ent as SendTarget;
+        const target = ent as SendTarget;
+        const urls = { resendUrl: env.GHL_RESEND_WEBHOOK_URL!, appBaseUrl: env.APP_BASE_URL! };
 
         if (action === 'rotate') {
           /**
-           * 【rotate = 轮换 token,并清空 access_revoked_at】
-           *
-           * S4-C 原本写的是「置 access_revoked_at = now()、生成新 token、触发重发」,
-           * 那两件事放在一起是自相矛盾的:校验时 access_revoked_at 非 null 一律拒绝,
-           * 所以新发的链接也会被拒。
-           *
-           * 达成意图(旧链接失效、新链接可用)只需要换 token —— 旧 token 不再匹配
-           * 任何行,自然就死了,不需要那个标记。所以这里【清空】它:
-           * 一个之前被停用的人,rotate 之后应该能重新进来。
+           * 换 token → 把新链接写进 GHL 的 `qai_assessment_magic_link` → 触发重发(2026-10-14)。
+           * 顺序、同一条 update、为什么写字段失败不挡重发:见 `_shared/rotateLink.ts`;
+           * 为什么要写那个字段:见 `_shared/ghlMagicLink.ts`。`linkField` 只多回给调用方看,界面不改 ——
+           * 没写成的由 assessment-ghl-resync 补。
            */
-          const token = generateAccessToken();
-          const { error: rotErr } = await supa
-            .from('assessment_entitlements')
-            .update({ access_token: token, access_revoked_at: null })
-            .eq('id', id);
-          if (rotErr) dbFail({ fn: FN, op: 'assessment_entitlements.update access_token (rotate)', entitlement: id }, rotErr);
-          target = { ...target, access_token: token };
-          console.log(`admin ${verdict.email} rotated the token for entitlement ${id}`);
-        } else if (ent.access_revoked_at) {
+          const { linkField, outcome } = await rotateAndSend(supa, target, urls);
+          console.log(
+            `admin ${verdict.email} rotated the token for entitlement ${id}; magic link field ${linkField.ok ? 'verified in GHL' : 'not written yet (the sweep retries)'}`,
+          );
+          return json({ ok: outcome.ok, queued: outcome.ok ? outcome.queued : false, outcome, linkField });
+        }
+
+        if (ent.access_revoked_at) {
           // resend 不给已停用的人发 —— 那会把一条本该死的链接又送出去
           return json({ error: 'revoked', detail: 'use rotate to issue a new link' }, 409);
         }
 
-        const outcome = await sendMagicLink(
-          supa,
-          target,
-          env.GHL_RESEND_WEBHOOK_URL!,
-          env.APP_BASE_URL!,
-        );
+        const outcome = await sendMagicLink(supa, target, urls.resendUrl, urls.appBaseUrl);
         console.log(`admin ${verdict.email} ${action} for entitlement ${id}`);
         return json({ ok: outcome.ok, queued: outcome.ok ? outcome.queued : false, outcome });
       }

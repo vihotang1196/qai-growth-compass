@@ -27,7 +27,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { isTestSessionCohort } from './testCohort.ts';
+import { isTestEntitlement, isTestSessionCohort } from './testCohort.ts';
 
 /** GHL 的 API 主机。**这个字面量只允许出现在本文件**(check:ghl-transport 守它) */
 export const GHL_API_HOST = 'https://services.leadconnectorhq.com';
@@ -46,6 +46,8 @@ export interface ContactRequestSent {
 
 export type ContactRequestResult = ContactRequestSent | (ContactRequestSkip & { sent: false });
 
+export type ContactRequestInit = { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: Record<string, unknown> };
+
 /**
  * 对某个 contact 发一次 GHL 请求。
  *
@@ -58,8 +60,42 @@ export async function ghlContactRequest(
   sessionId: string,
   contactId: string,
   path: string,
-  init: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: Record<string, unknown> },
+  init: ContactRequestInit,
 ): Promise<ContactRequestResult> {
+  refuseTagsPut(init);
+
+  // ── 测试 / 演示批次一律不外发 ──
+  // 收在这里而不是各功能里:新增一条出站路径时,绕过它需要**自己写一个 fetch**,
+  // 而那是个显式动作,不是一次遗忘
+  if (await isTestSessionCohort(supa, sessionId)) {
+    return { sent: false, skipped: 'test_cohort' };
+  }
+
+  return send(contactId, path, init);
+}
+
+/**
+ * 同一个出口,测试批次按 **entitlement** 判(2026-10-14,换链接后写回魔法链接字段用 —— 换链接时不一定有 session)。
+ *
+ * @param entitlementId 与 `ghlContactRequest` 的 sessionId 同理:**必填,没有默认值**。
+ * 两个出口共用下面的 `refuseTagsPut` 与 `send`:差别只在「按什么判测试批次」,传输只有一份。
+ */
+export async function ghlContactRequestForEntitlement(
+  supa: SupabaseClient,
+  entitlementId: string,
+  contactId: string,
+  path: string,
+  init: ContactRequestInit,
+): Promise<ContactRequestResult> {
+  refuseTagsPut(init);
+  // 顺序与上面相同:先判测试批次、再看凭证 —— 测试批次缺凭证时,「为什么没发」的真实原因是前者
+  if (await isTestEntitlement(supa, entitlementId)) {
+    return { sent: false, skipped: 'test_cohort' };
+  }
+  return send(contactId, path, init);
+}
+
+function refuseTagsPut(init: ContactRequestInit): void {
   /**
    * ── 不可逆错误:PUT 带 tags ──
    * 抛而不是返回错误 —— 这是**代码写错了**,不是运行时状况。
@@ -76,14 +112,9 @@ export async function ghlContactRequest(
         'wiping tags this system never created. Use POST/DELETE /contacts/{id}/tags instead.',
     );
   }
+}
 
-  // ── 测试 / 演示批次一律不外发 ──
-  // 收在这里而不是各功能里:新增一条出站路径时,绕过它需要**自己写一个 fetch**,
-  // 而那是个显式动作,不是一次遗忘
-  if (await isTestSessionCohort(supa, sessionId)) {
-    return { sent: false, skipped: 'test_cohort' };
-  }
-
+async function send(contactId: string, path: string, init: ContactRequestInit): Promise<ContactRequestResult> {
   const token = Deno.env.get('GHL_PRIVATE_TOKEN');
   const locationId = Deno.env.get('GHL_LOCATION_ID');
   const missing: string[] = [];

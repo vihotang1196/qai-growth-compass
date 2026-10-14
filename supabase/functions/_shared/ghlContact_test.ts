@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ghlContactRequest } from './ghlContact.ts';
+import { ghlContactRequest, ghlContactRequestForEntitlement } from './ghlContact.ts';
 
 /** 假 client:只回「这个 session 属不属于测试批次」,形状与真实查询逐层一致 */
 function fakeSupa(isTest: boolean) {
@@ -156,5 +156,66 @@ Deno.test('测试批次的判断【在凭证检查之前】—— 顺序反了�
     assertEquals(sent.length, 0);
   } finally {
     globalThis.fetch = real;
+  }
+});
+
+/**
+ * 按 entitlement 判测试批次的那个出口(2026-10-14,换链接后写回魔法链接字段用)。
+ * 形状与 `isTestEntitlement` 的查询逐层一致:`cohort:assessment_cohorts(is_test)` —— **没有** session 那一层。
+ * (标签那次的教训:假货少一层,收口读到 undefined 就判成「不是测试批次」,请求真的发出去。)
+ */
+function fakeEntitlementSupa(isTest: boolean) {
+  return {
+    from: (table: string) => ({
+      select: (cols: string) => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data:
+                table === 'assessment_entitlements' && cols.includes('cohort:assessment_cohorts(is_test)')
+                  ? { cohort: { is_test: isTest } }
+                  : null,
+              error: null,
+            }),
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+}
+
+Deno.test('按 entitlement 的出口:测试批次一个请求都不发;不是测试批次照常发到同一个主机', async () => {
+  const sent: { url: string; init?: RequestInit }[] = [];
+  const restore = withFetch(sent);
+  try {
+    const skipped = await ghlContactRequestForEntitlement(fakeEntitlementSupa(true), 'e1', 'c1', '', {
+      method: 'PUT',
+      body: { customFields: [{ key: 'qai_assessment_magic_link', field_value: 'x' }] },
+    });
+    assertEquals(skipped.sent, false);
+    if (!skipped.sent) assertEquals(skipped.skipped, 'test_cohort');
+    assertEquals(sent.length, 0);
+
+    const out = await ghlContactRequestForEntitlement(fakeEntitlementSupa(false), 'e1', 'c1', '', {
+      method: 'PUT',
+      body: { customFields: [{ key: 'qai_assessment_magic_link', field_value: 'x' }] },
+    });
+    assertEquals(out.sent, true);
+    assertEquals(sent.length, 1);
+    assertEquals(sent[0].url.endsWith('/contacts/c1'), true);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test('按 entitlement 的出口:PUT 带 tags 同样抛,且到不了网络', async () => {
+  const sent: { url: string; init?: RequestInit }[] = [];
+  const restore = withFetch(sent);
+  try {
+    await assertRejects(() =>
+      ghlContactRequestForEntitlement(fakeEntitlementSupa(false), 'e1', 'c1', '', { method: 'PUT', body: { tags: ['x'] } }),
+    );
+    assertEquals(sent.length, 0);
+  } finally {
+    restore();
   }
 });
