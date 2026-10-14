@@ -480,13 +480,16 @@ export const UI_STRINGS = {
   'admin.action.revoke': { zh: '停用', en: 'Revoke' },
   'admin.action.report': { zh: '查看报告', en: 'View report' },
   'admin.revoked': { zh: '已停用', en: 'Revoked' },
+  // 确认框(src/components/ConfirmProvider.tsx):标题点名是谁,正文说会发生什么,按钮就是动作本身
+  'admin.confirmRotate.title': { zh: '给 {who} 换新链接?', en: 'Send {who} a new link?' },
   'admin.confirmRotate': {
-    zh: '换新链接会让旧链接立刻失效,并给这个人重发一条新的。继续?',
-    en: 'This kills the old link immediately and sends a new one. Continue?',
+    zh: '旧链接会立刻失效,并给这个人重发一条新的。',
+    en: 'Their old link stops working immediately, and a new one is sent to them.',
   },
+  'admin.confirmRevoke.title': { zh: '停用 {who} 的链接?', en: "Revoke {who}'s link?" },
   'admin.confirmRevoke': {
-    zh: '停用会让这个人的链接立刻失效,而且【不会】发新的。继续?',
-    en: 'This kills their link immediately and does NOT send a new one. Continue?',
+    zh: '这个人的链接会立刻失效,而且【不会】发新的。',
+    en: 'Their link stops working immediately, and NO new link is sent.',
   },
   'admin.notQueued': {
     zh: '已发出,但 GHL 没有把它放进执行队列 —— 先确认那条 workflow 是否已 Publish。',

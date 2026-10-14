@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { injectFontFaces } from '@/styles/fonts';
 import { LocaleProvider } from '@/lib/i18n';
+import { ConfirmProvider } from '@/components/ConfirmProvider';
 import App from './App';
 import './index.css';
 
@@ -18,7 +19,10 @@ document.addEventListener('touchstart', () => {}, { passive: true });
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <LocaleProvider>
-      <App />
+      {/* 网站自己的确认框(替代 window.confirm):在 LocaleProvider 里面,按钮文字要跟语言走 */}
+      <ConfirmProvider>
+        <App />
+      </ConfirmProvider>
     </LocaleProvider>
   </StrictMode>,
 );

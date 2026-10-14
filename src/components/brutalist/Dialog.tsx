@@ -12,7 +12,12 @@ export const DialogContent = forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { closeLabel: string }
 >(({ className, children, closeLabel, ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-ink/60" />
+    {/*
+      遮罩 = 实色 ink 再整体 60% 不透明。**不能写 `bg-ink/60`**:ink 是 CSS 变量(`var(--qai-ink)`),
+      Tailwind 没法给它加透明度,那个类算出来是全透明 —— 2026-10-14 之前这里一直没有遮罩,对话框后面的页面不变暗。
+      遮罩里没有子元素,所以 opacity 只作用在它自己身上。
+    */}
+    <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-ink opacity-60" />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(

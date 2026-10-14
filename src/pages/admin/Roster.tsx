@@ -16,6 +16,7 @@ import { adminPost } from '@/lib/adminApi';
 import RosterRowView, { ROSTER_COLUMNS, type RosterRowData as RosterRow } from './RosterRow';
 import { parseWarnings } from '../../../api/_lib/entitlementWarnings';
 import { rosterMatches } from '@/lib/rosterSearch';
+import { useConfirm } from '@/components/ConfirmProvider';
 
 interface RosterResponse {
   rows: RosterRow[];
@@ -36,6 +37,7 @@ interface RosterResponse {
  */
 export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean) => void }) {
   const { tk } = useT();
+  const ask = useConfirm();
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -180,8 +182,20 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
   }
 
   async function act(action: 'resend' | 'rotate' | 'revoke', row: RosterRow) {
-    if (action === 'rotate' && !window.confirm(tk('admin.confirmRotate'))) return;
-    if (action === 'revoke' && !window.confirm(tk('admin.confirmRevoke'))) return;
+    /**
+     * 换链接、停用都会让他手上那条链接立刻失效,所以先问 —— 用网站自己的确认框(2026-10-14 之前是 window.confirm)。
+     * 标题点名是谁:名单很长时点错一行,看标题就知道。重发不问:它不让任何东西失效。
+     */
+    if (action === 'rotate' || action === 'revoke') {
+      const who = row.name?.trim() || row.phone_e164 || row.phone_raw || row.email_lower || '—';
+      const key = action === 'rotate' ? 'admin.confirmRotate' : 'admin.confirmRevoke';
+      const ok = await ask({
+        title: tk(`${key}.title`).replace('{who}', who),
+        description: tk(key),
+        confirmLabel: tk(`admin.action.${action}`),
+      });
+      if (!ok) return;
+    }
     setBusyId(row.id);
     setNotice(null);
     try {
