@@ -118,7 +118,7 @@
 | 12 | 英文版全量 + 语言切换 | 未开始 |
 
 
-当前分支基线:`feat/retake-step1` 建在 main `eb641ea` 上(重填第 1 步,2026-10-14)。测试基线见[重填第 1 步](#重填第-1-步数据层2026-10-14)那一节;**十七道门**。
+当前基线:main `b78e7a5`(重填第 1 步,2026-10-14)。测试基线:**Node 515 / Deno 236,十七道门全绿**。见[重填第 1 步](#重填第-1-步数据层2026-10-14)。
 **冻结期(10-11 起)已于 10-13 第一场分享会结束时结束**。真实已出分:**92 人**(10-14 挪动那一刻:10-08 的 51 + 分享会当晚 42,减去挪进测试批次的 `502cc4d3`;之后新出分的照常增加),全部在「默认批次」—— 10-08 那次校准分析只用了前 51 人(其中含 `502cc4d3`)。
 
 
@@ -193,7 +193,7 @@ main 之后再往前走的话,先照同样的办法再试一次(`git worktree ad
 
 | 优先 | 事项 | 为什么 | 第一步 / 前提 | 谁 |
 |---|---|---|---|---|
-| P1 | **重填功能:三件事已定,分步实施中**(2026-10-14) | Viho 要「做过的人先看最新报告、下方可重填、每份有时间记录」;方案 [`docs/retake-design.md`](docs/retake-design.md) | **Viho 已定**(写进方案「Viho 的决定」一节):①两次完成之间至少隔 24 小时、每人最多 6 份;②「生成另一种语言」只对最新那一份开放;③重填时背景题与问卷预填上一次的答案、可确认或修改,15 道正式题从空白开始。**第 1 步**(对现有数据零变化的数据层)这一轮做,结果见方案第 6 节;**第 2 步起要等上面那条 P0「标签触发的工作流」盘点完** —— 给 Viho 的清单是 [`docs/ghl-inventory.md`](docs/ghl-inventory.md) | Viho 盘点,我做 |
+| P1 | **重填功能:三件事已定,分步实施中**(2026-10-14) | Viho 要「做过的人先看最新报告、下方可重填、每份有时间记录」;方案 [`docs/retake-design.md`](docs/retake-design.md) | **Viho 已定**(写进方案「Viho 的决定」一节):①两次完成之间至少隔 24 小时、每人最多 6 份;②「生成另一种语言」只对最新那一份开放;③重填时背景题与问卷预填上一次的答案、可确认或修改,15 道正式题从空白开始。**第 1 步 ✅ 2026-10-14 上线**(对现有数据零变化,三次快照逐字相同,见[那一节](#重填第-1-步数据层2026-10-14));**第 2 步起要等上面那条 P0「标签触发的工作流」盘点完** —— 给 Viho 的清单是 [`docs/ghl-inventory.md`](docs/ghl-inventory.md) | Viho 盘点,我做 |
 | **P0** | **后台密码登录的线上确认**(2026-10-14 上线) | 代码与单元测试都绿,但**生产上还没有人用密码登录过** —— 第一次设置密码要用 Viho 的管理员账号,我没有、也不该替你输入 | Viho 按 [`docs/admin-password-guide.md`](docs/admin-password-guide.md) 第一次设置密码 → 退出 → 用密码登录一次,把结果告诉我;同时在 Dashboard 定[第 7、10、18–20 行](#待-viho-在-dashboard-确认)(最短长度 12、Password changed 通知、泄露密码检测、Secure password change、登录限流)。确认之后把 Stage 5 那一行的「待实测」改掉 | Viho |
 | **P0** | **legacy JWT key(anon / service_role)的状态与停用**(⑨) | service_role 的片段出现过一次;PROGRESS 没记录 legacy 是否已 Disable | **先查有没有东西在用它**。代码的事实(2026-10-08 读过):所有取 key 的地方都是「新 key 优先、legacy 兜底」—— Edge Function 读平台注入的 `SUPABASE_SECRET_KEYS`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;Vercel 的 render-pdf / pdf-sweep 读 `SUPABASE_SECRET_KEY`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;代理、cron、前端读 publishable、兜底 anon。所以要在运行环境里确认:Vercel 上三个新变量都在、Edge Function 拿得到 `SUPABASE_SECRET_KEYS`、GHL 与任何外部工具没有带 legacy key。然后看 Dashboard 状态 → Disable(可逆)→ 跑[Disable 之后的验收清单](#disable-之后的验收清单) → 再迁 JWT signing keys、revoke legacy secret | Viho(Dashboard、Vercel、GHL)+ 我(验收清单) |
 | **P0** | **GHL 里由标签触发的工作流**(新) | 改错配判据、重同步标签、改档位都会改动学员的标签;标签若触发工作流,就可能给学员发消息 | 列出所有以 `assessment_*` 标签为触发条件的工作流,各自会不会对学员发消息 —— 这是第 5 条、任何「重同步 GHL」选项、**重填第 2 步起**的前提。**清单已给出**(2026-10-14):[`docs/ghl-inventory.md`](docs/ghl-inventory.md) 逐个写出 14 个标签与 8 个字段的全名、各自何时加上 / 去掉;顺带一个疑点 —— 换链接之后 `qai_assessment_magic_link` 字段里是失效的旧链接 | Viho |
@@ -9498,9 +9498,42 @@ where id = '502cc4d3-…' and cohort_id = 'a0d14d79-…'                    -- �
 ## 测试
 
 - `_shared/attempts_test.ts` 7 条(先对着「模块不存在」跑红)、`_shared/currentSession_test.ts` 5 条、`_shared/baselinePools_test.ts` 加 1 条(视图的平铺行与原来的嵌套行分池逐字相同)。
-- 门的自检 13 条。
+- 门的自检 13 条;对着改之前的 main 报 12 处,改完 0 处。
+- 变异 12 次,11 次红。第一轮里「当前答题记录不优先取没做完的那份」活了下来 —— 用例里没做完的那份恰好都是编号最大的;补了一条之后红。
+  活下来的那一次是等价变异:「没有 attempt_no 的行按第 0 份算」—— 没有 attempt_no 的行(迁移之前读出来的)不会与有 attempt_no 的行混在一起。
+- verify:Node 515 / Deno 236(+13)。
+
+## 上线(2026-10-14)
+
+顺序:迁移 → 6 个函数 → 合并 main(前端没有改动)。每一步之后都比对。时间 UTC。
+
+| 步骤 | 结果 |
+|---|---|
+| 上线前 | 报告快照(旧读法):真实 167 份 / 测试 22 份;8 张表的整表 md5(答题记录不含新列) |
+| 迁移 `20261014100000`(05:33 部署之前) | 8 张表 md5 **全部相同**;`attempt_no <> 1` 0 行;新约束、两个唯一索引都在;视图 `security_invoker=true`,权限只剩 postgres / service_role;视图 113 行(真实 93)= 原来的基准池 |
+| 视图的权限(publishable key,只读) | `assessment_latest_results` → **401 / 42501 permission denied**;对照:`assessment_results` 照旧 200 `[]`(RLS) |
+| 迁移后的报告快照 | 旧读法、新读法(视图 +「报告看的那份」)与上线前 **逐字相同**(167 + 22) |
+| 函数(05:33)| `assessment-auth / quiz / score / report / report-file / admin`;migration preflight「17 条一致」 |
+| smoke | exit 0(16/16 + 1/1) |
+| 函数实际发出的查询对不对(publishable key,只读) | 端点的每一个新 select 列表都发了一次:视图 → 42501(列都在,只是没权限);答题记录 / 名单 / 问卷洞察的嵌套 → 200 `[]`(RLS);**对照**:故意写错一列 → 42703「does not exist」。Postgres 先解析列、后查权限,所以前者证明列名与 PostgREST 当前的 schema cache 对得上 |
+| 部署后的报告快照 | 旧读法、新读法与上线前 **逐字相同**;8 张表 md5 相同 |
+| 合并 main、Vercel | success(构建链跑了第十七道门);smoke exit 0 |
+
+- **基准线的行序**:视图按 entitlement 排序,原来的查询不排序(堆上的顺序,本来就随更新而变)。均值保留一位小数,只有恰好落在 .05 上时求和顺序才可能影响进位 ——
+  对生产查了 15 个「池 × 维度」均值,**没有一个**落在 .05 上。这个风险不是这一步带来的,原来就有。
+- **没覆盖到的**:部署之后还没有任何人登录、答题、出分、打开报告(05:36 查过:0 / 0 / 0)。新代码在真实流量上的第一次,用下面这句只读查询看:
+  `select s.attempt_no, s.status, r.config_version, left(r.config_sha256, 8) from assessment_sessions s left join assessment_results r on r.session_id = s.id where s.created_at > '2026-10-14 05:33:00+00' or r.computed_at > '2026-10-14 05:33:00+00'`
+  —— 期望 attempt_no 1、出分的那行 `3.2.0` / `745b7318`(这一句同时验 ⑩)。报告页打开时出错只会在函数日志里,看 Dashboard → Edge Functions → `assessment-report` 的 Logs。
+- **回滚**:`git revert --no-edit b78e7a5` → verify → 重新部署这 6 个函数 → 合并。**迁移不用回滚**:它只加不改,旧函数在它之上照常工作(上线前那段时间就是这么跑的)。
+  要连迁移一起退,是 `drop view assessment_latest_results; drop index assessment_sessions_one_open_attempt; alter table assessment_sessions drop constraint assessment_sessions_entitlement_attempt_key, drop constraint assessment_sessions_attempt_no_positive, drop column attempt_no;`(先退函数)。
+
 
 ## 变更日志
+
+- 2026-10-14 — **[重填第 1 步:数据层](#重填第-1-步数据层2026-10-14)上线,对现有数据零变化**。`attempt_no`、两个唯一约束、视图 `assessment_latest_results`;
+  「哪一份」只有一个定义(`_shared/attempts.ts`)、按 entitlement 取答题记录只有一个入口(`_shared/currentSession.ts`);登录、答题、出分、报告、报告文件、后台四块全部换过来;
+  第十七道门 `check:session-reads`(改之前的 main 报 12 处)。上线前 / 迁移后 / 部署后三次报告快照(旧读法与新读法)**逐字相同**,8 张表 md5 相同,smoke 两次 exit 0。
+  与方案的一处不同:`entitlement_id` 原来的 unique 留到第 2 步再去。**第 2 步起等 Viho 的 GHL 盘点**
 
 - 2026-10-14 — **⑩ 上线:出分时记下 config 的版本与内容指纹**([⑩](#⑩-结构性问题结果没有记录所用的-config-版本--2026-10-14-选定-b--a实施见下2026-10-08-登记))。
   修法先写进 PROGRESS(b 指纹为主 + a 版本标签,不回填)再实施;迁移加两列 → 只部署 `assessment-score`;登记表 + Node / Deno 两边的测试让「改了 config 不升版本」在 `npm test` 红;

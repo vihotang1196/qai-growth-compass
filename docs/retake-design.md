@@ -183,6 +183,11 @@ create view assessment_latest_results as
 - 迁移(第 1 节);`currentSession()`;所有读者换成视图 / 这个函数(附录里的每一处);名单与漏斗的嵌套改成显式取最新一份
 - 新加一道门:`assessment_sessions` 按 `entitlement_id` 取单行、或嵌套 `assessment_sessions` 的写法,只允许出现在那个函数里 —— 让「漏改了一处」在构建时红,而不是一人两份时 500(判断标准 12)
 - 验证:上线前后对生产做只读快照 —— 看板(全部)、基准线、名单 CSV、四个校准脚本的输出 —— **逐字相同**;smoke。回滚:还原迁移 + revert(数据没被改过)
+- **状态:✅ 2026-10-14 上线**(main `b78e7a5`)。上线前 / 迁移后 / 部署后三次报告快照逐字相同,8 张表 md5 相同,smoke exit 0;经过与回滚见 PROGRESS「重填第 1 步:数据层」。
+  与上面的不同:① `entitlement_id` 原来的 unique **留到第 2 步再去**(迁移先于函数上线,中间旧函数要照常工作;第 1 步不开放重填,数据库继续保证一人一份)——
+  第 2 步去掉它之前,先把 `scripts/seed-test-data.ts` 的 upsert 改成按 `(entitlement_id, attempt_no)`;
+  ② 看板、名单 CSV、校准脚本的「前后逐字相同」没有直接比:后台要 Viho 的登录,我没有。它们改的是取数(视图 / 去重 / 挑一份),由 `attempts.ts` 的用例与「视图 = 原来的池」(113 行逐字相同)间接证明;
+  ③ 名单的 JSON 每个 session 多一个 `attempt_no`(都是 1),页面与 CSV 不读它
 
 **第 2 步 —— 服务端的重填** ≈ 2–2.5 天
 
