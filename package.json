@@ -46,6 +46,7 @@
     "calib:cost": "node scripts/calibration/cost-sensitivity.ts",
     "calib:priority": "node scripts/calibration/priority-mismatch.ts",
     "calib:actions": "node scripts/calibration/export-action-library.ts",
+    "config:fingerprint": "node scripts/config-fingerprint.ts",
     "snapshot:reports": "deno run --allow-read --allow-write --allow-run=supabase --allow-env --config supabase/functions/deno.json scripts/report-snapshot.ts"
   },
   "dependencies": {

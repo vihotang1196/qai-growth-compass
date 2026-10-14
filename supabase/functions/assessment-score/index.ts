@@ -23,6 +23,8 @@ import { mapOption, mapOptions } from '../_shared/optionMap.ts';
 import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
 import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
 import { effectiveLang } from '../_shared/lang.ts';
+import { configStamp, type ConfigStamp } from '../_shared/configFingerprint.ts';
+import { scoredResultRow } from '../_shared/scoredResult.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 const FN = 'assessment-score';
@@ -40,6 +42,9 @@ const TIERS = config.tiers.map((t) => ({ key: t.key, min: t.min, max: t.max }));
 const SCALE = config.meta.score_scale;
 /** 题 id → option_count,finalize 归一化要用 */
 const OPTION_COUNT = new Map(config.questions.map((q) => [q.id, q.option_count]));
+
+/** config 的版本与指纹 —— 每个 isolate 只算一次(config 在部署时就定了);`configStamp` 从不 reject,所以缓存这个 promise 是安全的 */
+let configStampOnce: Promise<ConfigStamp> | null = null;
 
 interface SessionRow {
   id: string;
@@ -292,16 +297,13 @@ async function finalize(
     return json({ error: 'corrupt_answer' }, 500);
   }
 
+  /**
+   * 【这份分数按哪一版 config 算的】版本号 + 内容指纹一起写进结果(PROGRESS ⑩)。
+   * `configStamp` 从不抛:算不出指纹时两列写空、记一行日志,分数照常写。
+   */
+  const stamp = await (configStampOnce ??= configStamp(config));
   const { error: rErr } = await supa.from('assessment_results').upsert(
-    {
-      session_id: session.id,
-      dim_scores: result.dimensions,
-      total: result.total,
-      tier: result.tier,
-      weakest: result.weakest,
-      strongest: result.strongest,
-      computed_at: new Date().toISOString(),
-    },
+    scoredResultRow(session.id, result, stamp, new Date().toISOString()),
     { onConflict: 'session_id' },
   );
   if (rErr) dbFail({ fn: FN, op: 'assessment_results.upsert', session: session.id }, rErr);
