@@ -398,7 +398,7 @@ supabase secrets list
 
 | Field Name | Unique Key | 类型 | 用途 |
 |---|---|---|---|
-| Compass 魔法链接 | `qai_assessment_magic_link` | Single Line Text | 接收 webhook 响应里的 `magic_link` |
+| Compass 魔法链接 | `qai_assessment_magic_link` | Single Line Text | 接收 webhook 响应里的 `magic_link`;2026-10-14 起后台「换链接」之后罗盘也经 API 写它(不要删、不要改 key) |
 
 ---
 
