@@ -194,9 +194,9 @@ main 之后再往前走的话,先照同样的办法再试一次(`git worktree ad
 | 优先 | 事项 | 为什么 | 第一步 / 前提 | 谁 |
 |---|---|---|---|---|
 | P1 | **重填功能:三件事已定,分步实施中**(2026-10-14) | Viho 要「做过的人先看最新报告、下方可重填、每份有时间记录」;方案 [`docs/retake-design.md`](docs/retake-design.md) | **Viho 已定**(写进方案「Viho 的决定」一节):①两次完成之间至少隔 24 小时、每人最多 6 份;②「生成另一种语言」只对最新那一份开放;③重填时背景题与问卷预填上一次的答案、可确认或修改,15 道正式题从空白开始。**第 1 步 ✅ 2026-10-14 上线**(对现有数据零变化,三次快照逐字相同,见[那一节](#重填第-1-步数据层2026-10-14));**第 2 步起要等上面那条 P0「标签触发的工作流」盘点完** —— 给 Viho 的清单是 [`docs/ghl-inventory.md`](docs/ghl-inventory.md) | Viho 盘点,我做 |
-| **P0** | **后台密码登录的线上确认**(2026-10-14 上线) | 代码与单元测试都绿,但**生产上还没有人用密码登录过** —— 第一次设置密码要用 Viho 的管理员账号,我没有、也不该替你输入 | Viho 按 [`docs/admin-password-guide.md`](docs/admin-password-guide.md) 第一次设置密码 → 退出 → 用密码登录一次,把结果告诉我;同时在 Dashboard 定[第 7、10、18–20 行](#待-viho-在-dashboard-确认)(最短长度 12、Password changed 通知、泄露密码检测、Secure password change、登录限流)。确认之后把 Stage 5 那一行的「待实测」改掉 | Viho |
+| **P0** | **后台密码登录的线上确认**(2026-10-14 上线) | 代码与单元测试都绿,但**生产上还没有人用密码登录过** —— 第一次设置密码要用 Viho 的管理员账号,我没有、也不该替你输入 | Viho 按 [`docs/admin-password-guide.md`](docs/admin-password-guide.md) 第一次设置密码 → 退出 → 用密码登录一次,把结果告诉我;Dashboard 的密码设置 **2026-10-14 已定**([第 7、10、18、19、22 行](#待-viho-在-dashboard-确认):最短 12、Password changed 通知开、泄露密码检测开、Secure password change 开、Require current password **关**);第 20 行登录限流仍待确认。确认之后把 Stage 5 那一行的「待实测」改掉 | Viho |
 | **P0** | **legacy JWT key(anon / service_role)的状态与停用**(⑨) | service_role 的片段出现过一次;PROGRESS 没记录 legacy 是否已 Disable | **先查有没有东西在用它**。代码的事实(2026-10-08 读过):所有取 key 的地方都是「新 key 优先、legacy 兜底」—— Edge Function 读平台注入的 `SUPABASE_SECRET_KEYS`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;Vercel 的 render-pdf / pdf-sweep 读 `SUPABASE_SECRET_KEY`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;代理、cron、前端读 publishable、兜底 anon。所以要在运行环境里确认:Vercel 上三个新变量都在、Edge Function 拿得到 `SUPABASE_SECRET_KEYS`、GHL 与任何外部工具没有带 legacy key。然后看 Dashboard 状态 → Disable(可逆)→ 跑[Disable 之后的验收清单](#disable-之后的验收清单) → 再迁 JWT signing keys、revoke legacy secret | Viho(Dashboard、Vercel、GHL)+ 我(验收清单) |
-| **P0** | **GHL 里由标签触发的工作流**(新) | 改错配判据、重同步标签、改档位都会改动学员的标签;标签若触发工作流,就可能给学员发消息 | 列出所有以 `assessment_*` 标签为触发条件的工作流,各自会不会对学员发消息 —— 这是第 5 条、任何「重同步 GHL」选项、**重填第 2 步起**的前提。**清单已给出**(2026-10-14):[`docs/ghl-inventory.md`](docs/ghl-inventory.md) 逐个写出 14 个标签与 8 个字段的全名、各自何时加上 / 去掉;顺带一个疑点 —— 换链接之后 `qai_assessment_magic_link` 字段里是失效的旧链接 | Viho |
+| ~~P0~~ | ~~**GHL 里由标签触发的工作流**~~ ✅ **2026-10-14 Viho 盘点完** | 改标签可能触发工作流给学员发消息 | **没有任何工作流以罗盘的 14 个标签或 8 个字段为触发条件** —— 重填的这一项前提已满足(写进 [`docs/ghl-inventory.md`](docs/ghl-inventory.md))。另查出:**有工作流在消息里用 `{{contact.qai_assessment_magic_link}}`** —— 「换链接后字段存着失效的旧链接」是真实问题,修法见[换链接后写回魔法链接字段](#换链接后写回魔法链接字段2026-10-14) | 完成 |
 | **P0** | **Viho 名下的待确认** | 都是「出事时才会发现」的依赖 | 第 13 行:03:33 那个名单外用户是谁建的 · 第 15 行:**Resend 账号是否由公司掌控**(失联 = Admin 登录邮件中断)· 第 16 行:**cron 在 sin1 的运行记录**(Vercel → Cron Jobs 看三条的最近一次执行) | Viho |
 | **P0** | **结果没有记录所用的 config 版本**(⑩) | 不先解决,之后每一次校准改动都无法追溯「谁的报告受了影响、当时看到什么」 | **2026-10-14 选定**:出分时记内容指纹 + 版本号(b + a),已有数据不回填。理由与范围见 [⑩](#⑩-结构性问题结果没有记录所用的-config-版本--2026-10-14-选定-b--a实施见下2026-10-08-登记);上线结果写在那一节 | 我做 |
 | ~~P1~~ | ~~**`502cc4d3` 是不是 Viho 早期的测试记录**~~ ✅ **2026-10-14 已挪到测试批次** | Viho 确认是他自己早期的测试联系人 | 一条限定 id 与当前批次的 update;前后快照比对、92 份真实网页报告「与全体平均比」微动(Viho 已接受),见[那一节](#502cc4d3-的疑点)。挪动那一刻真实已出分 92 人(当天中午又有新学员出分,数字照常往上走);重跑校准脚本时以跑的那一刻为准 | 完成 |
@@ -403,9 +403,11 @@ Viho 在手机上以学员身份走完全程(测试 entitlement `2d732b39-0e1a-4
   **原因是本机睡眠**:`pmset -g log` 记着 12:39:37(本地时间)loginwindow 发起 Software Sleep,12:39:50 再次入睡 915 秒,12:55:05 才醒 ——
   smoke 12:39:46 开始、12:55:33 结束,两条失败的请求正是睡着那段时间里在路上的。紧接着直接请求 `assessment-score` 三次都是函数自己的 401(约 0.3 秒);
   **重跑 smoke exit 0**(16/16 + 1/1,4 秒)。
-- **待验**:部署之后还没有任何人出分。第一份新结果出来之后用这一句(只读)看两列有没有值:
+- **已用测试数据验证;真实流量待第一份新结果**(2026-10-14,经过见[端到端验证](#端到端验证用测试数据2026-10-14)):
+  测试 entitlement `seed-test-e2e-20261014` 走完登录 → 答题 → 问卷 → 出分,结果的两列是 `3.2.0` / `745b731804dbb42f…`(64 位,与登记表逐字相同)——
+  `Deno.serve` 入口那一行确实接上了。真实学员的第一份新结果出来之后,用这一句(只读)再看一次:
   `select computed_at, config_version, left(config_sha256, 8) from assessment_results where computed_at > '2026-10-14 04:38:05+00' order by computed_at`
-  —— 期望 `3.2.0` / `745b7318`。两列为空 = 入口那一行没接上,要回头查。
+  —— 期望 `3.2.0` / `745b7318`。
 
 ### A. 需要一次真实投影(现场当场就能改)
 
@@ -7711,10 +7713,10 @@ Node 370 / Deno 217,十四道门全绿。
 | 4 | 每小时发信上限(⚠️ magic link、确认信共用这一个额度 —— 刷满了后台一小时收不到登录信) | Authentication → Rate Limits | | |
 | 5 | 每用户发信间隔 | 同上 | | |
 | 6 | Magic Link / Confirm signup 模板的现有内容 | Authentication → Emails → Templates | | |
-| 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项)。⚠️ **2026-10-14 起后台用密码登录,这一项直接相关**:建议「Minimum password length」设 **12**(与页面上的下限一致)、「Password requirements」至少「字母 + 数字」—— 见[后台密码登录](#后台密码登录2026-10-14)的 Dashboard 清单 | Authentication → Sign In / Providers → Email | | |
+| 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项)。⚠️ **2026-10-14 起后台用密码登录,这一项直接相关**:建议「Minimum password length」设 **12**(与页面上的下限一致)、「Password requirements」至少「字母 + 数字」—— 见[后台密码登录](#后台密码登录2026-10-14)的 Dashboard 清单 | Authentication → Sign In / Providers → Email | **最短 12**(与页面上的下限一致)。「Password requirements」这次没说,仍待确认 | 2026-10-14 定(Viho 在 Dashboard 改,我没碰) |
 | 8 | CAPTCHA 开没开(⚠️ 一开,现有的 `signInWithOtp` 与 2026-10-14 加的 `signInWithPassword` 都不带 captchaToken,**两种登录都会坏** —— 要开得先改代码) | Authentication → Attack Protection | | |
 | 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
-| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图。⚠️ **2026-10-14 起有密码了,建议把「Password changed」打开**:密码被人改了,你会收到一封信 | 2026-10-07 |
+| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**开**(2026-10-14 起有密码了:密码被改了,本人会收到一封信)。其它通知这次没说,仍待确认 | 2026-10-14 定(Viho 在 Dashboard 改,我没碰) |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
 | 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。但有 **Vercel Authentication(Standard Protection)** 保护:预览部署要登录 Vercel 团队账号才能访问,正式域名公开 ⇒ **只有团队成员能访问 Preview**。**已确认**。来源:Viho 的 Vercel 截图 | 2026-10-07 |
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | **已删**(Viho 在 Dashboard 删的;【实测】`auth.users` 现只剩管理员 1 行)。**是谁建的:待 Viho 补充**(这一半没填完) | 2026-10-07 |
@@ -7722,10 +7724,11 @@ Node 370 / Deno 217,十四道门全绿。
 | 15 | **Resend 账号(`jianan1196`)是否由公司掌控** —— 这个账号失联,Admin 登录邮件就会中断(Supabase 的 SMTP 用的是它下面的 API key) | Resend → Settings / Team | | |
 | 16 | **cron 在 sin1 是否照常触发** —— 2026-10-07 函数区域从 iad1 改成 sin1;按 Vercel 文档 cron 是 HTTP 触发、与区域无关,但没有实际看到它在新区域跑过 | Vercel → 项目 → Cron Jobs(看三条的最近一次执行) | | |
 | 17 | **sin1 的区域计价** —— 区域计价可能与 iad1 不同;第一场课后看一眼用量 | Vercel → Usage | | |
-| 18 | **泄露密码检测**(「Prevent use of leaked passwords」,对照 HaveIBeenPwned)—— 建议开;⚠️ 只有 Pro 及以上套餐有这一项,没有就跳过。开了之后设置一个出现在泄露库里的密码会被拒,页面显示「这个密码不符合要求」 | Authentication → Sign In / Providers → Email(或 Attack Protection) | | |
-| 19 | **Secure password change**(改密码前要求最近 24 小时内登录过)—— 建议开。开着时,登录超过 24 小时再去「设置密码」,页面会请你退出、用邮件链接重新登录再改 | Authentication → Sign In / Providers → Email | | |
+| 18 | **泄露密码检测**(「Prevent use of leaked passwords」,对照 HaveIBeenPwned)—— 建议开;⚠️ 只有 Pro 及以上套餐有这一项,没有就跳过。开了之后设置一个出现在泄露库里的密码会被拒,页面显示「这个密码不符合要求」 | Authentication → Sign In / Providers → Email(或 Attack Protection) | **开**。设一个出现在泄露库里的密码会被拒,页面显示「这个密码不符合要求」(`AuthWeakPasswordError`,`src/lib/adminPasswordAuth.ts` 已处理) | 2026-10-14 定(Viho 在 Dashboard 改,我没碰) |
+| 19 | **Secure password change**(改密码前要求最近 24 小时内登录过)—— 建议开。开着时,登录超过 24 小时再去「设置密码」,页面会请你退出、用邮件链接重新登录再改 | Authentication → Sign In / Providers → Email | **开**。登录超过 24 小时再去「设置密码」,页面请你退出、用邮件链接重新登录再改(`reauthentication_needed`,`src/lib/adminPasswordAuth.ts` 已处理) | 2026-10-14 定(Viho 在 Dashboard 改,我没碰) |
 | 20 | **登录限流**(「Sign-ups and sign-ins」每 5 分钟每个 IP 的次数,默认 30)—— 这是密码被暴力试的唯一一道闸;确认它的值,不需要改 | Authentication → Rate Limits | | |
 | 21 | 「Allow new users to sign up」**保持关**(smoke 的 `[配置]` 那一条守着它)—— 有了密码登录,注册一开,任何人都能用 API 直接注册一个带密码的账号(进不了后台,但会在 `auth.users` 里建行) | Authentication → Sign In / Providers | 关(smoke 每次都验) | 2026-10-07 起 |
+| 22 | **Require current password when updating**(改密码时要输入当前密码)—— **保持关**。理由:「忘了密码 → 用邮件链接登录 → 设置新密码」这条路上,本人**不知道当前密码**;打开它这条路就断了。后台「设置密码」面板也从来不发当前密码(`updateUser` 只带新密码)。改密码前的保护由第 19 行(最近 24 小时内登录过)提供 | Authentication → Sign In / Providers → Email | **关** | 2026-10-14 定(Viho 在 Dashboard 改,我没碰) |
 
 ## Auth 规则
 
@@ -9521,14 +9524,103 @@ where id = '502cc4d3-…' and cohort_id = 'a0d14d79-…'                    -- �
 
 - **基准线的行序**:视图按 entitlement 排序,原来的查询不排序(堆上的顺序,本来就随更新而变)。均值保留一位小数,只有恰好落在 .05 上时求和顺序才可能影响进位 ——
   对生产查了 15 个「池 × 维度」均值,**没有一个**落在 .05 上。这个风险不是这一步带来的,原来就有。
-- **没覆盖到的**:部署之后还没有任何人登录、答题、出分、打开报告(05:36 查过:0 / 0 / 0)。新代码在真实流量上的第一次,用下面这句只读查询看:
+- **已用测试数据验证;真实流量待第一份新结果**(2026-10-14,[端到端验证](#端到端验证用测试数据2026-10-14)):登录、答题、出分、报告(新读法 + 视图基准线)、
+  PDF 渲染(渲染令牌那条也读视图)、分享卡全部在生产上走通;真实学员的报告前后逐字相同。真实流量的第一次,用下面这句只读查询再看:
   `select s.attempt_no, s.status, r.config_version, left(r.config_sha256, 8) from assessment_sessions s left join assessment_results r on r.session_id = s.id where s.created_at > '2026-10-14 05:33:00+00' or r.computed_at > '2026-10-14 05:33:00+00'`
   —— 期望 attempt_no 1、出分的那行 `3.2.0` / `745b7318`(这一句同时验 ⑩)。报告页打开时出错只会在函数日志里,看 Dashboard → Edge Functions → `assessment-report` 的 Logs。
 - **回滚**:`git revert --no-edit b78e7a5` → verify → 重新部署这 6 个函数 → 合并。**迁移不用回滚**:它只加不改,旧函数在它之上照常工作(上线前那段时间就是这么跑的)。
   要连迁移一起退,是 `drop view assessment_latest_results; drop index assessment_sessions_one_open_attempt; alter table assessment_sessions drop constraint assessment_sessions_entitlement_attempt_key, drop constraint assessment_sessions_attempt_no_positive, drop column attempt_no;`(先退函数)。
 
 
+# 端到端验证(用测试数据,2026-10-14)
+
+验 ⑩ 与重填第 1 步,不等真实学员。**写入的只有测试批次里的一条 entitlement 和它带出的东西**(Viho 同意的):
+`assessment_entitlements` 1 行(`seed-test-e2e-20261014`,邮箱 `@seed.invalid`,没有电话,挂在 SEED TEST DATA 批次)、
+它的 `assessment_sessions` 1 行、`assessment_answers` 15 行、`assessment_survey` 1 行、`assessment_results` 1 行、`assessment_report_files` 1 行(zh),
+Storage 3 个对象(PDF + 两张分享卡)。**GHL 一次都没调**(测试批次在传输层跳过),没有发任何消息。没有清理 —— 留着给重填第 2 步的测试用。
+
+**做法**:token 在本机临时生成(与真实的一样是 43 位 base64url)、只在内存里,不写文件;entitlement 由 `supabase db query` 插入;
+之后全部**以学员身份走公开接口**(`compass.qiai.tech/api/…`,与浏览器同一条路):`assessment-auth` 换 cookie → `assessment-quiz` bootstrap / 3 道背景题 / 15 道题 →
+`assessment-score` 问卷 / 出分 → `assessment-report` 轮询到 PDF 与分享卡就绪 → 下载三个文件看类型与大小。驱动脚本在 scratchpad,不进仓库(里面没有任何密钥)。
+
+| 验什么 | 结果 |
+|---|---|
+| ⑩ 两列 | `config_version = 3.2.0`、`config_sha256 = 745b731804dbb42fbef31a389c7b24c007d5ce516dd77e4ba43e7b82ef904182` —— 与 `config-fingerprints.json` 逐字相同 |
+| 第 1 步的写路径 | 答题记录 `attempt_no = 1`、`completed`;entitlement `completed`;15 条答案、1 条问卷 |
+| 报告接口(`reportSession` + 视图基准线) | 200;zh;总分 2.5 / `spot`;基准 `cohort` n = 21(测试批次,含本人);`baselineIncludesSelf: true` |
+| PDF(render-pdf 经渲染令牌打开报告,也读视图) | 出分后 13 秒就绪;`application/pdf` 499,531 字节,`%PDF-` 开头 |
+| 分享卡 | 两张都在:`image/png` 71,554 与 102,835 字节 |
+| GHL | 字段与标签都记成 `CONFIG: test cohort — … intentionally skipped`,没有外发 |
+| 真实学员的报告 | 跑之前与之后的快照(新读法):**167 份逐字相同**;测试批次 20 份的基准线随新的一行变了(n 20 → 21),它自己那份是新增 |
+| smoke | exit 0(16/16 + 1/1) |
+| PROGRESS 里那句只读查询 | `attempt_no 1 · completed · 3.2.0 · 745b7318` —— 部署之后的唯一一行,就是这条测试数据 |
+
+**还没覆盖的**:真实学员的流量(第一份新结果出来再用那句查询看一次);英文版的「生成另一种语言」没有跑(不需要,而且会多写一份文件)。
+
+# 换链接后写回魔法链接字段(2026-10-14)
+
+**问题**(Viho 在 GHL 里查实):有工作流给学员发消息,消息里的链接用的是 `{{contact.qai_assessment_magic_link}}`。
+这个字段由 GHL 自己写(表单 → Custom Webhook 调罗盘 → Update Contact Field 把返回的链接写进来)。
+后台点「换链接」会作废旧 token、经重发工作流把新链接发出去 —— 但**没有任何东西更新这个字段**,它存着已经失效的旧链接,
+之后哪条工作流用它发消息,学员收到的就是坏链接。
+
+**现在有多少人受影响:0**(只读,只要计数)。真实 entitlement 167 个,`link_sent_at` 不为空的 **0** 个。
+依据:换链接一定会调 `sendMagicLink`,而 `sendMagicLink` 对真实学员一定会盖 `link_sent_at`(不论 GHL 收没收下);
+没有别的地方写这一列(付款 webhook 不写)。所以生产上**没有任何真实学员被换过链接** —— **补写数量 0,不补写**。
+(测试批次 16 个不为空,来自 seed。盲区:那次 `link_sent_at` 的写入本身失败的话会只留一条日志、不留在库里 —— 167 个里看不出来。)
+
+## 修法:罗盘自己写这个字段(Viho 建议的那一种)
+
+不改 GHL 的重发工作流(加一步 Update Contact Field),理由:
+- **按 contact id 写**。重发工作流第一步是 Create Contact —— 按电话 / 邮箱 upsert;在工作流里写字段,写到哪个联系人取决于那次匹配。罗盘按 `ghl_contact_id` 直接 PUT,不经过匹配。
+- **有测试、有版本**。GHL 里的工作流改动没有测试、不进仓库,改坏了要等学员收到坏链接才知道。
+- **有重试和记账**。沿用字段写回的规矩:测试批次跳过、GHL 回显核对、三分类、指数退避、resync 补。工作流里的一步失败了,罗盘看不见。
+- 重发工作流**本身**发的是 webhook 里带的新链接(`{{inboundWebhookRequest.magic_link}}`,[`docs/ghl-setup.md`](docs/ghl-setup.md)),不受这个问题影响 —— 要修的是**别的**工作流读到的那个字段。
+
+**怎么做**
+1. 迁移:`assessment_entitlements` 加 `ghl_link_synced`(**可空,默认 null**)、`ghl_link_attempts`(默认 0)、`ghl_link_last_error`、`ghl_link_next_retry_at`。
+   **null = 从没换过链接,字段是 GHL 自己写的那条,对的** —— 默认值不能是 false:那样 resync 会把 167 个人全部挑出来写一遍(没有授权的生产写入);
+   也不能是 true(从没写过,说「已同步」是在数据里说谎)。只有「换链接」把它置成 false。
+2. `_shared/ghlMagicLink.ts` 的 `syncMagicLinkToGhl`:PUT `{customFields:[{key:'qai_assessment_magic_link', field_value: 新链接}]}` →
+   用字段映射核对 GHL 回显(与字段写回同一个 `verifyWrittenFields`)→ **回显里确实是这条新链接**才标 `ghl_link_synced = true`。
+   CONFIG / AUTH 不重试,TRANSIENT 指数退避(2^n 分钟,上限 6 小时)。
+3. 测试批次的判断按 **entitlement**(换链接时还没有 session 可言):在 `_shared/ghlContact.ts` 里加按 entitlement 判的出口,
+   与按 session 判的那个共用同一段传输代码 —— GHL 的域名仍然只出现在那一个文件(`check:ghl-transport` 守着)。测试批次记 `CONFIG: test cohort …`,一个请求都不发。
+4. 后台「换链接」:换 token 的**同一条** update 里置 `ghl_link_synced = false` → 写字段 → 再触发重发(先写字段:重发之后别的工作流读到的就已经是新的)。
+   写字段失败**不挡**重发(学员照样收到新链接;字段由 resync 补)。响应多一个 `linkField`,后台界面不改。
+5. resync(每 15 分钟)多挑一类:`ghl_link_synced = false` 且重试时间到了的 entitlement,**用库里当前的 token** 重新拼链接再写 —— 永远写当前那条,不写当时那条。
+6. **token 不进日志、不进库里的错误列**:链接里就是 token。核对失败时 `verifyWrittenFields` 的原因里会带「发的值 / 收到的值」—— 那一段换成不带值的说法;GHL 的错误响应体里出现 token 的话替换掉。
+7. 连点两次「换链接」:每次写完只在「库里的 token 还是我刚写的那个」时才标 true;不是的话置回 false、立刻到期,resync 用当前 token 再写一次。
+
+**测试先红后绿**:新模块的用例(请求的形状、回显核对、三分类、测试批次不发请求、token 不出现在任何错误文本里、连点竞争)、
+后台换链接的顺序与 `ghl_link_synced=false` 同一条 update、resync 选行。只部署 `assessment-admin` 与 `assessment-ghl-resync`(迁移先上)。
+
+## 在生产上怎么证明它有效(先说方案,再动手)
+
+测试批次按设计不写 GHL,所以测试数据证明不了真实写入。分三层:
+1. **代码层(部署前)**:单元测试钉住请求的确切形状(`PUT /contacts/{id}`,body 只有 `customFields` 里这一个 key,没有 `tags`)、
+   成功的唯一判据(GHL 回显的字段值 = 新链接)、各类失败的记账。
+2. **部署后,只读**:① 迁移后 167 个真实 entitlement 的 `ghl_link_synced` 全是 null(resync 一个都不会碰);
+   ② 字段映射缓存里有 `qai_assessment_magic_link`(**部署前已查:有**,`app_settings.ghl_field_map` 共 176 个 key)——
+   核对靠它,没有的话第一次写就会记 CONFIG;③ 写的路子(同一个传输函数、同一种 PUT、同一个回显核对)与字段写回相同,后者已经在 92 个真实联系人上验证过。
+   ④ smoke exit 0。
+3. **决定性的那一步要一次真实的「换链接」,只有 Viho 能做**(要后台登录;我不碰真实数据)。
+   请 Viho 在后台对**一个自己能收到消息的真实联系人**点一次「换链接」,然后:
+   - 我跑只读查询(不出个人信息):
+     `select ghl_link_synced, ghl_link_attempts, left(ghl_link_last_error, 60) from assessment_entitlements where ghl_link_synced is not null`
+     —— 期望那一行 `true / 0 / null`。`true` **只在 GHL 回显了这条新链接之后才会写**,所以它本身就是「GHL 上的字段确实是新链接」的证据;
+   - Viho 在 GHL 里打开这个联系人,看「Compass 魔法链接」是新链接;点旧链接被拒、点新链接能进。
+   没有合适的联系人的话,生产上第一次真实的「换链接」就是这一步,查询同上。
+
+**状态**:方案已定,实施见下面的变更日志。
+
 ## 变更日志
+
+- 2026-10-14 — **端到端验证 ⑩ 与重填第 1 步(测试数据)**、**Dashboard 密码设置定了**、**GHL 盘点结果**。
+  端到端:测试批次一条 entitlement,以学员身份走公开接口答完、出分、报告、PDF、分享卡全部正常,⑩ 两列与登记表逐字相同,真实 167 份报告逐字不变,smoke exit 0
+  ([端到端验证](#端到端验证用测试数据2026-10-14))。Dashboard:[第 7、10、18、19、22 行](#待-viho-在-dashboard-确认)(我没碰 Dashboard)。
+  GHL:没有工作流以罗盘的标签或字段为触发条件(重填的前提满足);**有工作流在消息里用魔法链接字段** —— 修法与证明方案见
+  [换链接后写回魔法链接字段](#换链接后写回魔法链接字段2026-10-14);生产上被换过链接的真实学员 0 人
 
 - 2026-10-14 — **[重填第 1 步:数据层](#重填第-1-步数据层2026-10-14)上线,对现有数据零变化**。`attempt_no`、两个唯一约束、视图 `assessment_latest_results`;
   「哪一份」只有一个定义(`_shared/attempts.ts`)、按 entitlement 取答题记录只有一个入口(`_shared/currentSession.ts`);登录、答题、出分、报告、报告文件、后台四块全部换过来;
@@ -9538,7 +9630,7 @@ where id = '502cc4d3-…' and cohort_id = 'a0d14d79-…'                    -- �
 - 2026-10-14 — **⑩ 上线:出分时记下 config 的版本与内容指纹**([⑩](#⑩-结构性问题结果没有记录所用的-config-版本--2026-10-14-选定-b--a实施见下2026-10-08-登记))。
   修法先写进 PROGRESS(b 指纹为主 + a 版本标签,不回填)再实施;迁移加两列 → 只部署 `assessment-score`;登记表 + Node / Deno 两边的测试让「改了 config 不升版本」在 `npm test` 红;
   `npm run config:fingerprint -- --history` 由指纹找回提交。报告快照前后逐字相同;smoke 第一次因本机睡眠 exit 1、重跑 exit 0(经过见那一节)。
-  **待验**:部署后的第一份新结果两列有值
+  ~~待验~~ 已用测试数据验证(见下面「端到端验证」那条);真实流量待第一份新结果
 
 - 2026-10-14 — **重填:Viho 定了三件事**,写进 [`docs/retake-design.md`](docs/retake-design.md) 的「Viho 的决定」一节,并改了方案里受影响的几处(第 2、4、5、6 节):
   ①两次完成之间至少隔 24 小时、每人最多 6 份(接受「24 小时内课上再做一次」会被挡);②「生成另一种语言」只对最新那一份开放;
