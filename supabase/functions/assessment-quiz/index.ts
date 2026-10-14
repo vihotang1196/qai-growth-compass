@@ -22,6 +22,7 @@ import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+import { currentSession } from '../_shared/currentSession.ts';
 
 const FN = 'assessment-quiz';
 
@@ -96,11 +97,12 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'revoked' }, 403);
     }
 
-    const { data: sessionRow, error: sessionError } = await supa
-      .from('assessment_sessions')
-      .select('id, profile, status, entitlement:assessment_entitlements(lang)')
-      .eq('entitlement_id', ent.id)
-      .maybeSingle();
+    // 当前答题记录(_shared/attempts.ts 的定义);今天每人最多一份
+    const { data: sessionRow, error: sessionError } = await currentSession(
+      supa,
+      ent.id,
+      'profile, entitlement:assessment_entitlements(lang)',
+    );
     if (sessionError) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sessionError);
     // session 由 assessment-auth 在首次登录时创建。没有就是状态不一致,不在这里补建 ——
     // 补建会掩盖「登录路径没建成」这个真正的问题

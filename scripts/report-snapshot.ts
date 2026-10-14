@@ -15,9 +15,9 @@
  * 下面 `reportFor` 的组装那几行**照抄端点**。改端点的组装时要同步改这里 —— 这份快照证明的是
  * 「端点的输入与算法没变」,不是另写一个端点。
  *
- * 【读法:legacy 与 latest】`--reader=legacy`(默认)按端点今天的读法:答题记录按 entitlement 取那一份、
- * 基准池 = 全部 completed 的结果。`--reader=latest` 按重填第 1 步之后的读法(视图
- * `assessment_latest_results` 与「当前答题记录」的规则);那个视图上线之前用它会直接报错。
+ * 【读法:legacy 与 latest】`--reader=legacy`(默认)按重填第 1 步之前端点的读法:答题记录按 entitlement 取那一份、
+ * 基准池 = 全部 completed 的结果。`--reader=latest` 按第 1 步之后的读法(视图 `assessment_latest_results`
+ * 与「报告看的那份」的规则);迁移 20261014100000 上线之前用它会直接报错。
  *
  * 【每个人用什么标识】entitlement id 的 md5 前 12 位。不取姓名、电话、邮箱、token、GHL contact id、
  * 任何原始 id;查询走 calibration/lib 的 `query`(只读由语法保证 + 个人字段拦截)。
@@ -86,14 +86,15 @@ const fp = (col: string) => `case when ${col} is null then null else left(md5(${
 
 /**
  * 「这个人的报告用哪一份答题记录」。
- * legacy = 端点今天的 `.eq('entitlement_id').maybeSingle()`(一人一份时就是那一份);
- * latest = 有没做完的取它,否则取 attempt_no 最大的那份(重填第 1 步之后的 currentSession)。
+ * legacy = 重填第 1 步之前端点的 `.eq('entitlement_id').maybeSingle()`(一人一份时就是那一份);
+ * latest = 第 1 步之后端点的 `reportSession()`:最新完成的那份,一份都没完成时是当前那份
+ *          (`supabase/functions/_shared/attempts.ts` 的 `pickReportAttempt`;没完成的最多一份,由部分唯一索引保证)。
  */
 function sessionJoin(reader: Reader): string {
   if (reader === 'legacy') return 'left join assessment_sessions s on s.entitlement_id = e.id';
   return `left join lateral (
       select * from assessment_sessions s0 where s0.entitlement_id = e.id
-      order by (s0.status <> 'completed') desc, s0.attempt_no desc limit 1
+      order by (s0.status = 'completed') desc, s0.attempt_no desc limit 1
     ) s on true`;
 }
 
@@ -125,22 +126,26 @@ function loadPeople(reader: Reader): PersonRow[] {
 }
 
 /**
- * 基准池。legacy = 端点今天那条 PostgREST 查询(结果 !inner 答题记录 completed !inner entitlement,
- * cohort 可空);latest = 视图 `assessment_latest_results`(每人最新完成的一份)。
+ * 基准池。
+ * legacy = 第 1 步之前端点那条 PostgREST 查询(结果 !inner 答题记录 completed !inner entitlement,cohort 可空);
+ * latest = 第 1 步之后端点读的视图 `assessment_latest_results`,只取端点取的那几列(批次两列用视图自己的)。
  * 按 session 指纹排序:端点不排序,均值保留一位小数,求和顺序只在进位边界上才有影响 —— 排序让快照本身确定。
  */
 function loadPool(reader: Reader): PoolRow[] {
-  const from = reader === 'legacy'
-    ? `assessment_results r
-       join assessment_sessions s on s.id = r.session_id and s.status = 'completed'
-       join assessment_entitlements e on e.id = s.entitlement_id`
-    : `assessment_latest_results r
-       join assessment_sessions s on s.id = r.session_id
-       join assessment_entitlements e on e.id = s.entitlement_id`;
+  if (reader === 'latest') {
+    return query<PoolRow>(`
+      select ${fp('r.session_id')} as session_key, r.cohort_id::text as cohort_id, r.cohort_is_test as is_test,
+        r.dim_scores, r.total, r.tier
+      from assessment_latest_results r
+      order by 1
+    `);
+  }
   return query<PoolRow>(`
     select ${fp('s.id')} as session_key, e.cohort_id::text as cohort_id, c.is_test,
       r.dim_scores, r.total, r.tier
-    from ${from}
+    from assessment_results r
+    join assessment_sessions s on s.id = r.session_id and s.status = 'completed'
+    join assessment_entitlements e on e.id = s.entitlement_id
     left join assessment_cohorts c on c.id = e.cohort_id
     order by 1
   `);

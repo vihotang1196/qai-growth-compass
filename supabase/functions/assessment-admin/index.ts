@@ -21,6 +21,7 @@ import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
+import { asRows, latestPerEntitlement, pickReportAttempt } from '../_shared/attempts.ts';
 import { classifyError } from '../_shared/errorKind.ts';
 import { dbFail } from '../_shared/dbError.ts';
 import { LANGS, parseLang } from '../_shared/lang.ts';
@@ -62,6 +63,7 @@ interface RosterRow {
   session: {
     id: string;
     status: string;
+    attempt_no?: number | null;
     result: {
       total: number;
       tier: string;
@@ -105,6 +107,7 @@ interface SurveyInsightRow {
   session_id: string;
   responses: Record<string, unknown> | null;
   session: {
+    attempt_no?: number | null;
     result: { weakest: string[] | null } | null;
     entitlement: {
       id: string;
@@ -127,19 +130,19 @@ interface FunnelEntitlementRow {
     id: string;
     status: string | null;
     profile: Record<string, unknown> | null;
+    attempt_no?: number | null;
   } | null;
 }
 
-/** cohort_dashboard:result 行 + 它的 session / entitlement(只为判范围) */
+/** cohort_dashboard:视图 `assessment_latest_results` 的一行(每人最新完成的一份;批次两列只为判范围) */
 interface DashboardResultRow {
   session_id: string;
   dim_scores: Record<string, number> | null;
   total: number;
   tier: string;
   weakest: string[];
-  session: {
-    entitlement: { cohort_id: string | null; cohort: CohortRef | null } | null;
-  } | null;
+  cohort_id: string | null;
+  cohort_is_test: boolean | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -573,7 +576,7 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
      */
     .select(
       'session_id, responses, ' +
-        'session:assessment_sessions!inner(id, status, ' +
+        'session:assessment_sessions!inner(id, status, attempt_no, ' +
         'result:assessment_results!inner(weakest), ' +
         'entitlement:assessment_entitlements!inner(' +
         'id, name, phone_e164, email_lower, cohort_id, cohort:assessment_cohorts(name, is_test)))',
@@ -581,7 +584,15 @@ async function surveyInsights(supa: ReturnType<typeof serviceClient>, scope: str
     .eq('session.status', 'completed');
   if (rErr) dbFail({ fn: FN, op: 'assessment_survey.select (survey_insights)' }, rErr);
 
-  const all = (rowsRaw ?? []) as unknown as SurveyInsightRow[];
+  /**
+   * 【每人只留最新完成的一份】(重填第 1 步)一人重填过的话,上面那条会回他每一份已完成的问卷 ——
+   * 高意向 CSV 里同一个联系人出现两次,拿去做 GHL 分群就是发两遍消息。今天每人最多一份,原样、原序。
+   */
+  const all = latestPerEntitlement(
+    (rowsRaw ?? []) as unknown as SurveyInsightRow[],
+    (r) => r.session?.entitlement?.id,
+    (r) => r.session?.attempt_no,
+  );
   /**
    * 【把「有 session 且有 entitlement」写进过滤,而不是下面用 `?? {}` 兜】
    *
@@ -673,11 +684,17 @@ async function funnelData(supa: ReturnType<typeof serviceClient>, scope: string)
     .select(
       'id, cohort_id, link_sent_at, first_login_at, ' +
         'cohort:assessment_cohorts(is_test), ' +
-        'session:assessment_sessions(id, status, profile)',
+        'session:assessment_sessions(id, status, profile, attempt_no)',
     );
   if (eErr) dbFail({ fn: FN, op: 'assessment_entitlements.select (funnel)' }, eErr);
 
-  const all = (entRows ?? []) as unknown as FunnelEntitlementRow[];
+  /**
+   * 【嵌套回来的 session 先统一成「报告看的那一份」】(重填第 1 步)今天 `entitlement_id` 上还有 unique,
+   * PostgREST 回对象;一人多份之后会回数组,读 `.status` 会悄悄读出 undefined。漏斗按人算:做完过一次就算完成。
+   */
+  const all = ((entRows ?? []) as unknown as (Omit<FunnelEntitlementRow, 'session'> & { session: unknown })[]).map(
+    (r) => ({ ...r, session: pickReportAttempt(asRows(r.session as FunnelEntitlementRow['session'])) }),
+  ) as FunnelEntitlementRow[];
   const inScope = all.filter((r) =>
     scope === 'all' ? !isTestCohort(r.cohort) : r.cohort_id === scope,
   );
@@ -734,20 +751,20 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
     .order('created_at', { ascending: false });
   if (cErr) dbFail({ fn: FN, op: 'assessment_cohorts.select (cohort_dashboard)' }, cErr);
 
+  /**
+   * 【从视图取:每人只算最新完成的一份】(重填第 1 步)`assessment_latest_results` = 原来那条
+   * 「结果 + 答题记录 completed + entitlement + cohort」再加「每人一份」;今天每人最多一份,行集合不变。
+   * `cohort_is_test` 在视图里是 `coalesce(c.is_test, false)` —— 批次被删的真实学员照旧留在 'all' 里。
+   */
   const { data: resultRows, error: rErr } = await supa
-    .from('assessment_results')
-    .select(
-      'session_id, dim_scores, total, tier, weakest, ' +
-        'session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
-    )
-    .eq('session.status', 'completed');
-  if (rErr) dbFail({ fn: FN, op: 'assessment_results.select (cohort_dashboard)' }, rErr);
+    .from('assessment_latest_results')
+    .select('session_id, dim_scores, total, tier, weakest, cohort_id, cohort_is_test');
+  if (rErr) dbFail({ fn: FN, op: 'assessment_latest_results.select (cohort_dashboard)' }, rErr);
 
   const rows = (resultRows ?? []) as unknown as DashboardResultRow[];
   const inScope = rows.filter((r) => {
-    const ent = r.session?.entitlement;
-    if (scope === 'all') return !isTestCohort(ent?.cohort);
-    return ent?.cohort_id === scope;
+    if (scope === 'all') return !isTestCohort({ is_test: r.cohort_is_test });
+    return r.cohort_id === scope;
   });
 
   const sessionIds = inScope.map((r) => r.session_id as string);
@@ -804,6 +821,7 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
        session:assessment_sessions(
          id,
          status,
+         attempt_no,
          result:assessment_results(total, tier, weakest),
          files:assessment_report_files(lang, pdf_status, pdf_path, pdf_attempts, pdf_last_error, share_card_error)
        )`,
@@ -811,7 +829,14 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
     .order('created_at', { ascending: false });
   if (error) dbFail({ fn: FN, op: 'assessment_entitlements.select (roster)' }, error);
 
-  const rows = (data ?? []) as unknown as RosterRow[];
+  /**
+   * 【嵌套回来的 session 先统一成「报告看的那一份」】(重填第 1 步)一人一行,显示最新完成的那份;
+   * 一人多份之后 PostgREST 会回数组,「复制报告链接」「重新生成 PDF」会悄悄拿到 undefined 的 id。
+   * 今天每人最多一份,挑出来的就是那一份(行里多了 `attempt_no`,值都是 1;页面与 CSV 不读它)。
+   */
+  const rows = ((data ?? []) as unknown as (Omit<RosterRow, 'session'> & { session: unknown })[]).map(
+    (r) => ({ ...r, session: pickReportAttempt(asRows(r.session as RosterRow['session'])) }),
+  ) as RosterRow[];
   /**
    * 【统计只看真实行】号码解析失败率是一条运营阈值(>2% 就说明 GHL 里号码质量比预期差),
    * 而测试数据的号码是我们自己造的、必然干净 —— 混进去只会把比例稀释,

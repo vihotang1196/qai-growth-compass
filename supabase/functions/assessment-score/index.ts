@@ -26,6 +26,7 @@ import { effectiveLang } from '../_shared/lang.ts';
 import { configStamp, type ConfigStamp } from '../_shared/configFingerprint.ts';
 import { scoredResultRow } from '../_shared/scoredResult.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+import { currentSession } from '../_shared/currentSession.ts';
 
 const FN = 'assessment-score';
 
@@ -88,11 +89,8 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'revoked' }, 403);
     }
 
-    const { data: sRow, error: sErr } = await supa
-      .from('assessment_sessions')
-      .select('id, status')
-      .eq('entitlement_id', ent.id)
-      .maybeSingle();
+    // 当前答题记录(_shared/attempts.ts 的定义);今天每人最多一份
+    const { data: sRow, error: sErr } = await currentSession(supa, ent.id);
     if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sErr);
     if (!sRow) return json({ error: 'no_session' }, 409);
     const session = sRow as SessionRow;

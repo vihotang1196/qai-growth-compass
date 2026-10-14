@@ -38,6 +38,7 @@ import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { parseLang } from '../_shared/lang.ts';
 import { availabilityOf } from '../_shared/reportFiles.ts';
+import { reportSession } from '../_shared/currentSession.ts';
 
 const FN = 'assessment-report-file';
 
@@ -94,11 +95,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     // session 从 cookie 来 —— 而不是从参数来(约定 2)
-    const { data: session, error: sErr } = await supa
-      .from('assessment_sessions')
-      .select('id, status')
-      .eq('entitlement_id', verified.entitlementId)
-      .maybeSingle();
+    // 报告看的那份(_shared/attempts.ts 的定义):文件跟着报告走;今天每人最多一份
+    const { data: session, error: sErr } = await reportSession(supa, verified.entitlementId);
     if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: verified.entitlementId }, sErr);
     if (!session) return json({ error: 'no_session' }, 404);
 

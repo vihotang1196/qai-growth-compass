@@ -21,6 +21,7 @@ import { postAuthTarget, targetWithLang, type SessionStatus } from '../_shared/p
 import { sessionCookieHeader, signSession } from '../_shared/session.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { loginLang } from '../_shared/loginLang.ts';
+import { currentSession } from '../_shared/currentSession.ts';
 
 const FN = 'assessment-auth';
 
@@ -90,11 +91,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── session:有则取,无则建 ────────────────────────────────
-    const { data: existing, error: sesError } = await supa
-      .from('assessment_sessions')
-      .select('id, status')
-      .eq('entitlement_id', ent.id)
-      .maybeSingle();
+    // 「当前答题记录」只有一个定义(_shared/attempts.ts);今天每人最多一份,取到的就是那一份
+    const { data: existing, error: sesError } = await currentSession(supa, ent.id);
     if (sesError) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sesError);
 
     let sessionStatus: SessionStatus | null = null;
@@ -112,11 +110,7 @@ Deno.serve(async (req: Request) => {
         .insert({ entitlement_id: ent.id });
       if (insError) {
         // 并发首次登录(客户连点两次链接):另一边刚建好。重查一次即可
-        const { data: raced, error: raceError } = await supa
-          .from('assessment_sessions')
-          .select('status')
-          .eq('entitlement_id', ent.id)
-          .maybeSingle();
+        const { data: raced, error: raceError } = await currentSession(supa, ent.id);
         // 原来是 `if (raceError || !raced) throw insError` —— 重查自己失败时,真正的原因(raceError)被丢掉
         if (raceError) dbFail({ fn: FN, op: 'assessment_sessions.select after insert conflict', entitlement: ent.id }, raceError);
         if (!raced) dbFail({ fn: FN, op: 'assessment_sessions.insert', entitlement: ent.id }, insError);

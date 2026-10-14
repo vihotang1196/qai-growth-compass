@@ -12,7 +12,7 @@ import { serviceClient } from '../_shared/supa.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { effectiveLang, parseLang } from '../_shared/lang.ts';
 import { langStates, type ReportFileRow } from '../_shared/reportFiles.ts';
-import { buildBaselinePools, type RawBaselineRow } from '../_shared/baselinePools.ts';
+import { buildBaselinePools, fromLatestResults, type LatestResultRow } from '../_shared/baselinePools.ts';
 import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { verifyRenderToken } from '../_shared/renderToken.ts';
 import { missingKeys } from '../_shared/env.ts';
@@ -23,6 +23,7 @@ import {
   selectBaseline,
 } from '../../../src/lib/reportStats.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
+import { reportSession } from '../_shared/currentSession.ts';
 
 const FN = 'assessment-report';
 
@@ -127,11 +128,12 @@ Deno.serve(async (req: Request) => {
           .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
           .eq('id', renderSessionId)
           .maybeSingle()
-      : await supa
-          .from('assessment_sessions')
-          .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
-          .eq('entitlement_id', verified!.entitlementId)
-          .maybeSingle();
+      // cookie 那条:报告看的那份 = 最新完成的,一份都没完成时是当前那份(_shared/attempts.ts);今天每人最多一份
+      : await reportSession<{ profile: unknown; entitlement_id: string; entitlement: { lang?: string | null } | null }>(
+          supa,
+          verified!.entitlementId,
+          'profile, entitlement_id, entitlement:assessment_entitlements(lang)',
+        );
     if (sErr) {
       dbFail(
         { fn: FN, op: 'assessment_sessions.select', session: renderSessionId, entitlement: verified?.entitlementId },
@@ -243,19 +245,19 @@ Deno.serve(async (req: Request) => {
 
     // ── 基准线 / 分位:同批次 + 全库结果 ──
     /**
-     * 【必须用 !inner】PostgREST 对嵌套资源的过滤【不会过滤父行】—— 不加 !inner 的话
-     * .eq('session.status','completed') 只作用于嵌套那一层,父行照样全都回来
-     * (只是 session 变 null)。那会让基准线把未完成的结果也算进均值 ——
-     * 症状是「库里只有我一条,基准线却和我不重合」,而没有任何报错。
+     * 【2026-10-14 起从视图取:每人只算最新完成的一份】`assessment_latest_results`(迁移 20261014100000)
+     * = 原来那条嵌套查询的规则(结果 + 答题记录 completed + entitlement + cohort 的 is_test)再加「每人一份」。
+     * 原来那条要写 `!inner`:PostgREST 对嵌套资源的过滤不会过滤父行,少了它未完成的结果也会算进均值 ——
+     * 视图里是普通的 inner join + `where status = 'completed'`,这个坑不存在了。
+     * 今天每人最多一份,所以池子与原来那条嵌套查询逐字相同(上线前后的报告快照比对);
+     * 有人重填之后,他不会被算两次、他的旧分数也不会把平均拉向他自己。
      */
-    const { data: allRows, error: allErr } = await supa
-      .from('assessment_results')
-      .select(
-        // cohort.is_test 一路嵌下来 —— 少了它,buildBaselinePools 会把测试行当成真实行
-        'dim_scores, total, tier, session:assessment_sessions!inner(id, status, entitlement:assessment_entitlements!inner(cohort_id, cohort:assessment_cohorts(is_test)))',
-      )
-      .eq('session.status', 'completed');
-    if (allErr) dbFail({ fn: FN, op: 'assessment_results.select baseline', session: session.id }, allErr);
+    const { data: latestRows, error: allErr } = await supa
+      .from('assessment_latest_results')
+      // cohort_is_test 必须取 —— 少了它,buildBaselinePools 会把测试行当成真实行
+      .select('session_id, dim_scores, total, tier, cohort_id, cohort_is_test');
+    if (allErr) dbFail({ fn: FN, op: 'assessment_latest_results.select baseline', session: session.id }, allErr);
+    const allRows = fromLatestResults((latestRows ?? []) as unknown as LatestResultRow[]);
 
     /**
      * 【分池交给纯函数,不在这里就地 filter】
@@ -263,23 +265,17 @@ Deno.serve(async (req: Request) => {
      * 而它的失败形态是最不该出错的那一处:新批次第一个学员的报告,基准是一堆假数据,
      * 而报告看起来完全正常。见 _shared/baselinePools.ts 与它的用例。
      */
-    const { globalRows, cohortRows } = buildBaselinePools(
-      (allRows ?? []) as unknown as RawBaselineRow[],
-      ent.cohort_id as string | null,
-    );
+    const { globalRows, cohortRows } = buildBaselinePools(allRows, ent.cohort_id as string | null);
 
     const baseline = selectBaseline(cohortRows, globalRows, DIM_KEYS, MIN_N);
 
     /**
      * 【诊断:基准池里到底有没有本人】n=1 却与本人分数不符,唯一的解释是那 1 条不是本人 ——
-     * 而这只可能因为本人的 session 不是 'completed'(被 !inner 过滤掉了)。
+     * 而这只可能因为本人的 session 不是 'completed'(视图只收 completed 的)。
      * finalize 里把 status 标 completed 那步失败时【只记日志不失败】,所以它是会发生的。
      * 与其让人从「n=1 但不重合」去反推,不如让端点直说。
      */
-    const selfInPool = (allRows ?? []).some(
-      // 只读一个字段,所以就地写出那一个字段的形状
-      (r) => (r as unknown as { session: { id: string } | null }).session?.id === session.id,
-    );
+    const selfInPool = allRows.some((r) => r.session?.id === session.id);
 
     const myDims = (result.dim_scores ?? {}) as Record<string, number>;
     // cohort_rank 板块:样本够才给;不足则 null,前端整块隐藏(跨期分位没意义,B1)

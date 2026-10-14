@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { buildBaselinePools, isTestResultRow, type RawBaselineRow } from './baselinePools.ts';
+import { buildBaselinePools, fromLatestResults, isTestResultRow, type RawBaselineRow } from './baselinePools.ts';
 
 const COHORT_A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const COHORT_TEST = 'bbbbbbbb-0000-4000-8000-000000000002';
@@ -87,4 +87,19 @@ Deno.test('同一行可以同时在两个池里(真实学员看自己批次)', (
   const { globalRows, cohortRows } = buildBaselinePools(rows, COHORT_A);
   assertEquals(globalRows.length, 1);
   assertEquals(cohortRows.length, 1);
+});
+
+Deno.test('视图 assessment_latest_results 的平铺行翻译过来,分池结果与原来的嵌套行逐字相同', () => {
+  const nested = [row(2.1, COHORT_A, false, 's1'), row(3.4, COHORT_TEST, true, 's2'), row(1.2, null, null, 's3')];
+  const flat = [
+    { session_id: 's1', dim_scores: { goal: 2.1 }, total: 2.1, tier: 'spot', cohort_id: COHORT_A, cohort_is_test: false },
+    { session_id: 's2', dim_scores: { goal: 3.4 }, total: 3.4, tier: 'spot', cohort_id: COHORT_TEST, cohort_is_test: true },
+    // 视图里批次被删的行:cohort_id null、cohort_is_test 由 coalesce 成 false
+    { session_id: 's3', dim_scores: { goal: 1.2 }, total: 1.2, tier: 'spot', cohort_id: null, cohort_is_test: false },
+  ];
+  for (const cohortId of [COHORT_A, COHORT_TEST, null]) {
+    assertEquals(buildBaselinePools(fromLatestResults(flat), cohortId), buildBaselinePools(nested, cohortId));
+  }
+  // 本人在不在池里(端点的 baselineIncludesSelf)也照样能按 session.id 判断
+  assertEquals(fromLatestResults(flat).map((r) => r.session?.id), ['s1', 's2', 's3']);
 });

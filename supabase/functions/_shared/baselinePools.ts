@@ -73,3 +73,29 @@ export function buildBaselinePools(
   }
   return { globalRows, cohortRows };
 }
+
+/** 视图 `assessment_latest_results` 里基准线要用的那几列(每人最新完成的一份,重填第 1 步) */
+export interface LatestResultRow {
+  session_id: string;
+  dim_scores: unknown;
+  total: number;
+  tier: string;
+  cohort_id: string | null;
+  cohort_is_test: boolean | null;
+}
+
+/**
+ * 视图的平铺行 → `buildBaselinePools` 收的嵌套形状。
+ *
+ * 【为什么不改 buildBaselinePools 本身】它的判据(测试行不进全局池、同批次池按 cohort_id)有一组用例看着;
+ * 换数据来源时只加这一层翻译,判据一个字不动。视图里的 `cohort_is_test` 已经是 `coalesce(c.is_test, false)`,
+ * 与 `isTestResultRow`「拿不到 cohort 算不是测试」同向。
+ */
+export function fromLatestResults(rows: readonly LatestResultRow[]): RawBaselineRow[] {
+  return rows.map((r) => ({
+    dim_scores: r.dim_scores,
+    total: r.total,
+    tier: r.tier,
+    session: { id: r.session_id, entitlement: { cohort_id: r.cohort_id, cohort: { is_test: r.cohort_is_test } } },
+  }));
+}
