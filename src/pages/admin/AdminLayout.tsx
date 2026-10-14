@@ -88,13 +88,21 @@ export default function AdminLayout() {
   return (
     <main className="min-h-screen bg-muted p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-4">
-        <header className="flex items-center justify-between gap-4">
+        {/*
+          【手机宽度:放不下就折到下一行,不许把页面撑宽】顶栏与下面那排标签原来都是不折行的 flex ——
+          英文在 390px 上那排标签(到「Live mode」)有 460px 宽,整页被撑到 461px;手机浏览器跟着把布局视口撑宽,
+          页面上居中的 fixed 元素(确认框)于是按 461 居中、右边被切掉(2026-10-14,scripts/e2e/admin-mobile-layout.mjs 量到的)。
+          中文那时没撑宽,是因为字被挤成两行(「学员名 / 单」)—— 同一个问题的另一种样子。
+          所以:容器 flex-wrap,按钮 whitespace-nowrap —— 每个标签一行写完,整个标签放不下就换行。
+        */}
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <h1 className="font-head text-2xl font-bold uppercase tracking-tight md:text-3xl">
             {tk('admin.title')}
           </h1>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
+              className="whitespace-nowrap"
               variant={passwordOpen ? 'primary' : 'outline'}
               onClick={() => setPasswordOpen((open) => !open)}
             >
@@ -102,6 +110,7 @@ export default function AdminLayout() {
             </Button>
             <Button
               size="sm"
+              className="whitespace-nowrap"
               variant="outline"
               onClick={() => void supabaseAuth().auth.signOut()}
             >
@@ -110,11 +119,12 @@ export default function AdminLayout() {
           </div>
         </header>
         {passwordOpen && <AdminPasswordPanel onClose={() => setPasswordOpen(false)} />}
-        <nav className="flex gap-2">
+        <nav className="flex flex-wrap gap-2">
           {(['roster', 'dashboard', 'funnel', 'insights', 'live'] as const).map((t) => (
             <Button
               key={t}
               size="sm"
+              className="whitespace-nowrap"
               variant={tab === t ? 'primary' : 'outline'}
               onClick={() => setTab(t)}
             >
