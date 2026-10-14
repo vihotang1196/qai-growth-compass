@@ -209,6 +209,31 @@ export const UI_STRINGS = {
   // ── Admin ───────────────────────────────────────────────
   'admin.title': { zh: '学员名单', en: 'Roster' },
   'admin.login.title': { zh: '后台登录', en: 'Admin sign-in' },
+  /** 默认视图:邮箱 + 密码(2026-10-14 起) */
+  'admin.login.passwordHint': {
+    zh: '用邮箱和密码登录。只有在允许名单里的邮箱能进后台。',
+    en: 'Sign in with your email and password. Only allow-listed emails can enter.',
+  },
+  'admin.login.email': { zh: '邮箱', en: 'Email' },
+  'admin.login.password': { zh: '密码', en: 'Password' },
+  'admin.login.passwordAction': { zh: '登录', en: 'Sign in' },
+  /**
+   * 密码登录失败的唯一一句(选哪句见 src/lib/adminPasswordAuth.ts)。
+   *
+   * 【不区分「邮箱不存在」与「密码错误」】只要拿到了 HTTP 响应就是这一句 —— 包括限流、服务端出错。
+   * 所以它只能说「可能」,而且要把两条出路都给出来:还没设置过密码的人(magic link 建的账号
+   * 一开始都没有可用的密码)和忘了密码的人,都走邮件链接。
+   */
+  'admin.login.passwordFailed': {
+    zh: '没能登录:邮箱或密码可能不对,或者这个邮箱还没设置过密码。忘了密码或没设置过,请用下面的邮件链接登录;连续失败几次后请稍等几分钟再试。',
+    en: 'Could not sign in: the email or password may be wrong, or no password has been set for this email yet. If you forgot it or never set one, use the email link below; after several failures, wait a few minutes before trying again.',
+  },
+  'admin.login.useLink': {
+    zh: '忘了密码或还没设置过?用邮件链接登录',
+    en: 'Forgot your password or never set one? Sign in with an email link',
+  },
+  'admin.login.usePassword': { zh: '改用邮箱和密码登录', en: 'Sign in with email and password instead' },
+  /** 备用视图:邮件链接 */
   'admin.login.hint': {
     zh: '输入你的邮箱,我们会发一条登录链接。只有在允许名单里的邮箱能进后台。',
     en: 'Enter your email and we will send a sign-in link. Only allow-listed emails can enter.',
@@ -241,6 +266,45 @@ export const UI_STRINGS = {
     en: 'This account is not on the admin allowlist. Use another account or ask to be added.',
   },
   'admin.signOut': { zh: '退出', en: 'Sign out' },
+  /** 「设置密码」面板(选哪句见 src/lib/adminPasswordAuth.ts) */
+  'admin.password.open': { zh: '设置密码', en: 'Set password' },
+  'admin.password.title': { zh: '设置密码', en: 'Set password' },
+  'admin.password.hint': {
+    zh: '至少 {n} 个字符。设置之后,登录页直接用邮箱和密码登录;忘了密码就用邮件链接登录,再回到这里改。',
+    en: 'At least {n} characters. Once set, sign in with your email and password; if you forget it, sign in with an email link and change it here.',
+  },
+  'admin.password.new': { zh: '新密码', en: 'New password' },
+  'admin.password.confirm': { zh: '再输入一次', en: 'Repeat the new password' },
+  'admin.password.save': { zh: '保存密码', en: 'Save password' },
+  'admin.password.saved': {
+    zh: '密码已保存。以后在登录页直接用邮箱和这个密码登录。',
+    en: 'Password saved. From now on, sign in with your email and this password.',
+  },
+  'admin.password.mismatch': { zh: '两次输入的不一样,请重新输入。', en: 'The two entries do not match. Please re-enter.' },
+  'admin.password.tooShort': { zh: '太短了:至少 {n} 个字符。', en: 'Too short: at least {n} characters.' },
+  'admin.password.tooLong': {
+    zh: '太长了:最多 72 个英文字符(中文字符每个算 3 个)。',
+    en: 'Too long: at most 72 bytes (a Chinese character counts as 3).',
+  },
+  /** 服务端的密码规则(长度、字符种类)或「出现在已泄露的密码库里」 */
+  'admin.password.weak': {
+    zh: '这个密码不符合要求:可能太简单,或出现在已泄露的密码库里。请换一个更长、更不常见的。',
+    en: 'This password is not accepted: it may be too simple or appear in a list of leaked passwords. Choose a longer, less common one.',
+  },
+  'admin.password.same': { zh: '新密码和现在的一样,换一个。', en: 'The new password is the same as the current one.' },
+  /** Dashboard 的「Secure password change」开着、而这次登录已经超过 24 小时 */
+  'admin.password.reauth': {
+    zh: '为了安全,改密码需要最近登录过。请先退出,用邮件链接重新登录,再来设置。',
+    en: 'For security, changing the password needs a recent sign-in. Sign out, sign in again with an email link, then set it.',
+  },
+  'admin.password.sessionLost': {
+    zh: '登录状态已失效。请退出后重新登录,再来设置。',
+    en: 'Your session has expired. Sign out, sign in again, then set it.',
+  },
+  'admin.password.failed': {
+    zh: '没有保存成功,请稍后重试。',
+    en: 'The password was not saved. Please try again later.',
+  },
   'admin.refresh': { zh: '刷新', en: 'Refresh' },
   'admin.empty': { zh: '还没有任何准入记录。', en: 'No entitlements yet.' },
   'admin.phoneBad': { zh: '号码格式异常', en: 'Unparseable phone' },

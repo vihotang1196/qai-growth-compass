@@ -108,7 +108,7 @@
 | 2 | 数据表 + RLS + phone.ts + 单元测试 | **完成**(migration 已应用于 Supabase Singapore) |
 | 3 | assessment-ghl-webhook | **完成并实测** |
 | 4 | 登录流程(魔法链接 + 重发 + 限流 + session) | **完成并实测** |
-| 5 | Admin 认证 + 名单管理页 | **完成并实测**(PKCE;magic link 登录已验证) |
+| 5 | Admin 认证 + 名单管理页 | **完成并实测**(PKCE;magic link 登录已验证)。**2026-10-14 加密码登录**(默认邮箱 + 密码,邮件链接备用;后台「设置密码」),线上待 Viho 第一次设置后实测 |
 | 6 | 答题流程(背景题 + 15 题 + 断点续答) | **完成并实测**(config v3 之后是 15 题,不是 24) |
 | 7 | 计分 Edge Function + 问卷页 + GHL 写回 | **完成并实测** |
 | 8 | 报告页 9 板块 + 批次基准线 + 代价换算 + 打印样式表 | **完成并实测**(板块合并后仍 9 个) |
@@ -193,6 +193,7 @@ main 之后再往前走的话,先照同样的办法再试一次(`git worktree ad
 
 | 优先 | 事项 | 为什么 | 第一步 / 前提 | 谁 |
 |---|---|---|---|---|
+| **P0** | **后台密码登录的线上确认**(2026-10-14 上线) | 代码与单元测试都绿,但**生产上还没有人用密码登录过** —— 第一次设置密码要用 Viho 的管理员账号,我没有、也不该替你输入 | Viho 按 [`docs/admin-password-guide.md`](docs/admin-password-guide.md) 第一次设置密码 → 退出 → 用密码登录一次,把结果告诉我;同时在 Dashboard 定[第 7、10、18–20 行](#待-viho-在-dashboard-确认)(最短长度 12、Password changed 通知、泄露密码检测、Secure password change、登录限流)。确认之后把 Stage 5 那一行的「待实测」改掉 | Viho |
 | **P0** | **legacy JWT key(anon / service_role)的状态与停用**(⑨) | service_role 的片段出现过一次;PROGRESS 没记录 legacy 是否已 Disable | **先查有没有东西在用它**。代码的事实(2026-10-08 读过):所有取 key 的地方都是「新 key 优先、legacy 兜底」—— Edge Function 读平台注入的 `SUPABASE_SECRET_KEYS`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;Vercel 的 render-pdf / pdf-sweep 读 `SUPABASE_SECRET_KEY`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;代理、cron、前端读 publishable、兜底 anon。所以要在运行环境里确认:Vercel 上三个新变量都在、Edge Function 拿得到 `SUPABASE_SECRET_KEYS`、GHL 与任何外部工具没有带 legacy key。然后看 Dashboard 状态 → Disable(可逆)→ 跑[Disable 之后的验收清单](#disable-之后的验收清单) → 再迁 JWT signing keys、revoke legacy secret | Viho(Dashboard、Vercel、GHL)+ 我(验收清单) |
 | **P0** | **GHL 里由标签触发的工作流**(新) | 改错配判据、重同步标签、改档位都会改动学员的标签;标签若触发工作流,就可能给学员发消息 | 列出所有以 `assessment_*` 标签为触发条件的工作流,各自会不会对学员发消息 —— 这是第 5 条和任何「重同步 GHL」选项的前提 | Viho |
 | **P0** | **Viho 名下的待确认** | 都是「出事时才会发现」的依赖 | 第 13 行:03:33 那个名单外用户是谁建的 · 第 15 行:**Resend 账号是否由公司掌控**(失联 = Admin 登录邮件中断)· 第 16 行:**cron 在 sin1 的运行记录**(Vercel → Cron Jobs 看三条的最近一次执行) | Viho |
@@ -7671,10 +7672,10 @@ Node 370 / Deno 217,十四道门全绿。
 | 4 | 每小时发信上限(⚠️ magic link、确认信共用这一个额度 —— 刷满了后台一小时收不到登录信) | Authentication → Rate Limits | | |
 | 5 | 每用户发信间隔 | 同上 | | |
 | 6 | Magic Link / Confirm signup 模板的现有内容 | Authentication → Emails → Templates | | |
-| 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项) | Authentication → Providers → Email | | |
-| 8 | CAPTCHA 开没开(⚠️ 一开,现有的 `signInWithOtp` 不带 captchaToken 就会坏) | Authentication → Attack Protection | | |
+| 7 | 密码策略(注册开着时任何人都能直接用密码注册,所以现在它不是无关项)。⚠️ **2026-10-14 起后台用密码登录,这一项直接相关**:建议「Minimum password length」设 **12**(与页面上的下限一致)、「Password requirements」至少「字母 + 数字」—— 见[后台密码登录](#后台密码登录2026-10-14)的 Dashboard 清单 | Authentication → Sign In / Providers → Email | | |
+| 8 | CAPTCHA 开没开(⚠️ 一开,现有的 `signInWithOtp` 与 2026-10-14 加的 `signInWithPassword` 都不带 captchaToken,**两种登录都会坏** —— 要开得先改代码) | Authentication → Attack Protection | | |
 | 9 | JWT 过期时间、会话超时 | Authentication → Sessions | | |
-| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图 | 2026-10-07 |
+| 10 | 「密码已修改」之类的安全通知 | Authentication → Emails | 「Password changed」通知:**关**;「Email address changed」通知:**关**。来源:Viho 的 Dashboard 截图。⚠️ **2026-10-14 起有密码了,建议把「Password changed」打开**:密码被人改了,你会收到一封信 | 2026-10-07 |
 | 11 | Auth 审计日志存在哪(表里是 0 行,见上) | Authentication / Logs | | |
 | 12 | **Vercel Preview 环境有没有 `VITE_SUPABASE_URL`、指向哪个 project ref** —— 指向生产的话,preview 上的后台连的就是生产库。⚠️ 2026-10-07 本机没装 Vercel CLI、仓库没 link,所以没查 | Vercel → Settings → Environment Variables | `VITE_SUPABASE_URL` 与 `SUPABASE_SECRET_KEY` **都作用于 Preview**(同一条变量同时勾了 Production 与 Preview ⇒ 值相同)⇒ **Preview 部署连的是生产库,并且服务端持有生产 secret key**。但有 **Vercel Authentication(Standard Protection)** 保护:预览部署要登录 Vercel 团队账号才能访问,正式域名公开 ⇒ **只有团队成员能访问 Preview**。**已确认**。来源:Viho 的 Vercel 截图 | 2026-10-07 |
 | 13 | 03:33 UTC 那个名单外用户是谁(不删,但要知道) | Authentication → Users | **已删**(Viho 在 Dashboard 删的;【实测】`auth.users` 现只剩管理员 1 行)。**是谁建的:待 Viho 补充**(这一半没填完) | 2026-10-07 |
@@ -7682,6 +7683,10 @@ Node 370 / Deno 217,十四道门全绿。
 | 15 | **Resend 账号(`jianan1196`)是否由公司掌控** —— 这个账号失联,Admin 登录邮件就会中断(Supabase 的 SMTP 用的是它下面的 API key) | Resend → Settings / Team | | |
 | 16 | **cron 在 sin1 是否照常触发** —— 2026-10-07 函数区域从 iad1 改成 sin1;按 Vercel 文档 cron 是 HTTP 触发、与区域无关,但没有实际看到它在新区域跑过 | Vercel → 项目 → Cron Jobs(看三条的最近一次执行) | | |
 | 17 | **sin1 的区域计价** —— 区域计价可能与 iad1 不同;第一场课后看一眼用量 | Vercel → Usage | | |
+| 18 | **泄露密码检测**(「Prevent use of leaked passwords」,对照 HaveIBeenPwned)—— 建议开;⚠️ 只有 Pro 及以上套餐有这一项,没有就跳过。开了之后设置一个出现在泄露库里的密码会被拒,页面显示「这个密码不符合要求」 | Authentication → Sign In / Providers → Email(或 Attack Protection) | | |
+| 19 | **Secure password change**(改密码前要求最近 24 小时内登录过)—— 建议开。开着时,登录超过 24 小时再去「设置密码」,页面会请你退出、用邮件链接重新登录再改 | Authentication → Sign In / Providers → Email | | |
+| 20 | **登录限流**(「Sign-ups and sign-ins」每 5 分钟每个 IP 的次数,默认 30)—— 这是密码被暴力试的唯一一道闸;确认它的值,不需要改 | Authentication → Rate Limits | | |
+| 21 | 「Allow new users to sign up」**保持关**(smoke 的 `[配置]` 那一条守着它)—— 有了密码登录,注册一开,任何人都能用 API 直接注册一个带密码的账号(进不了后台,但会在 `auth.users` 里建行) | Authentication → Sign In / Providers | 关(smoke 每次都验) | 2026-10-07 起 |
 
 ## Auth 规则
 
@@ -9322,8 +9327,78 @@ Viho 在课堂用的笔记本上试过现场模式:全屏、+ / − / 0、翻屏
 
 ---
 
+# 后台密码登录(2026-10-14)
+
+**需求(Viho)**:后台登录页直接输入邮箱和密码就能登录,平时不用收邮件。
+**给 Viho 的步骤**:[`docs/admin-password-guide.md`](docs/admin-password-guide.md)(第一次怎么设置、以后怎么登录、忘了怎么办)。
+
+## 做了什么(按给定的设计,没有调整)
+
+- **登录页默认「邮箱 + 密码」**,下面一行「忘了密码或还没设置过?用邮件链接登录」切到原来的 magic link 表单;那边有一行切回来。
+  两种方式共用同一个邮箱框的值;切换时清掉密码与提示
+- **不做单独的重置密码页**:忘了密码 = 用邮件链接登录 → 后台「设置密码」。所以没有「重置邮件里的链接」这条新路径要守
+- **后台右上角「设置密码」**:已登录状态下设置或修改。不要求旧密码(Supabase 的 `updateUser` 不收旧密码;
+  「改之前必须最近登录过」由 Dashboard 的 Secure password change 负责,见下面的清单)
+- **管理员判定不变**:密码只决定「你是谁」,能不能进仍由 `assessment-admin` 每次请求验 JWT + 查 `admin_users`。
+  不在名单的人用密码登录成功,照样看到 403 那一句(与 magic link 一样)
+- **登录失败只有一句**:只要拿到了 HTTP 响应(错密码、没这个邮箱、`email_not_confirmed`、限流、5xx、非 JSON)都显示同一句;
+  断网单独一句;其它兜底一句。判定复用 magic link 那份(`classifyAuthError`,从 `adminLoginNotice` 里抽出来,两边各自只决定每一类显示哪句 —— [判断标准 3](#3-同一份东西存两处--先想能不能取消复制))
+- **设置密码的报错分开说**(那时人已登录、改的是自己的密码,不泄露任何别人的东西):两次不一致、太短(< 12)、
+  太长(> 72 **字节** —— bcrypt 会静默截断,按字符数数会放过 25 个汉字)、服务端判弱 / 泄露、与原来相同、需要重新登录(Secure password change)、
+  登录状态失效、断网、其它
+- **magic link 建出来的账号一开始没有可用的密码**(GoTrue 自己填了一个随机的,见[线上 Auth 配置](#线上-auth-配置)那条「`encrypted_password` 非空不代表设过密码」)
+  —— 所以第一次一定要走邮件链接
+- 新文件:`src/lib/adminPasswordAuth.ts`(两个纯判定 + 两个从不抛的接缝)、`src/pages/admin/AdminPasswordPanel.tsx`;
+  改动:`AdminLogin.tsx`、`AdminLayout.tsx`、`adminAuthMessages.ts`(抽出 `classifyAuthError`)、`ui-strings.ts`(中英文都补了)。
+  **只动前端**,没有函数、没有迁移、没有 Dashboard 改动
+
+## 先红后绿
+
+新增 28 条(`adminPasswordAuth.test.ts` 25、`adminPasswordView.test.ts` 3),做法与 magic link 那份相同:**真的 supabase-js 客户端,只换 fetch**
+(判定依赖 auth-js 怎么把响应包成错误;设置密码那几条先 `setSession` 再看 `PUT /user` 回什么)。
+- 第一遍:两个文件都红(模块不存在)
+- 写完判定模块与面板、登录页还是旧的:**登录页那 2 条红在断言上**(`expected … to contain 'type="password"'`),其余 46 条绿 —— 这一步证明视图测试对旧页面会红
+- 改完登录页:48 / 48 绿;全量 verify **Node 503 / Deno 220**,十六道门全绿
+
+**变异(每次逐字还原,`sha256` 一致),7 次全红**:
+
+| 变异 | 红了几条 |
+|---|---|
+| `invalid_credentials` 单独一句 | 3(两条 invalid_credentials + 「所有失败同一句」) |
+| 邮箱不去空格 | 2 |
+| 长度按字符数算、不按字节 | 1 |
+| 去掉 `error_code` 对照(same_password / reauthentication_needed) | 2 |
+| 去掉 `AuthSessionMissingError` 那一支 | 2 |
+| 登录页默认改回邮件链接 | 2 |
+| 设置密码前不做本地检查 | 1 |
+
+## 本地预览(不连任何后端)
+
+`.claude/launch.json` 加了 `compass-dev-offline`:`VITE_SUPABASE_URL` 指向 `127.0.0.1:9`(连不上的地址)、key 是一个写明「不是 key」的占位串。
+- 登录页:默认邮箱 + 密码(`autocomplete` 分别是 `username` / `current-password`),「登录」在两个框都填之前是灰的;切到邮件链接、再切回来都正常;控制台 0 错误
+- 后台:在本机 localStorage 塞一个**假的、本地才有的** session 进入后台(学员名单那块显示 404 是预期的 —— 本地没有 `/api`);
+  「设置密码」打开面板,两个框都是 `new-password`;填一个短的测试值 → 「太短了:至少 12 个字符」,**没有发出任何请求**;之后删掉那个假 session
+- **没有在任何地方输入过真实账号或密码**;生产上的第一次密码登录要 Viho 做(当前未完成 P0)
+
+## Dashboard:需要 Viho 打开或确认的(我没改)
+
+都列在[待 Viho 在 Dashboard 确认](#待-viho-在-dashboard-确认)那张表里(第 7、8、10、18–21 行):
+- **最短密码长度 12**、密码字符要求(至少字母 + 数字)—— 第 7 行
+- **泄露密码检测**(Pro 套餐才有)—— 第 18 行
+- **Secure password change** —— 第 19 行
+- 「Password changed」通知**打开** —— 第 10 行
+- 登录限流的值(确认即可)—— 第 20 行
+- CAPTCHA **保持关**(开了两种登录都会坏)—— 第 8 行;自助注册**保持关** —— 第 21 行
+
+---
+
 ## 变更日志
 
+- 2026-10-14 — **[后台密码登录](#后台密码登录2026-10-14)**(只动前端)。登录页默认邮箱 + 密码,邮件链接保留为备用入口;没有单独的重置密码页
+  (忘了 = 邮件链接登录 → 后台「设置密码」);管理员判定不变;登录失败只有一句,不区分邮箱不存在与密码错误。
+  先红后绿 28 条(真 supabase-js + 假 fetch;登录页那 2 条先对旧页面红在断言上)+ 7 次变异全红;verify Node 503 / Deno 220。
+  本地离线预览看过两种登录方式与「设置密码」面板(没有输入任何真实凭证)。Dashboard 要 Viho 定的列在第 7、8、10、18–21 行;
+  生产上的第一次密码登录待 Viho 做(当前未完成 P0)。给 Viho 的步骤:`docs/admin-password-guide.md`
 - 2026-10-14 — **[第一场分享会前后](#第一场分享会前后2026-10-12-至-10-14) 补记 + 冻结期结束**。
   10-12 / 10-13 冻结期内的记录(当时不推 main)一起补进来:现场模式在课堂笔记本上试过;为分享会建批次「2026-10-13 第一场」、GHL 加 tag、
   测试联系人 `c1a6469a` 验通 tag 路径后挪进测试批次(第一次测试时我把一段旧运行的响应当成了这一次、推断过强,如实记下);10-13 Viho 删掉 tag;

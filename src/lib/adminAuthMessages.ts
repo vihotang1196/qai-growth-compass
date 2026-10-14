@@ -41,7 +41,7 @@ export type AdminLoginNotice =
  *
  *   AuthApiError              非 2xx、响应体是 JSON —— status 是真实状态码
  *   AuthUnknownError          非 2xx、响应体不是 JSON —— **没有 status**,但确实拿到了响应
- *   AuthWeakPasswordError     服务端的弱密码拒绝(这个页面用不到,列出来是为了完整)
+ *   AuthWeakPasswordError     服务端的弱密码拒绝(magic link 用不到;「设置密码」会撞上它)
  *   AuthRetryableFetchError   见 `adminLoginNotice` 里那一支
  *
  * 【为什么不只看 `status` 是不是数字】客户端自己造的错误也带 status:
@@ -54,10 +54,20 @@ const RESPONSE_ERROR_NAMES: ReadonlySet<string> = new Set([
   'AuthWeakPasswordError',
 ]);
 
-/** 输入是 `signInWithOtp` 返回的 `error`(成功时为 null),或者它抛出来的东西 */
-export function adminLoginNotice(error: unknown): AdminLoginNotice {
-  if (error === null || error === undefined) return 'admin.login.neutral';
-  if (typeof error !== 'object') return 'admin.login.unexpected';
+/**
+ * 一个 auth-js 错误属于哪一类 —— magic link 与密码登录(`adminPasswordAuth.ts`)共用这一份判定,
+ * 两边各自只决定「每一类显示哪一句」。类名与 status 的含义只在这里写一次。
+ *
+ *   none        没有错误
+ *   response    拿到了 HTTP 响应(任何状态码)
+ *   network     请求没发出去 / 没拿到响应
+ *   unexpected  兜底:两者都不是(见文件头)
+ */
+export type AuthErrorClass = 'none' | 'response' | 'network' | 'unexpected';
+
+export function classifyAuthError(error: unknown): AuthErrorClass {
+  if (error === null || error === undefined) return 'none';
+  if (typeof error !== 'object') return 'unexpected';
 
   const { name, status } = error as { name?: unknown; status?: unknown };
   if (name === 'AuthRetryableFetchError') {
@@ -70,9 +80,17 @@ export function adminLoginNotice(error: unknown): AdminLoginNotice {
      * 那多半是 `VITE_SUPABASE_URL` 指错了地方 —— 显示成「网络错误」不准确,
      * 但与输入的邮箱无关,不泄露任何东西。
      */
-    return status === 0 ? 'admin.login.networkError' : 'admin.login.neutral';
+    return status === 0 ? 'network' : 'response';
   }
-  if (typeof name === 'string' && RESPONSE_ERROR_NAMES.has(name)) return 'admin.login.neutral';
+  if (typeof name === 'string' && RESPONSE_ERROR_NAMES.has(name)) return 'response';
+  return 'unexpected';
+}
+
+/** 输入是 `signInWithOtp` 返回的 `error`(成功时为 null),或者它抛出来的东西 */
+export function adminLoginNotice(error: unknown): AdminLoginNotice {
+  const kind = classifyAuthError(error);
+  if (kind === 'none' || kind === 'response') return 'admin.login.neutral';
+  if (kind === 'network') return 'admin.login.networkError';
   return 'admin.login.unexpected';
 }
 

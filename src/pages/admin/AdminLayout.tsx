@@ -3,6 +3,7 @@ import { Button } from '@/components/brutalist';
 import { useT } from '@/lib/i18n';
 import { supabaseAuth } from '@/lib/supabase';
 import AdminLogin from './AdminLogin';
+import AdminPasswordPanel from './AdminPasswordPanel';
 import Roster from './Roster';
 import CohortDashboard from './CohortDashboard';
 import FunnelPanel from './FunnelPanel';
@@ -54,6 +55,8 @@ export default function AdminLayout() {
   const [signedIn, setSignedIn] = useState(false);
   /** 403:有身份但不在名单。这时【不】该把人弹回登录页 */
   const [forbidden, setForbidden] = useState(false);
+  /** 「设置密码」面板 —— 只在已登录、且不是 403 时可达(403 时整页是登录页) */
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   useEffect(() => {
     const auth = supabaseAuth().auth;
@@ -64,7 +67,10 @@ export default function AdminLayout() {
     });
     const { data: sub } = auth.onAuthStateChange((_event, session) => {
       setSignedIn(session !== null);
-      if (session === null) setForbidden(false);
+      if (session === null) {
+        setForbidden(false);
+        setPasswordOpen(false);
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -86,14 +92,24 @@ export default function AdminLayout() {
           <h1 className="font-head text-2xl font-bold uppercase tracking-tight md:text-3xl">
             {tk('admin.title')}
           </h1>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void supabaseAuth().auth.signOut()}
-          >
-            {tk('admin.signOut')}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={passwordOpen ? 'primary' : 'outline'}
+              onClick={() => setPasswordOpen((open) => !open)}
+            >
+              {tk('admin.password.open')}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void supabaseAuth().auth.signOut()}
+            >
+              {tk('admin.signOut')}
+            </Button>
+          </div>
         </header>
+        {passwordOpen && <AdminPasswordPanel onClose={() => setPasswordOpen(false)} />}
         <nav className="flex gap-2">
           {(['roster', 'dashboard', 'funnel', 'insights', 'live'] as const).map((t) => (
             <Button
