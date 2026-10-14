@@ -391,6 +391,9 @@ supabase secrets list
 
 答完题之后的写回(Stage 11)需要 9 个自定义字段和 6 个标签,清单见 PROGRESS.md 0.12。**那些现在还不用建**,Stage 11 前建好就行。
 
+> **2026-10-14 更正**:「6 个标签」是 6 个**模板**,展开之后是 **14 个标签**;9 个字段里罗盘实际写的是 **8 个**(`qai_assessment_report_url` 从来没写过)。
+> 逐个写出的完整清单、各自什么时候加上 / 去掉:[`ghl-inventory.md`](ghl-inventory.md)。
+
 现在只需要建一个:
 
 | Field Name | Unique Key | 类型 | 用途 |
