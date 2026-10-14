@@ -45,7 +45,8 @@
     "calib:baseline": "node scripts/calibration/baseline-candidates.ts",
     "calib:cost": "node scripts/calibration/cost-sensitivity.ts",
     "calib:priority": "node scripts/calibration/priority-mismatch.ts",
-    "calib:actions": "node scripts/calibration/export-action-library.ts"
+    "calib:actions": "node scripts/calibration/export-action-library.ts",
+    "snapshot:reports": "deno run --allow-read --allow-write --allow-run=supabase --allow-env --config supabase/functions/deno.json scripts/report-snapshot.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",

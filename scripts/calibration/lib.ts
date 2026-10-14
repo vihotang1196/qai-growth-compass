@@ -78,8 +78,11 @@ export function assertNoPersonalColumns(sql: string): void {
   for (const re of PERSONAL) {
     if (re.test(sql)) throw new Error(`查询里出现了个人信息字段(${re}),拒绝执行`);
   }
-  // 问卷只许取两个选择题字段,整列 responses 会带出开放题原文
-  const stripped = sql.replace(/responses\s*->>\s*'(priority_dimension|consult_interest)'/g, '');
+  // 问卷只许取两个选择题字段,整列 responses 会带出开放题原文;
+  // 例外是整列的 md5 指纹(报告快照用它比对「问卷有没有变」,指纹里没有原文)
+  const stripped = sql
+    .replace(/responses\s*->>\s*'(priority_dimension|consult_interest)'/g, '')
+    .replace(/md5\(\s*\w+\.responses::text\s*\)/g, '');
   if (/\bresponses\b/.test(stripped)) {
     throw new Error("查询里取了整列 responses(会带出开放题原文),只许 responses->>'priority_dimension' / 'consult_interest'");
   }
@@ -182,15 +185,22 @@ function selfTest(): void {
   eq(pearson([1, 2, 3], [5, 5, 5]), null, 'zero variance');
   eq(pearson([1, 2], [1, 2]), null, 'n < 3');
   let blocked = 0;
-  for (const bad of ["select e.name from assessment_entitlements e", 'select responses from assessment_survey', 'select phone_e164 from x']) {
+  for (const bad of [
+    "select e.name from assessment_entitlements e",
+    'select responses from assessment_survey',
+    'select phone_e164 from x',
+    // 指纹的例外只放过指纹本身:同一句里再取整列照样拦
+    'select md5(sv.responses::text) as h, sv.responses from assessment_survey sv',
+  ]) {
     try {
       assertNoPersonalColumns(bad);
     } catch {
       blocked++;
     }
   }
-  if (blocked !== 3) throw new Error(`calibration lib self-test failed: personal-column guard blocked ${blocked}/3`);
+  if (blocked !== 4) throw new Error(`calibration lib self-test failed: personal-column guard blocked ${blocked}/4`);
   assertNoPersonalColumns("select responses->>'priority_dimension' as p from assessment_survey");
+  assertNoPersonalColumns('select md5(sv.responses::text) as h from assessment_survey sv');
   // 写操作在发出之前就被拒绝(不会走到 supabase CLI)
   let refused = 0;
   for (const bad of ['delete from assessment_results', 'with x as (update assessment_results set total = 0 returning 1) select * from x']) {
