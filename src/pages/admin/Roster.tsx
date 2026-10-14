@@ -15,6 +15,7 @@ import { useT } from '@/lib/i18n';
 import { adminPost } from '@/lib/adminApi';
 import RosterRowView, { ROSTER_COLUMNS, type RosterRowData as RosterRow } from './RosterRow';
 import { parseWarnings } from '../../../api/_lib/entitlementWarnings';
+import { rosterMatches } from '@/lib/rosterSearch';
 
 interface RosterResponse {
   rows: RosterRow[];
@@ -29,6 +30,9 @@ interface RosterResponse {
  * 【筛选在前端做】后端一次返回全量。当前批次规模是几十到一两百人,够用,而且省一张
  * SQL 视图(视图要走 migration)。**批次上到几千人时要把筛选推回 SQL** ——
  * 这条限制写在 assessment-admin 的 roster() 注释里,不是随口一提。
+ *
+ * 【搜索也在前端做】(2026-10-14)理由与「什么时候要改」见 `src/lib/rosterSearch.ts`。
+ * **搜索词只活在这个组件的 state 里**:不发请求、不进 URL、不进 localStorage、不打印。
  */
 export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean) => void }) {
   const { tk } = useT();
@@ -55,6 +59,8 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
    * (让一个开关决定要不要给假联系人发消息,那种耦合太危险)。
    */
   const [showTest, setShowTest] = useState(false);
+  /** 搜索词 —— 只在内存里(见文件头) */
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,6 +93,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
     const max = maxScore === '' ? null : Number(maxScore);
     return (data?.rows ?? []).filter((r) => {
       if (!showTest && r.cohort?.is_test) return false;
+      if (!rosterMatches(r, query)) return false;
       if (cohort && r.cohort?.id !== cohort) return false;
       if (status && r.status !== status) return false;
       if (badPhoneOnly && r.phone_e164 !== null) return false;
@@ -98,7 +105,19 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
       if (max !== null && (total === null || total > max)) return false;
       return true;
     });
-  }, [data, cohort, status, minScore, maxScore, badPhoneOnly, warnOnly, showTest]);
+  }, [data, cohort, status, minScore, maxScore, badPhoneOnly, warnOnly, showTest, query]);
+
+  /**
+   * 搜索时,被「隐藏测试数据」藏掉的匹配有几条 —— 说出来:否则「没找到」和「找到了但被藏了」长得一样
+   * (与上面那张「另有 n 条测试数据已隐藏」卡片同一个理由)。
+   */
+  const hiddenTestMatches = useMemo(
+    () =>
+      query.trim() === '' || showTest
+        ? 0
+        : (data?.rows ?? []).filter((r) => r.cohort?.is_test && rosterMatches(r, query)).length,
+    [data, query, showTest],
+  );
 
   /**
    * 重新生成 PDF —— 不加确认框(重置只是重渲一次,误点成本很低;确认框会让人形成
@@ -237,6 +256,23 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
 
       <Card padding="sm">
         <CardBody className="flex flex-wrap items-end gap-3">
+          {/* 搜索:整行宽(手机上)/ 固定宽(桌面);Esc 清空 —— 与浏览器自带的 search 框行为一致,各浏览器都一样 */}
+          <div className="w-full sm:w-80">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setQuery('');
+              }}
+              placeholder={tk('admin.search.placeholder')}
+              aria-label={tk('admin.search.label')}
+              autoComplete="off"
+              spellCheck={false}
+              enterKeyHint="search"
+              data-testid="admin-roster-search"
+            />
+          </div>
           <select
             value={cohort}
             onChange={(e) => setCohort(e.target.value)}
@@ -323,6 +359,13 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
         </CardBody>
       </Card>
 
+      {query.trim() !== '' && !loading && (
+        <p className="font-body text-sm opacity-70" aria-live="polite">
+          {tk('admin.search.count').replace('{n}', String(rows.length))}
+          {hiddenTestMatches > 0 && ` · ${tk('admin.search.hiddenTest').replace('{n}', String(hiddenTestMatches))}`}
+        </p>
+      )}
+
       {notice && (
         <Card tone="ink" padding="sm">
           <CardBody className="font-body text-sm">{notice}</CardBody>
@@ -335,7 +378,8 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
         </Card>
       ) : rows.length === 0 ? (
         <Card padding="md">
-          <CardBody>{tk('admin.empty')}</CardBody>
+          {/* 有人、但被搜索 / 筛选滤光了 —— 与「一条记录都没有」分开说,否则看起来像名单是空的 */}
+          <CardBody>{tk((data?.rows.length ?? 0) > 0 ? 'admin.noMatch' : 'admin.empty')}</CardBody>
         </Card>
       ) : (
         <TableWrap>

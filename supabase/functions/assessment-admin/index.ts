@@ -800,6 +800,8 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
  * 而 PostgREST 对嵌套表的过滤很别扭。当前批次规模是几十到一两百人,
  * 一次全取再在前端筛是够的,而且省一张视图(视图要走 migration)。
  * **这条在批次上到几千人时要改** —— 到那时应该建视图并把筛选推回 SQL。
+ * 名单搜索(2026-10-14)同样在前端;改成服务端分页时搜索随之挪过来 —— 走 POST body,不走 URL、不打印搜索词
+ * (理由见 src/lib/rosterSearch.ts)。
  */
 async function roster(supa: ReturnType<typeof serviceClient>) {
   const { data, error } = await supa

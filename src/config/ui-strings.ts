@@ -307,6 +307,7 @@ export const UI_STRINGS = {
   },
   'admin.refresh': { zh: '刷新', en: 'Refresh' },
   'admin.empty': { zh: '还没有任何准入记录。', en: 'No entitlements yet.' },
+  'admin.noMatch': { zh: '没有符合搜索 / 筛选条件的人。', en: 'Nobody matches the search / filters.' },
   'admin.phoneBad': { zh: '号码格式异常', en: 'Unparseable phone' },
   'admin.phoneRatio': {
     zh: '号码解析失败:{bad} / {total}({pct})',
@@ -316,6 +317,11 @@ export const UI_STRINGS = {
     zh: '超过 2% 阈值 —— GHL 里的号码质量比预期差,该回头看要不要加预处理了。',
     en: 'Above the 2% threshold — phone quality in GHL is worse than expected.',
   },
+  // 名单搜索(2026-10-14):按姓名 / 电话 / 邮箱,部分匹配、不分大小写;只在浏览器里过滤
+  'admin.search.label': { zh: '搜索姓名、电话或邮箱', en: 'Search by name, phone or email' },
+  'admin.search.placeholder': { zh: '搜索:姓名 / 电话 / 邮箱', en: 'Search: name / phone / email' },
+  'admin.search.count': { zh: '找到 {n} 人', en: '{n} match(es)' },
+  'admin.search.hiddenTest': { zh: '另有 {n} 条测试数据匹配(已隐藏)', en: '{n} more in hidden test data' },
   'admin.filter.cohort': { zh: '全部批次', en: 'All cohorts' },
   'admin.filter.status': { zh: '全部状态', en: 'All statuses' },
   'admin.filter.minScore': { zh: '最低分', en: 'Min score' },
