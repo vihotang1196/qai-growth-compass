@@ -390,6 +390,23 @@ Viho 在手机上以学员身份走完全程(测试 entitlement `2d732b39-0e1a-4
   这两处这次都不记。要记,是修法 a 那一行的「渲 PDF 时写进 report_files」,另做。
 - **上线顺序**:迁移(加两列,旧函数照常工作)→ 只部署 `assessment-score` → 前端没有改动。
 
+#### 上线(2026-10-14)
+
+- **测试**:Node 12 条(`src/lib/configFingerprint.test.ts`)+ Deno 3 条(`_shared/scoredResult_test.ts`),先对着「模块不存在 / 登记表为空」跑红;
+  9 次变异全红(键不排序、保留 undefined、`configStamp` 改成抛、丢版本标签、十六进制补位错、结果行丢任一列、改 config 不升版本 ×Node / Deno)。
+  verify:Node 515 / Deno 223。**没有测试覆盖的一处**:`Deno.serve` 入口里那一行确实调用了 `scoredResultRow` —— 用下面「第一份新结果」来验。
+- **登记表**:`3.2.0 → 745b7318…`(当前 config)。`--history` 印证了为什么要指纹:3.2.0 在 git 里对应两份内容(08-06 `4c7796ab…`、08-14 `745b7318…`),1.0.0 对应三份。
+- **迁移** `20261014000000_results_config_stamp`(`db push`,04:37 UTC):两列都在、可空、带注释;**113 份已有结果两列全空**(没有回填)。
+- **函数**:只部署 `assessment-score`(v44,04:38 UTC);migration preflight「16 条本地与远端一致」;其它函数版本没动。前端 bundle 没有改动(Vercel 状态 success)。
+- **报告快照**:迁移之前(04:37)与部署之后(04:57)—— 真实 167 份、测试 22 份**逐字相同**(`--diff` exit 0)。
+- **smoke**:第一次 **exit 1**(14/16:经代理到 `assessment-score` 与 `assessment-report` 两条「fetch failed」,而 `assessment-report` 这次没部署),跑了 16 分钟;
+  **原因是本机睡眠**:`pmset -g log` 记着 12:39:37(本地时间)loginwindow 发起 Software Sleep,12:39:50 再次入睡 915 秒,12:55:05 才醒 ——
+  smoke 12:39:46 开始、12:55:33 结束,两条失败的请求正是睡着那段时间里在路上的。紧接着直接请求 `assessment-score` 三次都是函数自己的 401(约 0.3 秒);
+  **重跑 smoke exit 0**(16/16 + 1/1,4 秒)。
+- **待验**:部署之后还没有任何人出分。第一份新结果出来之后用这一句(只读)看两列有没有值:
+  `select computed_at, config_version, left(config_sha256, 8) from assessment_results where computed_at > '2026-10-14 04:38:05+00' order by computed_at`
+  —— 期望 `3.2.0` / `745b7318`。两列为空 = 入口那一行没接上,要回头查。
+
 ### A. 需要一次真实投影(现场当场就能改)
 
 **会场投影距离下的字号够不够。** 判据不在代码里 —— 是**后排看不看得清**。
@@ -9454,6 +9471,11 @@ where id = '502cc4d3-…' and cohort_id = 'a0d14d79-…'                    -- �
 ---
 
 ## 变更日志
+
+- 2026-10-14 — **⑩ 上线:出分时记下 config 的版本与内容指纹**([⑩](#⑩-结构性问题结果没有记录所用的-config-版本--2026-10-14-选定-b--a实施见下2026-10-08-登记))。
+  修法先写进 PROGRESS(b 指纹为主 + a 版本标签,不回填)再实施;迁移加两列 → 只部署 `assessment-score`;登记表 + Node / Deno 两边的测试让「改了 config 不升版本」在 `npm test` 红;
+  `npm run config:fingerprint -- --history` 由指纹找回提交。报告快照前后逐字相同;smoke 第一次因本机睡眠 exit 1、重跑 exit 0(经过见那一节)。
+  **待验**:部署后的第一份新结果两列有值
 
 - 2026-10-14 — **重填:Viho 定了三件事**,写进 [`docs/retake-design.md`](docs/retake-design.md) 的「Viho 的决定」一节,并改了方案里受影响的几处(第 2、4、5、6 节):
   ①两次完成之间至少隔 24 小时、每人最多 6 份(接受「24 小时内课上再做一次」会被挡);②「生成另一种语言」只对最新那一份开放;
