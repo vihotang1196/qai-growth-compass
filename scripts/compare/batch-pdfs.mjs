@@ -1,5 +1,5 @@
 // Render report PDFs (zh + en) for every test person with a result in snap.json, from one dist. Same steps as render-artifacts.mjs.
-// Usage: node batch-pdfs.mjs --dist <dir> --snap <snap.json> --out <dir>
+// Usage: node batch-pdfs.mjs --dist <dir> --snap <snap.json> [--priority <key -> priority_dimension json>] --out <dir>
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -12,11 +12,13 @@ const DIST = arg('--dist');
 const OUT = arg('--out');
 mkdirSync(OUT, { recursive: true });
 const snap = JSON.parse(readFileSync(arg('--snap'), 'utf8'));
+// the report reads one survey field (priority_dimension -> the "gap" sentence in "your next step"); the snapshot only keeps a fingerprint of the survey
+const priority = process.argv.includes('--priority') ? JSON.parse(readFileSync(arg('--priority'), 'utf8')) : {};
 const people = Object.entries(snap.reports)
   .filter(([, v]) => v.test)
   .map(([k, v]) => [k, JSON.parse(v.report)])
   .filter(([, r]) => r.result)
-  .map(([k, r]) => [k, { ...r, survey: {}, files: ['zh', 'en'].map((l) => ({ lang: l, availability: 'absent', url: null, cardUrl: null, cardTallUrl: null })), pdfStatus: 'pending', pdfUrl: null, cardUrl: null, cardTallUrl: null }]);
+  .map(([k, r]) => [k, { ...r, survey: priority[k] ? { priority_dimension: priority[k] } : {}, files: ['zh', 'en'].map((l) => ({ lang: l, availability: 'absent', url: null, cardUrl: null, cardTallUrl: null })), pdfStatus: 'pending', pdfUrl: null, cardUrl: null, cardTallUrl: null }]);
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
 const server = createServer((req, res) => {

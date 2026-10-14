@@ -6,7 +6,11 @@
 1. **两份构建**:改之前、改之后各 `VITE_SUPABASE_URL=http://127.0.0.1:9 VITE_SUPABASE_PUBLISHABLE_KEY=offline-preview-not-a-real-key npx vite build --outDir <dir>`
 2. **报告数据**:`npm run snapshot:reports -- --out=<snap.json> --reader=latest`(只读;不含姓名 / 电话 / 邮箱 / token,问卷只留指纹),
    取测试批次里的人(`test: true`)。`batch-pdfs.mjs` 直接读 snap.json;`render-artifacts.mjs` / `shoot-pages.mjs` 要一份单人的 payload
-   (把 `survey` 置 `{}`、`files` 全部 absent、各个 URL 置 null —— PDF 渲染那一刻线上也是这个状态)
+   (`files` 全部 absent、各个 URL 置 null —— PDF 渲染那一刻线上也是这个状态)。
+   **问卷要补回一个字段**:报告读 `survey.priority_dimension`(「你的下一步」里那句「你最想先动手的是…这个落差本身值得聊一次」),
+   而快照里问卷只有指纹。只读取测试批次的这一个字段:
+   `select left(md5(e.id::text),12) as key, sv.responses->>'priority_dimension' …`(join 测试批次 + 「报告看的那份」答题记录 + assessment_survey),
+   存成 `{ key: priority_dimension }` 传给 `--priority`。2026-10-14 第一遍比对漏了它(两边一起漏,前后差别仍成立),补上之后结论不变
 3. **渲染**:`render-artifacts.mjs`(中英文 PDF + 两张分享卡,步骤照抄 `api/render-pdf.ts`)、`batch-pdfs.mjs`(所有测试人的中英文 PDF)、
    `shoot-pages.mjs`(落地 / 答题 / 问卷 / 报告 / 后台名单 / 现场模式,手机 390 与电脑 1366,首屏 + 整页)
 4. **比对**:`swiftc -O pdftool.swift -o pdftool`;`pdftool pages` 把 PDF 拆成每页 PNG + 每页文字与最低一行的位置,`pdftool diff` 逐像素比两张图;
