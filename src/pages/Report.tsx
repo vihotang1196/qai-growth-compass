@@ -594,7 +594,8 @@ function LevelTag({ kind, value, label }: { kind: 'difficulty' | 'impact'; value
   };
   const impact: Record<string, string> = {
     low: 'bg-paper text-ink',
-    medium: 'bg-accent/40 text-ink',
+    // 浅黄 = 黄色 40%。不能写 bg-accent/40:accent 是 CSS 变量,Tailwind 加不了透明度,那个类不生成(原来「中」就是白底,和「低」一样)
+    medium: 'bg-[color-mix(in_srgb,var(--qai-accent)_40%,transparent)] text-ink',
     high: 'bg-accent text-accent-fg',
   };
   const tone = (kind === 'difficulty' ? difficulty : impact)[value] ?? 'bg-paper text-ink';

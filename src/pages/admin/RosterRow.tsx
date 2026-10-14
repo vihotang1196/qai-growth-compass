@@ -332,7 +332,7 @@ export default function RosterRow({
       */}
       {errorOpen && (anyError || warnings.length > 0) && (
         <Tr>
-          <Td colSpan={ROSTER_COLUMNS.length} className="whitespace-normal bg-line-soft/20">
+          <Td colSpan={ROSTER_COLUMNS.length} className="whitespace-normal bg-[color-mix(in_srgb,var(--qai-line-soft)_20%,transparent)]">
             {warnings.length > 0 && (
               <div id={`row-detail-${r.id}`} className="mb-2 max-w-3xl">
                 <div className="font-head text-xs font-bold uppercase tracking-wider">
