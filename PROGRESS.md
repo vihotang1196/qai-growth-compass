@@ -9805,11 +9805,14 @@ smoke 07:18:47Z exit 0(17/17)。只动了前端,没有部署函数、没有迁�
 - 改之后:**4/4 绿**。
 - 它不进 `npm run verify`(要起预览、要 Chrome);用法写在脚本头部。
 
+**上线**:verify exit 0(vitest 536/536、deno 279/279、十八道门)→ 快进合并 `9e8e266` → 推送 08:01:59Z → Vercel success 08:02:52Z →
+线上 bundle 从 `index-DEWAzqOo.js`(顶栏的新 class 0 次)换成 `index-Bns3qqAP.js`(1 次)→ smoke 08:03:00Z exit 0(17/17)。只动了前端。
+
 
 ## 变更日志
 
 - 2026-10-14 — **后台顶栏在手机上撑宽页面:已修**([那一节](#后台顶栏在手机上撑宽页面2026-10-14已修))。顶栏与标签 `flex-wrap` + 按钮 `whitespace-nowrap`;
-  新的本地真浏览器检查 `scripts/e2e/admin-mobile-layout.mjs`(中 / 英 × 390 / 360)对旧代码 4/4 红、修后 4/4 绿
+  新的本地真浏览器检查 `scripts/e2e/admin-mobile-layout.mjs`(中 / 英 × 390 / 360)对旧代码 4/4 红、修后 4/4 绿;`9e8e266` 上线(`index-Bns3qqAP.js`),smoke exit 0
 
 - 2026-10-14 — **网站自己的对话框**([名单搜索与网站自己的对话框](#名单搜索与网站自己的对话框2026-10-14viho-的两个优化))。原生弹窗只有名单页两处(换新链接、停用的 `window.confirm`),学员页面没有;
   第十八道门 `check:native-dialogs` 先对旧代码红在这两行,再换成 `useConfirm()`(Esc 取消、回车确认、按住的回车不算、焦点归还、手机上整行按钮);
