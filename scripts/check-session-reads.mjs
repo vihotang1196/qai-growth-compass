@@ -21,7 +21,7 @@
  * 【盲区 —— 写在这里,不装作覆盖了】
  *   - 「取了 attempt_no」不等于「真的去重了」:R2 / R3 只能逼人想到这件事,挑没挑对由 attempts.ts 的用例看着
  *   - 语句按「到下一个 `;`」切:select 字符串里写了分号会切错(现在没有)
- *   - 不扫 `scripts/`:`seed-test-data.ts` 按 `entitlement_id` upsert,第 2 步去掉那个 unique 之前要改(PROGRESS 记着)
+ *   - 不扫 `scripts/`:`seed-test-data.ts` 原来按 `entitlement_id` upsert —— 2026-10-14 第 2 步改成按 `(entitlement_id, attempt_no)` 只写第 1 份
  *   - 从子表单行反查父行(`.eq('session_id', …)` 再嵌 session)不在判据里 —— 那本来就只有一行
  *   - 三元表达式两支写在同一条语句里时(报告端点原来的 render / cookie 两支),两支会一起被报 —— 宁可多报
  *

@@ -21,7 +21,9 @@ import { postAuthTarget, targetWithLang, type SessionStatus } from '../_shared/p
 import { sessionCookieHeader, signSession } from '../_shared/session.ts';
 import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 import { loginLang } from '../_shared/loginLang.ts';
-import { currentSession } from '../_shared/currentSession.ts';
+import { attemptsOf, currentSession } from '../_shared/currentSession.ts';
+import { pickCurrent } from '../_shared/attempts.ts';
+import { loginStatus } from '../_shared/retake.ts';
 
 const FN = 'assessment-auth';
 
@@ -91,13 +93,19 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── session:有则取,无则建 ────────────────────────────────
-    // 「当前答题记录」只有一个定义(_shared/attempts.ts);今天每人最多一份,取到的就是那一份
-    const { data: existing, error: sesError } = await currentSession(supa, ent.id);
+    // 「当前答题记录」只有一个定义(_shared/attempts.ts)。**只在第一次时建**:做过的人不新建(重填是显式的 start_retake)
+    const { data: rows, error: sesError } = await attemptsOf(supa, ent.id);
     if (sesError) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: ent.id }, sesError);
+    const existing = pickCurrent(rows ?? []);
 
     let sessionStatus: SessionStatus | null = null;
     if (existing) {
-      sessionStatus = existing.status as SessionStatus;
+      /**
+       * 【去向看「报告看的那份」,不看当前那份】(重填第 2 步,docs/retake-design.md 第 2 节)
+       * 做过测评的人(至少一份完成)直接去报告 —— 即使有一份重填没做完(报告页顶部提示「继续 / 放弃」)。
+       * 一份都没完成时两者是同一份,与原来一样;今天每人最多一份,所以对现有数据零变化。
+       */
+      sessionStatus = loginStatus(rows ?? []);
     } else {
       const { error: insError } = await supa
         .from('assessment_sessions')

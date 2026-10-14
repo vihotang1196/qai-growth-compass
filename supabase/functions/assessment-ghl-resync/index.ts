@@ -16,9 +16,10 @@
 import { serviceClient } from '../_shared/supa.ts';
 import { secretMatches } from '../_shared/secret.ts';
 import { buildWritebackPayload, syncToGhl, type WritebackResult } from '../_shared/ghlWriteback.ts';
-import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { previousAppliedTags, syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { supersededSessionIds } from '../_shared/retake.ts';
 import { sweepMagicLinks, type LinkSweepSummary } from '../_shared/ghlMagicLink.ts';
-import { dbFail, describeError } from '../_shared/dbError.ts';
+import { dbFail, dbLogLine, describeError } from '../_shared/dbError.ts';
 
 const FN = 'assessment-ghl-resync';
 
@@ -36,8 +37,7 @@ interface Candidate {
   weakest: string[];
   ghl_last_error: string | null;
   ghl_tags_last_error: string | null;
-  ghl_tags_applied: unknown;
-  session: { entitlement: { ghl_contact_id: string } | null } | null;
+  session: { entitlement_id: string; attempt_no: number | null; entitlement: { ghl_contact_id: string } | null } | null;
 }
 
 /** 一行要补的是哪一半(可以两半都要) */
@@ -48,8 +48,8 @@ interface Todo {
 }
 
 const SELECT_COLS =
-  `session_id, total, tier, weakest, ghl_last_error, ghl_tags_last_error, ghl_tags_applied,
-   session:assessment_sessions(entitlement:assessment_entitlements(ghl_contact_id))`;
+  `session_id, total, tier, weakest, ghl_last_error, ghl_tags_last_error,
+   session:assessment_sessions(entitlement_id, attempt_no, entitlement:assessment_entitlements(ghl_contact_id))`;
 
 /**
  * CONFIG / AUTH 的行不自动重试 —— 判据是**它自己那一列**的前缀。
@@ -134,8 +134,17 @@ Deno.serve(async (req: Request) => {
      */
     const fieldRows = (fieldRes.data ?? []) as unknown as Candidate[];
     const tagRows = (tagRes.data ?? []) as unknown as Candidate[];
-    const dueFields = fieldRows.filter((r) => !permanent(r.ghl_last_error));
-    const dueTags = tagRows.filter((r) => !permanent(r.ghl_tags_last_error));
+
+    /**
+     * 【重试只认每人最新完成的那一份】(重填第 2 步,docs/retake-design.md 第 3 节)
+     * GHL 的字段与标签在联系人上只有一套。第 1 份留着一次失败的重试、而第 2 份已经完成 —— 那次重试晚到,
+     * 就会把新数字盖回旧数字。所以:同一个人有编号更大的完成份(视图 `assessment_latest_results`)→ 这一份的重试作废,
+     * 记成 CONFIG(以后不再挑它),原因写清楚。今天每人只有一份,一条都不会作废。
+     */
+    const supersededFields = await supersede(supa, fieldRows.filter((r) => !permanent(r.ghl_last_error)), 'fields');
+    const supersededTags = await supersede(supa, tagRows.filter((r) => !permanent(r.ghl_tags_last_error)), 'tags');
+    const dueFields = fieldRows.filter((r) => !permanent(r.ghl_last_error) && !supersededFields.has(r.session_id));
+    const dueTags = tagRows.filter((r) => !permanent(r.ghl_tags_last_error) && !supersededTags.has(r.session_id));
     const skippedPermanent =
       fieldRows.length - dueFields.length + (tagRows.length - dueTags.length);
     if (skippedPermanent > 0) console.log(`resync: skipped ${skippedPermanent} CONFIG/AUTH rows (no auto-retry)`);
@@ -168,8 +177,8 @@ Deno.serve(async (req: Request) => {
      * 这一格是这次排查里唯一能一次分辨的东西,所以它常驻,不是临时探针。
      */
     const candidates = {
-      fields: { raw: fieldRows.length, due: dueFields.length },
-      tags: { raw: tagRows.length, due: dueTags.length },
+      fields: { raw: fieldRows.length, due: dueFields.length, superseded: supersededFields.size },
+      tags: { raw: tagRows.length, due: dueTags.length, superseded: supersededTags.size },
       merged: all.length,
     };
 
@@ -223,9 +232,21 @@ Deno.serve(async (req: Request) => {
        * 移除只会碰到那批里的 `assessment_` 标签,客户自己的标签一个都不动。
        */
       if (todo.tags) {
+        // 上次打了哪些:从人身上读(重填第 2 步;没有时回落到编号最大、记过标签的那一份 —— 今天就是这一份自己)
+        const entitlementId = row.session!.entitlement_id;
+        let applied: unknown;
+        try {
+          applied = await previousAppliedTags(supa, entitlementId);
+        } catch (err) {
+          // 读不到「上次打了哪些」就不算差集 —— 少移除一次比多移除安全;这一行下次再试,不拖整批
+          console.error(`resync: previous tags unavailable for session ${row.session_id}: ${describeError(err).log}`);
+          entry.tags = { ok: false, added: [], removed: [], detail: 'previous tags unavailable — retried next sweep' };
+          results.push(entry);
+          continue;
+        }
         const outcome = await syncTagsToGhl(
           supa,
-          row.session_id,
+          { sessionId: row.session_id, entitlementId },
           contactId,
           {
             tier: row.tier,
@@ -233,7 +254,7 @@ Deno.serve(async (req: Request) => {
             total: row.total,
             responses: survey,
           },
-          row.ghl_tags_applied,
+          applied,
           'resync',
         );
         entry.tags = {
@@ -284,3 +305,33 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+/**
+ * 候选里哪些已经被同一个人编号更大的完成份取代 —— 记成 CONFIG(sweep 以后按前缀跳过),返回它们的 session id。
+ * 判定是纯函数 `supersededSessionIds`(_shared/retake.ts,有用例);这里只做两次 IO:读视图、写原因。
+ */
+async function supersede(
+  supa: ReturnType<typeof serviceClient>,
+  rows: Candidate[],
+  half: 'fields' | 'tags',
+): Promise<Set<string>> {
+  const withAttempt = rows
+    .filter((r) => r.session?.entitlement_id)
+    .map((r) => ({ session_id: r.session_id, entitlement_id: r.session!.entitlement_id, attempt_no: r.session!.attempt_no ?? 1 }));
+  if (withAttempt.length === 0) return new Set();
+  const { data: latest, error } = await supa
+    .from('assessment_latest_results')
+    .select('entitlement_id, attempt_no')
+    .in('entitlement_id', [...new Set(withAttempt.map((r) => r.entitlement_id))]);
+  if (error) dbFail({ fn: FN, op: `assessment_latest_results.select (supersede ${half})` }, error);
+  const gone = supersededSessionIds(withAttempt, (latest ?? []) as { entitlement_id: string; attempt_no: number }[]);
+  if (gone.size === 0) return gone;
+
+  const patch = half === 'fields'
+    ? { ghl_last_error: 'CONFIG: superseded — a newer completed attempt of this person is the one that counts', ghl_next_retry_at: null }
+    : { ghl_tags_last_error: 'CONFIG: superseded — a newer completed attempt of this person is the one that counts', ghl_tags_next_retry_at: null };
+  const { error: upErr } = await supa.from('assessment_results').update(patch).in('session_id', [...gone]);
+  if (upErr) console.error(dbLogLine({ fn: FN, op: `assessment_results.update (supersede ${half})` }, upErr));
+  console.log(`resync: ${gone.size} ${half} retry(ies) superseded by a newer attempt — skipped`);
+  return gone;
+}

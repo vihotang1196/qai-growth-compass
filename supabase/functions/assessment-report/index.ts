@@ -23,7 +23,10 @@ import {
   selectBaseline,
 } from '../../../src/lib/reportStats.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
-import { reportSession } from '../_shared/currentSession.ts';
+import { attemptsOf } from '../_shared/currentSession.ts';
+import { pickReportAttempt } from '../_shared/attempts.ts';
+import { RETAKE_MAX_ATTEMPTS, RETAKE_MIN_HOURS, retakeEligibility, type AttemptRow } from '../_shared/retake.ts';
+import { isTestCohort } from '../_shared/testCohort.ts';
 
 const FN = 'assessment-report';
 
@@ -120,31 +123,53 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'unauthorized', reason }, 401);
   }
 
+  /**
+   * 【`?attempt=n`:看历次中的某一份】(重填第 2 步)只在 cookie 那条上有意义:
+   * 那一份必须属于 cookie 里这个人 —— 由「只在这个人的答题记录里找」保证,不接受任何 session id。
+   * 不是正整数 → 400;这个人没有这一份、或那一份还没完成 → 404。不带 → 与原来一样(报告看的那份)。
+   */
+  const attemptParam = new URL(req.url).searchParams.get('attempt');
+  const wantAttempt = attemptParam === null ? null : /^[1-9][0-9]{0,2}$/.test(attemptParam) ? Number(attemptParam) : NaN;
+  if (Number.isNaN(wantAttempt)) return json({ error: 'invalid_attempt' }, 400);
+
   try {
-    // 渲染令牌直接指定 session;cookie 那条要先由 entitlement 找 session
-    const { data: session, error: sErr } = renderSessionId
-      ? await supa
-          .from('assessment_sessions')
-          .select('id, profile, status, entitlement_id, entitlement:assessment_entitlements(lang)')
-          .eq('id', renderSessionId)
-          .maybeSingle()
-      // cookie 那条:报告看的那份 = 最新完成的,一份都没完成时是当前那份(_shared/attempts.ts);今天每人最多一份
-      : await reportSession<{ profile: unknown; entitlement_id: string; entitlement: { lang?: string | null } | null }>(
-          supa,
-          verified!.entitlementId,
-          'profile, entitlement_id, entitlement:assessment_entitlements(lang)',
-        );
-    if (sErr) {
-      dbFail(
-        { fn: FN, op: 'assessment_sessions.select', session: renderSessionId, entitlement: verified?.entitlementId },
-        sErr,
+    type CookieRow = AttemptRow & { profile: unknown; entitlement_id: string; entitlement: { lang?: string | null } | null };
+    let attemptRows: CookieRow[] = [];
+    let session: Omit<CookieRow, 'completed_at' | 'attempt_no'> & { attempt_no?: number | null } | null;
+    if (renderSessionId) {
+      // 渲染令牌直接指定 session
+      const { data, error: sErr } = await supa
+        .from('assessment_sessions')
+        .select('id, profile, status, attempt_no, entitlement_id, entitlement:assessment_entitlements(lang)')
+        .eq('id', renderSessionId)
+        .maybeSingle();
+      if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', session: renderSessionId }, sErr);
+      session = data as unknown as typeof session;
+    } else {
+      /**
+       * cookie 那条:这个人的全部答题记录,一次取齐 ——「报告看的那份」(最新完成的,一份都没完成时是当前那份,
+       * _shared/attempts.ts)、`?attempt=` 那一份、历次结果、能不能重填,都从这一组里来。
+       * 不带 `?attempt=` 时挑出来的与原来的 `reportSession` 是同一份(同一个 `pickReportAttempt`)。
+       */
+      const { data, error: sErr } = await attemptsOf<Omit<CookieRow, keyof AttemptRow>>(
+        supa,
+        verified!.entitlementId,
+        'completed_at, profile, entitlement_id, entitlement:assessment_entitlements(lang)',
       );
+      if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: verified!.entitlementId }, sErr);
+      attemptRows = (data ?? []) as unknown as CookieRow[];
+      if (wantAttempt !== null) {
+        session = attemptRows.find((r) => r.attempt_no === wantAttempt && r.status === 'completed') ?? null;
+        if (!session) return json({ error: 'no_such_attempt' }, 404);
+      } else {
+        session = pickReportAttempt(attemptRows);
+      }
     }
     if (!session) return json({ error: 'no_session' }, 409);
 
     const { data: ent, error: entErr } = await supa
       .from('assessment_entitlements')
-      .select('id, cohort_id, access_revoked_at')
+      .select('id, cohort_id, access_revoked_at, cohort:assessment_cohorts(is_test)')
       .eq('id', session.entitlement_id)
       .maybeSingle();
     if (entErr) dbFail({ fn: FN, op: 'assessment_entitlements.select', entitlement: session.entitlement_id, session: session.id }, entErr);
@@ -288,7 +313,11 @@ Deno.serve(async (req: Request) => {
 
     const profile = (session.profile ?? {}) as Record<string, unknown>;
 
+    // ── 历次结果与能不能重填(只在 cookie 那条;渲染器不需要)——第 3 步的页面用,今天的页面不读 ──
+    const history = renderSessionId ? null : await attemptHistory(supa, attemptRows, session.id, ent);
+
     return json({
+      ...(history ?? {}),
       /**
        * 【键名不变,值换成这个人的 `entitlement.lang`】
        * 原来读 `assessment_sessions.locale`(跟着链接走),那与「语言跟着人走」会分叉。
@@ -354,3 +383,51 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'internal_error' }, 500);
   }
 });
+
+/**
+ * 报告页第 3 步要的三样(docs/retake-design.md 第 2 节),都只读、都只关于 cookie 里这个人:
+ *   - `attempt`:这次看的是第几份、什么时候完成的、是不是最新的那份
+ *   - `attempts`:完成了的每一份(编号从大到小):完成时间、总分、档位 —— 历次结果
+ *   - `retake`:现在能不能重填(与 start_retake 同一个 `retakeEligibility`)、不能的原因与下一次的时间、有没有一份没做完
+ */
+async function attemptHistory(
+  supa: ReturnType<typeof serviceClient>,
+  rows: AttemptRow[],
+  viewingId: string,
+  ent: { access_revoked_at: string | null; cohort?: unknown },
+) {
+  const completed = rows.filter((r) => r.status === 'completed');
+  const latest = pickReportAttempt(completed);
+  const scores = new Map<string, { total: number; tier: string }>();
+  if (completed.length) {
+    const { data, error } = await supa
+      .from('assessment_results')
+      .select('session_id, total, tier')
+      .in('session_id', completed.map((r) => r.id));
+    if (error) dbFail({ fn: FN, op: 'assessment_results.select (history)' }, error);
+    for (const r of (data ?? []) as { session_id: string; total: number; tier: string }[]) scores.set(r.session_id, { total: r.total, tier: r.tier });
+  }
+  const viewing = rows.find((r) => r.id === viewingId);
+  const open = rows.find((r) => r.status !== 'completed' && r.attempt_no > 1) ?? null;
+  const elig = retakeEligibility(rows, {
+    revoked: ent.access_revoked_at !== null,
+    isTest: isTestCohort((ent.cohort ?? null) as { is_test?: boolean | null } | null),
+    nowMs: Date.now(),
+  });
+  return {
+    attempt: viewing
+      ? { no: viewing.attempt_no, completedAt: viewing.completed_at, isLatest: viewing.id === latest?.id }
+      : null,
+    attempts: completed
+      .filter((r) => scores.has(r.id))
+      .map((r) => ({ no: r.attempt_no, completedAt: r.completed_at, total: scores.get(r.id)!.total, tier: scores.get(r.id)!.tier })),
+    retake: {
+      canStart: elig.ok,
+      reason: elig.ok ? null : elig.reason,
+      nextAllowedAt: elig.ok ? null : elig.nextAllowedAt ?? null,
+      openAttempt: open ? open.attempt_no : null,
+      maxAttempts: RETAKE_MAX_ATTEMPTS,
+      minHoursBetween: RETAKE_MIN_HOURS,
+    },
+  };
+}

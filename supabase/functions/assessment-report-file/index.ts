@@ -1,7 +1,11 @@
 /**
  * assessment-report-file —— **学员自己**触发生成某种语言的报告文件。
  *
- * POST { lang: 'zh' | 'en' }   鉴权:session cookie
+ * POST { lang: 'zh' | 'en', attempt?: n }   鉴权:session cookie
+ *
+ * 【`attempt`(重填第 2 步)】不带 = 报告看的那份(与原来一样)。带了 = 这个人的第 n 份(只在他自己的答题记录里找)。
+ * **「生成另一种语言」只对最新完成的那一份**(Viho 2026-10-14 的第 2 个决定):历史那几份已经有的照常回 ready,
+ * 没有的回 409 `history_attempt`,不触发渲染、什么都不写 —— `fileRequestDecision`(_shared/retake.ts)。
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * 【为什么不复用 Admin 那个 `render_pdf` action】
@@ -38,7 +42,9 @@ import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { parseLang } from '../_shared/lang.ts';
 import { availabilityOf } from '../_shared/reportFiles.ts';
-import { reportSession } from '../_shared/currentSession.ts';
+import { attemptsOf } from '../_shared/currentSession.ts';
+import { pickReportAttempt } from '../_shared/attempts.ts';
+import { fileRequestDecision } from '../_shared/retake.ts';
 
 const FN = 'assessment-report-file';
 
@@ -91,14 +97,26 @@ Deno.serve(async (req: Request) => {
   }
   const lang = langParse.lang;
 
+  // attempt:不带 = 报告看的那份;带了必须是正整数(我们自己的页面发的,不合法就是我们写错了 —— 与 lang 同一个取向)
+  const rawAttempt = body.attempt;
+  if (rawAttempt !== undefined && !(Number.isInteger(rawAttempt) && (rawAttempt as number) >= 1)) {
+    return json({ error: 'invalid_attempt' }, 400);
+  }
+  const wantAttempt = rawAttempt === undefined ? null : (rawAttempt as number);
+
   const supa = serviceClient();
 
   try {
-    // session 从 cookie 来 —— 而不是从参数来(约定 2)
-    // 报告看的那份(_shared/attempts.ts 的定义):文件跟着报告走;今天每人最多一份
-    const { data: session, error: sErr } = await reportSession(supa, verified.entitlementId);
+    // session 从 cookie 来 —— 而不是从参数来(约定 2);`attempt` 只在这个人自己的答题记录里挑
+    // 报告看的那份(_shared/attempts.ts 的定义):文件跟着报告走
+    const { data: rows, error: sErr } = await attemptsOf(supa, verified.entitlementId);
     if (sErr) dbFail({ fn: FN, op: 'assessment_sessions.select', entitlement: verified.entitlementId }, sErr);
-    if (!session) return json({ error: 'no_session' }, 404);
+    const latest = pickReportAttempt(rows ?? []);
+    const session = wantAttempt === null
+      ? latest
+      : (rows ?? []).find((r) => r.attempt_no === wantAttempt && r.status === 'completed') ?? null;
+    if (!session) return json({ error: wantAttempt === null ? 'no_session' : 'no_such_attempt' }, 404);
+    const isLatest = session.id === latest?.id;
 
     const { data: row, error: rErr } = await supa
       .from('assessment_report_files')
@@ -114,6 +132,10 @@ Deno.serve(async (req: Request) => {
      * 用的是同一套(五个库状态压成四个 + absent)。
      */
     const availability = availabilityOf(row ?? undefined);
+    if (fileRequestDecision(isLatest, availability) === 'refuse_history') {
+      // 历史那一份没有这种语言的文件:不生成(Viho 的第 2 个决定)—— 什么都不写
+      return json({ status: 'refused', error: 'history_attempt', lang, detail: 'only the latest attempt can generate files' }, 409);
+    }
     if (availability === 'ready') {
       // 已经有了就不重渲 —— 这正是按语言分行要换来的那件事
       return json({ status: 'ready', lang, alreadyThere: true });

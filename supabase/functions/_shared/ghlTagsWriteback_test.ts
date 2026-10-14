@@ -1,6 +1,6 @@
-import { assertEquals, assertStringIncludes } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { syncTagsToGhl } from './ghlTagsWriteback.ts';
+import { previousAppliedTags, syncTagsToGhl } from './ghlTagsWriteback.ts';
 import type { TagInput } from './ghlTags.ts';
 
 /**
@@ -16,10 +16,13 @@ import type { TagInput } from './ghlTags.ts';
 
 interface Calls {
   requests: { method: string; url: string; body: unknown }[];
+  /** assessment_results 上的写 */
   updates: Record<string, unknown>[];
+  /** assessment_entitlements 上的写(重填第 2 步:「上次打了哪些标签」挪到人身上) */
+  entUpdates: Record<string, unknown>[];
 }
 
-const emptyCalls = (): Calls => ({ requests: [], updates: [] });
+const emptyCalls = (): Calls => ({ requests: [], updates: [], entUpdates: [] });
 
 /**
  * 假 client:cohort 查询(收口用)+ results 的读写。
@@ -47,7 +50,7 @@ function fakeSupa(calls: Calls, opts: { isTest?: boolean } = {}) {
         }),
       }),
       update: (patch: Record<string, unknown>) => {
-        calls.updates.push(patch);
+        (table === 'assessment_entitlements' ? calls.entUpdates : calls.updates).push(patch);
         return { eq: () => Promise.resolve({ error: null }) };
       },
     }),
@@ -90,7 +93,7 @@ Deno.test('首次:该有的标签一次 POST 打上去,不发 DELETE', async () 
   const calls = emptyCalls();
   const restore = withFetch(calls);
   try {
-    const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, null, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
     assertEquals(out.ok, true);
     assertEquals(out.added.sort(), [...WANT].sort());
     assertEquals(out.removed, []);
@@ -115,7 +118,7 @@ Deno.test('档位变了:旧档位标签被 DELETE,新的被 POST', async () => {
   const restore = withFetch(calls);
   try {
     const applied = ['assessment_completed', 'assessment_tier_spot', 'assessment_weak_capture'];
-    const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, applied, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, applied, 'test', 0);
     assertEquals(out.ok, true);
     assertEquals(out.added, ['assessment_tier_semi_auto']);
     assertEquals(out.removed, ['assessment_tier_spot']);
@@ -136,7 +139,7 @@ Deno.test('【绝不移除不是我们打的标签】客户自己的标签一个
   const restore = withFetch(calls);
   try {
     const applied = [...WANT, 'vip_customer', 'webinar_2026', 'assessment_hot_lead'];
-    const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, applied, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, applied, 'test', 0);
     // hot_lead 是我们的、这次不该有 → 移除;vip_customer / webinar_2026 不是我们的 → 不碰
     assertEquals(out.removed, ['assessment_hot_lead']);
     const deletes = calls.requests.filter((r) => r.method === 'DELETE');
@@ -152,7 +155,7 @@ Deno.test('什么都不用变:一个请求都不发,但把 synced 标上', async
   const calls = emptyCalls();
   const restore = withFetch(calls);
   try {
-    const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, WANT, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, WANT, 'test', 0);
     assertEquals(out.ok, true);
     assertEquals(out.attempted, false);
     assertEquals(calls.requests.length, 0);
@@ -173,7 +176,7 @@ Deno.test('测试批次:一个请求都不发,记 CONFIG 而不是标 synced', a
   const calls = emptyCalls();
   const restore = withFetch(calls);
   try {
-    const out = await syncTagsToGhl(fakeSupa(calls, { isTest: true }), 's1', 'c1', INPUT, null, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls, { isTest: true }), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
     assertEquals(out.ok, false);
     assertEquals(calls.requests.length, 0);
     const patch = calls.updates.at(-1)!;
@@ -205,7 +208,7 @@ Deno.test('失败一定把 synced 置回 false —— 否则重算失败后 swee
     const calls = emptyCalls();
     const restore = withFetch(calls, status, 'nope');
     try {
-      await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, null, 'test', 0);
+      await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
       assertEquals(calls.updates.at(-1)!.ghl_tags_synced, false, String(status));
     } finally {
       restore();
@@ -223,7 +226,7 @@ Deno.test('429 归 TRANSIENT 并排退避;403 归 AUTH 不排', async () => {
     const calls = emptyCalls();
     const restore = withFetch(calls, status, 'nope');
     try {
-      const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, null, 'test', 0);
+      const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
       assertEquals(out.ok, false, String(status));
       const patch = calls.updates.at(-1)!;
       assertStringIncludes(String(patch.ghl_tags_last_error), `${klass}:`);
@@ -244,7 +247,7 @@ Deno.test('派生有 problem 时不外发,记 CONFIG', async () => {
   try {
     const out = await syncTagsToGhl(
       fakeSupa(calls),
-      's1',
+      { sessionId: 's1', entitlementId: 'e1' },
       'c1',
       { ...INPUT, tier: 'Semi_Auto' },
       null,
@@ -267,7 +270,7 @@ Deno.test('失败时【不】写 ghl_tags_applied —— 它是下一次算差�
   const calls = emptyCalls();
   const restore = withFetch(calls, 500, 'boom');
   try {
-    await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, null, 'test', 0);
+    await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
     for (const patch of calls.updates) assertEquals('ghl_tags_applied' in patch, false);
   } finally {
     restore();
@@ -291,7 +294,7 @@ Deno.test('POST 成功但 DELETE 失败:已加的算加了,applied 不落库', a
   }) as typeof globalThis.fetch;
   try {
     const applied = ['assessment_completed', 'assessment_tier_spot', 'assessment_weak_capture'];
-    const out = await syncTagsToGhl(fakeSupa(calls), 's1', 'c1', INPUT, applied, 'test', 0);
+    const out = await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, applied, 'test', 0);
     assertEquals(out.ok, false);
     assertEquals(out.added, ['assessment_tier_semi_auto']); // POST 那半确实成了
     assertEquals(out.removed, []);
@@ -301,4 +304,87 @@ Deno.test('POST 成功但 DELETE 失败:已加的算加了,applied 不落库', a
     Deno.env.delete('GHL_PRIVATE_TOKEN');
     Deno.env.delete('GHL_LOCATION_ID');
   }
+});
+
+// ── 重填第 2 步:「上次打了哪些标签」记在人身上(docs/retake-design.md 第 3 节)──
+
+Deno.test('同步成功:标签的现状也写到 entitlement 上(人身上的标签只有一套,记录也该在人身上)', async () => {
+  const calls = emptyCalls();
+  const restore = withFetch(calls);
+  try {
+    await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
+    assertEquals(calls.entUpdates, [{ ghl_tags_applied: WANT }]);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test('什么都不用变:也把现状写到 entitlement 上(旧数据第一次走到这里时补上)', async () => {
+  const calls = emptyCalls();
+  const restore = withFetch(calls);
+  try {
+    await syncTagsToGhl(fakeSupa(calls), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, WANT, 'test', 0);
+    assertEquals(calls.entUpdates, [{ ghl_tags_applied: WANT }]);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test('失败 / 测试批次:entitlement 上的记录不动', async () => {
+  for (const [status, isTest] of [[500, false], [200, true]] as const) {
+    const calls = emptyCalls();
+    const restore = withFetch(calls, status, 'x');
+    try {
+      await syncTagsToGhl(fakeSupa(calls, { isTest }), { sessionId: 's1', entitlementId: 'e1' }, 'c1', INPUT, null, 'test', 0);
+      assertEquals(calls.entUpdates, [], `status ${status} isTest ${isTest}`);
+    } finally {
+      restore();
+    }
+  }
+});
+
+/** 任意链式调用都记下来、await 时交给 handler 的假 client(previousAppliedTags 的两条查询形状不同) */
+function chainSupa(handler: (table: string, ops: string[]) => unknown, log: { table: string; ops: string[] }[] = []) {
+  return {
+    from(table: string) {
+      const q = { table, ops: [] as string[] };
+      log.push(q);
+      const b: unknown = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === 'then') return (res: (v: unknown) => unknown) => res({ data: handler(table, q.ops), error: null });
+          return (...a: unknown[]) => {
+            q.ops.push(`${String(prop)}(${a.map((x) => JSON.stringify(x)).join(',')})`);
+            return b;
+          };
+        },
+      });
+      return b;
+    },
+  } as unknown as SupabaseClient;
+}
+
+Deno.test('上次打了哪些标签:人身上有记录就用它', async () => {
+  const supa = chainSupa((t) => (t === 'assessment_entitlements' ? { ghl_tags_applied: ['assessment_tier_spot'] } : []));
+  assertEquals(await previousAppliedTags(supa, 'e1'), ['assessment_tier_spot']);
+});
+
+Deno.test('人身上还没有记录(第 2 步之前的数据):取这个人编号最大、记过标签的那一份 —— 第 2 份完成时读到的是第 1 份打的那组', async () => {
+  const log: { table: string; ops: string[] }[] = [];
+  const supa = chainSupa((t) =>
+    t === 'assessment_entitlements'
+      ? { ghl_tags_applied: null }
+      : [
+        { ghl_tags_applied: ['assessment_tier_spot'], session: { attempt_no: 1 } },
+        { ghl_tags_applied: ['assessment_tier_manual'], session: { attempt_no: 3 } },
+        { ghl_tags_applied: ['assessment_tier_flywheel'], session: { attempt_no: 2 } },
+      ], log);
+  assertEquals(await previousAppliedTags(supa, 'e1'), ['assessment_tier_manual']);
+  const fallback = log.find((q) => q.table === 'assessment_results')!;
+  assert(fallback.ops.some((o) => o === 'eq("session.entitlement_id","e1")'), fallback.ops.join(' '));
+  assert(fallback.ops.some((o) => o.startsWith('not("ghl_tags_applied","is",null)')), fallback.ops.join(' '));
+});
+
+Deno.test('哪里都没有记录(第一次完成):null —— 与今天第一次 finalize 时一样', async () => {
+  const supa = chainSupa((t) => (t === 'assessment_entitlements' ? { ghl_tags_applied: null } : []));
+  assertEquals(await previousAppliedTags(supa, 'e1'), null);
 });

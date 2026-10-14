@@ -18,7 +18,7 @@ export interface SessionBase {
   attempt_no: number;
 }
 
-/** 有上限:设计里每人最多 6 份(第 2 步才会执行);取多一点,多出来说明限额没守住,但这里照样能挑 */
+/** 有上限:每人最多 6 份(`retake.ts` 的 RETAKE_MAX_ATTEMPTS,2026-10-14 第 2 步起执行);取多一点,多出来说明限额没守住,但这里照样能挑 */
 const MAX_ROWS = 50;
 
 async function sessionsOf<T>(
@@ -33,6 +33,18 @@ async function sessionsOf<T>(
     .order('attempt_no', { ascending: false })
     .limit(MAX_ROWS);
   return { data: (data ?? null) as unknown as (SessionBase & T)[] | null, error };
+}
+
+/**
+ * 这个人的全部答题记录,编号从大到小(重填第 2 步:频率限制、历次结果、`?attempt=` 都要看全部)。
+ * 挑哪一份仍然交给 `attempts.ts`;这里只是同一条查询不挑。
+ */
+export function attemptsOf<T = Record<never, never>>(
+  supa: SupabaseClient,
+  entitlementId: string,
+  extra = '',
+): Promise<{ data: (SessionBase & T)[] | null; error: PostgrestError | null }> {
+  return sessionsOf<T>(supa, entitlementId, extra);
 }
 
 /** 当前答题记录(答题、出分、登录去向用)。没有任何一份 → data: null */

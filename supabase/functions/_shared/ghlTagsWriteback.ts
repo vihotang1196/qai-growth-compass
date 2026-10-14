@@ -31,7 +31,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { classifyGhlError, type GhlErrorClass } from './ghlVerify.ts';
-import { dbLogLine } from './dbError.ts';
+import { dbFail, dbLogLine } from './dbError.ts';
 import { ghlContactRequest } from './ghlContact.ts';
 import { deriveTags, TAG_NAMESPACE, type TagInput } from './ghlTags.ts';
 
@@ -96,18 +96,20 @@ async function recordTagFailure(
 /**
  * 把这个人该有的标签同步到 GHL。
  *
- * @param appliedRaw `assessment_results.ghl_tags_applied` 的原值(上次打了什么)
+ * @param target     哪一份(写它的结果行)与哪个人(写人身上的标签现状)—— 两个 id 都必填,放进对象里免得两个字符串传反
+ * @param appliedRaw 上次打了什么:`previousAppliedTags` 的返回值
  * @param nowMs      只为可测;默认取当前时间
  */
 export async function syncTagsToGhl(
   supa: SupabaseClient,
-  sessionId: string,
+  target: { sessionId: string; entitlementId: string },
   ghlContactId: string,
   input: TagInput,
   appliedRaw: unknown,
   logTag: string,
   nowMs: number = Date.now(),
 ): Promise<TagSyncOutcome> {
+  const { sessionId } = target;
   const { tags, problems } = deriveTags(input);
 
   /**
@@ -136,6 +138,7 @@ export async function syncTagsToGhl(
       .update({ ghl_tags_synced: true, ghl_tags_last_error: null, ghl_tags_next_retry_at: null })
       .eq('session_id', sessionId);
     if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.update (tags already in sync)', session: sessionId }, error));
+    await recordAppliedOnEntitlement(supa, target.entitlementId, tags, logTag);
     return { attempted: false, ok: true, added: [], removed: [], detail: 'already in sync' };
   }
 
@@ -216,6 +219,50 @@ export async function syncTagsToGhl(
     })
     .eq('session_id', sessionId);
   if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_results.update (record applied tags)', session: sessionId }, error));
+  await recordAppliedOnEntitlement(supa, target.entitlementId, tags, logTag);
 
   return { attempted: true, ok: true, added, removed };
+}
+
+
+/**
+ * 【标签的现状也记在人身上】(重填第 2 步,docs/retake-design.md 第 3 节)
+ * GHL 上一个联系人只有一套标签,而「上次打了哪些」原来只记在每份结果上 —— 第 2 份完成时读的是它自己那份(空的),
+ * 第 1 份打的旧档位标签就永远不会被去掉。现在每次同步成功都把现状写到 entitlement 上;结果上那一列照写(那一份当时打了什么)。
+ * 写不进去只记日志:下一次的差集会回落到「编号最大、记过标签的那一份」(`previousAppliedTags`),不会因此多删。
+ */
+async function recordAppliedOnEntitlement(supa: SupabaseClient, entitlementId: string, tags: string[], logTag: string): Promise<void> {
+  const { error } = await supa.from('assessment_entitlements').update({ ghl_tags_applied: tags }).eq('id', entitlementId);
+  if (error) console.error(dbLogLine({ fn: `syncTagsToGhl/${logTag}`, op: 'assessment_entitlements.update ghl_tags_applied', entitlement: entitlementId }, error));
+}
+
+/**
+ * 上次打了哪些标签 —— 算差集的依据。人身上有记录就用它;没有(第 2 步之前的数据,迁移不回填)→
+ * 这个人编号最大、记过标签的那一份结果。哪里都没有 → null(第一次完成,与原来一样)。
+ *
+ * 今天每人只有一份,所以回落取到的就是原来读的那一列(finalize / resync 读的都是这一份自己的)—— 对现有数据零变化。
+ */
+export async function previousAppliedTags(supa: SupabaseClient, entitlementId: string): Promise<unknown> {
+  const { data: ent, error } = await supa
+    .from('assessment_entitlements')
+    .select('ghl_tags_applied')
+    .eq('id', entitlementId)
+    .maybeSingle();
+  if (error) dbFail({ fn: 'previousAppliedTags', op: 'assessment_entitlements.select ghl_tags_applied', entitlement: entitlementId }, error);
+  const own = (ent as { ghl_tags_applied?: unknown } | null)?.ghl_tags_applied;
+  if (own !== null && own !== undefined) return own;
+
+  const { data: rows, error: rErr } = await supa
+    .from('assessment_results')
+    .select('ghl_tags_applied, session:assessment_sessions!inner(attempt_no)')
+    .eq('session.entitlement_id', entitlementId)
+    .not('ghl_tags_applied', 'is', null);
+  if (rErr) dbFail({ fn: 'previousAppliedTags', op: 'assessment_results.select ghl_tags_applied (fallback)', entitlement: entitlementId }, rErr);
+  const list = (rows ?? []) as unknown as { ghl_tags_applied: unknown; session: { attempt_no?: number | null } | null }[];
+  let best: { no: number; tags: unknown } | null = null;
+  for (const r of list) {
+    const no = r.session?.attempt_no ?? 1;
+    if (!best || no > best.no) best = { no, tags: r.ghl_tags_applied };
+  }
+  return best ? best.tags : null;
 }

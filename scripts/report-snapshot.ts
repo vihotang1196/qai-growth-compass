@@ -14,6 +14,8 @@
  *   - 对象的键序 → 一律排序(端点的 `answersByQuestion` 跟着库的行序走,前端按键取,键序没有含义)
  * 下面 `reportFor` 的组装那几行**照抄端点**。改端点的组装时要同步改这里 —— 这份快照证明的是
  * 「端点的输入与算法没变」,不是另写一个端点。
+ * (重填第 2 步给 cookie 那条加的 `attempt` / `attempts` / `retake` 三个键**刻意不进快照**:它们是新增的、
+ *  关于「历次」而不是报告内容;报告内容的每一个键仍在这里。)
  *
  * 【读法:legacy 与 latest】`--reader=legacy`(默认)按重填第 1 步之前端点的读法:答题记录按 entitlement 取那一份、
  * 基准池 = 全部 completed 的结果。`--reader=latest` 按第 1 步之后的读法(视图 `assessment_latest_results`

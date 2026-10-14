@@ -5,6 +5,9 @@
  *   bootstrap → { locale, profile, answered, status }   续答要的全部状态
  *   profile   → 存 3 道背景题
  *   answer    → upsert 一道测评题
+ *   start_retake   → 开始一次重填(只认 cookie;限制见 _shared/retake.ts)→ 新那一份的快照
+ *   abandon_retake → 放弃没做完的那份重填(删掉它)
+ *   (bootstrap 与 start_retake 的快照里多 `attemptNo` 与 `prefill`:第 2 份及以后、没做完时,上一次的背景题与问卷)
  *
  * 【分数一律服务端算,不收客户端传来的 score】那是唯一能改自己成绩的入口。
  * 这份报告最终要拿去做 offer 分流 —— 有人把自己刷成高分档,我们就把他从名单里漏掉了。
@@ -22,7 +25,8 @@ import { readSessionCookie, verifySession } from '../_shared/session.ts';
 import { missingKeys } from '../_shared/env.ts';
 import { isComplete } from '../_shared/quizFlow.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
-import { currentSession } from '../_shared/currentSession.ts';
+import { attemptsOf, currentSession } from '../_shared/currentSession.ts';
+import { abandonRetake, retakePrefill, startRetake, type AttemptRow } from '../_shared/retake.ts';
 
 const FN = 'assessment-quiz';
 
@@ -46,6 +50,7 @@ interface SessionRow {
   id: string;
   profile: Record<string, number> | null;
   status: string;
+  attempt_no: number;
   /**
    * 这个人的语言 —— 从 `assessment_entitlements.lang` 嵌进来。
    *
@@ -131,7 +136,28 @@ Deno.serve(async (req: Request) => {
 
     switch (action) {
       case 'bootstrap':
-        return json(await snapshot(supa, session));
+        return json({ ...(await snapshot(supa, session)), ...(await attemptInfo(supa, ent.id, session)) });
+
+      case 'start_retake': {
+        /**
+         * 【只认 cookie,不收 session_id】开始的是「这个人的下一份」,没有哪一份可以传错。
+         * 被拒时什么都没写,回 409 + 原因(too_soon 带可以再重填的时间)。
+         */
+        const started = await startRetake(supa, ent.id, Date.now());
+        if (!started.ok) {
+          return json({ error: started.reason, ...(started.nextAllowedAt ? { nextAllowedAt: started.nextAllowedAt } : {}) }, 409);
+        }
+        const { data: fresh, error: freshErr } = await currentSession(supa, ent.id, 'profile, entitlement:assessment_entitlements(lang)');
+        if (freshErr) dbFail({ fn: FN, op: 'assessment_sessions.select (after start_retake)', entitlement: ent.id }, freshErr);
+        const next = fresh as unknown as SessionRow;
+        return json({ ...(await snapshot(supa, next)), ...(await attemptInfo(supa, ent.id, next)) });
+      }
+
+      case 'abandon_retake': {
+        const abandoned = await abandonRetake(supa, ent.id);
+        if (!abandoned.ok) return json({ error: abandoned.reason }, 409);
+        return json({ ok: true, abandonedAttemptNo: abandoned.attemptNo });
+      }
 
       case 'profile': {
         const answers = body.answers;
@@ -252,4 +278,16 @@ async function snapshot(supa: ReturnType<typeof serviceClient>, session: Session
    */
   // sessionId:页面之后的每次写入都带上它,服务端据此拦下「属于别的 session 的旧页面」
   return { locale: effectiveLang(session.entitlement?.lang), profile, answers, status, complete, sessionId: session.id };
+}
+
+/**
+ * 这一份是第几份,以及(第 2 份及以后、没做完时)上一次的背景题与问卷 —— 页面的初始值,不是已答(_shared/retake.ts)。
+ * 只在 bootstrap / start_retake 时算:每答一题都多读两次库不值得,页面只在进来时要它。
+ */
+async function attemptInfo(supa: ReturnType<typeof serviceClient>, entitlementId: string, session: SessionRow) {
+  const { data: rows, error } = await attemptsOf<{ completed_at: string | null }>(supa, entitlementId, 'completed_at');
+  if (error) dbFail({ fn: FN, op: 'assessment_sessions.select (attempts)', entitlement: entitlementId }, error);
+  const all = (rows ?? []) as AttemptRow[];
+  const current = all.find((r) => r.id === session.id) ?? { id: session.id, status: session.status, attempt_no: session.attempt_no, completed_at: null };
+  return { attemptNo: session.attempt_no, prefill: await retakePrefill(supa, all, current) };
 }

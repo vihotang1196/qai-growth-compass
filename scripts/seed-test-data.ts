@@ -354,20 +354,32 @@ for (const p of plan) {
     .single();
   if (entErr) throw entErr;
 
-  const { data: ses, error: sesErr } = await supa!
+  /**
+   * 【2026-10-14 重填第 2 步起】`entitlement_id` 不再唯一(一个人可以有多份),seed 只写第 1 份,
+   * 冲突键是 `(entitlement_id, attempt_no)`。而且**已完成的那份不能再写**(迁移 20261014300000 的触发器):
+   * 状态只往前走、答案与问卷冻结。所以顺序改成和真实流程一样 —— 先建成未完成、写答案 / 问卷 / 结果、最后标 completed;
+   * 第 1 份已经是 completed 的(重跑)就整条跳过:数据是确定性的,上次写进去的就是这一次要写的。
+   */
+  const { data: existingRows, error: exErr } = await supa!
     .from('assessment_sessions')
-    .upsert(
-      {
-        entitlement_id: ent.id,
-        // locale 不再写 —— 真相源是 entitlement.lang(见 check:legacy-columns)
-        profile: p.profile,
-        status: 'completed',
-        completed_at: completedAt,
-      },
-      { onConflict: 'entitlement_id' },
-    )
-    .select('id')
-    .single();
+    .select('id, status')
+    .eq('entitlement_id', ent.id)
+    .eq('attempt_no', 1);
+  if (exErr) throw exErr;
+  const existing = (existingRows ?? [])[0] as { id: string; status: string } | undefined;
+  if (existing?.status === 'completed') {
+    console.log(`[seed] ${p.id} → attempt 1 already completed (immutable) — skipped`);
+    continue;
+  }
+
+  const { data: ses, error: sesErr } = existing
+    ? await supa!.from('assessment_sessions').update({ profile: p.profile }).eq('id', existing.id).select('id').single()
+    : await supa!
+      .from('assessment_sessions')
+      // locale 不再写 —— 真相源是 entitlement.lang(见 check:legacy-columns)
+      .insert({ entitlement_id: ent.id, attempt_no: 1, profile: p.profile })
+      .select('id')
+      .single();
   if (sesErr) throw sesErr;
 
   const { error: ansErr } = await supa!.from('assessment_answers').upsert(
@@ -403,6 +415,13 @@ for (const p of plan) {
     { onConflict: 'session_id' },
   );
   if (resErr) throw resErr;
+
+  // 最后才标 completed —— 与 finalize 同一个顺序;之后这一份就冻结了
+  const { error: doneErr } = await supa!
+    .from('assessment_sessions')
+    .update({ status: 'completed', completed_at: completedAt })
+    .eq('id', ses.id);
+  if (doneErr) throw doneErr;
 
   console.log(`[seed] ${p.id} → total ${p.result.total.toFixed(1)} (${p.result.tier})`);
 }

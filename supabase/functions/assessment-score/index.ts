@@ -21,7 +21,7 @@ import { isComplete } from '../_shared/quizFlow.ts';
 import { computeResult } from '../_shared/scoring.ts';
 import { mapOption, mapOptions } from '../_shared/optionMap.ts';
 import { buildWritebackPayload, syncToGhl } from '../_shared/ghlWriteback.ts';
-import { syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
+import { previousAppliedTags, syncTagsToGhl } from '../_shared/ghlTagsWriteback.ts';
 import { effectiveLang } from '../_shared/lang.ts';
 import { configStamp, type ConfigStamp } from '../_shared/configFingerprint.ts';
 import { scoredResultRow } from '../_shared/scoredResult.ts';
@@ -367,6 +367,11 @@ async function finalize(
    * 改成**读当前值**,于是这条路径不再依赖任何关于调用次数的假设。
    *
    * 【为什么读得到】上面那次 upsert 不写 `ghl_tags_applied`,所以它保持原值。
+   *
+   * 【2026-10-14 重填第 2 步:从人身上读】标签在联系人上只有一套,「上次打了哪些」也记在人身上了
+   * (`previousAppliedTags`:entitlement 上那一列;没有时回落到这个人编号最大、记过标签的那一份)。
+   * 原来读的是**这一份自己的**结果 —— 第 2 份完成时那里是空的,第 1 份打的旧档位标签就永远去不掉。
+   * 今天每人只有一份,回落取到的就是原来读的那一列。
    */
   const tagInput = {
     tier: result.tier,
@@ -374,24 +379,19 @@ async function finalize(
     total: result.total,
     responses: survey,
   };
-  const { data: appliedRow, error: appliedErr } = await supa
-    .from('assessment_results')
-    .select('ghl_tags_applied')
-    .eq('session_id', session.id)
-    .maybeSingle();
-  if (appliedErr) {
+  let applied: unknown = null;
+  try {
+    applied = await previousAppliedTags(supa, entitlementId);
+  } catch (err) {
     // 读不到就当作没有上次记录 —— 但要说出来:那意味着这一次不会移除任何旧标签
-    console.error(
-      `${dbLogLine({ fn: FN, op: 'assessment_results.select ghl_tags_applied', session: session.id }, appliedErr)} ` +
-        `— stale tags (if any) will not be removed this round`,
-    );
+    console.error(`${describeError(err).log} — stale tags (if any) will not be removed this round`);
   }
   const tagSync = await syncTagsToGhl(
     supa,
-    session.id,
+    { sessionId: session.id, entitlementId },
     ghlContactId,
     tagInput,
-    appliedRow?.ghl_tags_applied ?? null,
+    applied,
     'finalize',
   );
 
