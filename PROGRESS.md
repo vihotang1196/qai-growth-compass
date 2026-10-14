@@ -193,6 +193,7 @@ main 之后再往前走的话,先照同样的办法再试一次(`git worktree ad
 
 | 优先 | 事项 | 为什么 | 第一步 / 前提 | 谁 |
 |---|---|---|---|---|
+| P1 | **重填功能:设计待 Viho 确认**(2026-10-14) | Viho 要「做过的人先看最新报告、下方可重填、每份有时间记录」;方案 [`docs/retake-design.md`](docs/retake-design.md) 已写好,**没改任何代码** | Viho 定方案里列的几件(频率限制、历史那几份能不能生成另一种语言、重填要不要重填问卷);**前置:上面那条 P0「标签触发的工作流」盘点完、⑩ config 版本先上线**。之后按方案第 6 节分 5 步做,约 7–9 个工作日 | Viho 定,我做 |
 | **P0** | **后台密码登录的线上确认**(2026-10-14 上线) | 代码与单元测试都绿,但**生产上还没有人用密码登录过** —— 第一次设置密码要用 Viho 的管理员账号,我没有、也不该替你输入 | Viho 按 [`docs/admin-password-guide.md`](docs/admin-password-guide.md) 第一次设置密码 → 退出 → 用密码登录一次,把结果告诉我;同时在 Dashboard 定[第 7、10、18–20 行](#待-viho-在-dashboard-确认)(最短长度 12、Password changed 通知、泄露密码检测、Secure password change、登录限流)。确认之后把 Stage 5 那一行的「待实测」改掉 | Viho |
 | **P0** | **legacy JWT key(anon / service_role)的状态与停用**(⑨) | service_role 的片段出现过一次;PROGRESS 没记录 legacy 是否已 Disable | **先查有没有东西在用它**。代码的事实(2026-10-08 读过):所有取 key 的地方都是「新 key 优先、legacy 兜底」—— Edge Function 读平台注入的 `SUPABASE_SECRET_KEYS`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;Vercel 的 render-pdf / pdf-sweep 读 `SUPABASE_SECRET_KEY`、兜底 `SUPABASE_SERVICE_ROLE_KEY`;代理、cron、前端读 publishable、兜底 anon。所以要在运行环境里确认:Vercel 上三个新变量都在、Edge Function 拿得到 `SUPABASE_SECRET_KEYS`、GHL 与任何外部工具没有带 legacy key。然后看 Dashboard 状态 → Disable(可逆)→ 跑[Disable 之后的验收清单](#disable-之后的验收清单) → 再迁 JWT signing keys、revoke legacy secret | Viho(Dashboard、Vercel、GHL)+ 我(验收清单) |
 | **P0** | **GHL 里由标签触发的工作流**(新) | 改错配判据、重同步标签、改档位都会改动学员的标签;标签若触发工作流,就可能给学员发消息 | 列出所有以 `assessment_*` 标签为触发条件的工作流,各自会不会对学员发消息 —— 这是第 5 条和任何「重同步 GHL」选项的前提 | Viho |
@@ -9380,6 +9381,11 @@ Viho 在课堂用的笔记本上试过现场模式:全屏、+ / − / 0、翻屏
   「设置密码」打开面板,两个框都是 `new-password`;填一个短的测试值 → 「太短了:至少 12 个字符」,**没有发出任何请求**;之后删掉那个假 session
 - **没有在任何地方输入过真实账号或密码**;生产上的第一次密码登录要 Viho 做(当前未完成 P0)
 
+## 上线(2026-10-14)
+
+`fc90103` 快进合进 main、推送 03:58:24 UTC;GitHub 上 Vercel 状态 success(03:59:13 UTC 轮询到)。新 bundle `index-DRYCbcxV.js`:三个标记 `admin-password-login` / `current-password` / `reauthentication_needed` 各 1 处 —— 先证明了旧 bundle `index-CNygYPob.js` 里都是 0 处。smoke 03:59 UTC(钥匙串的 key)**16/16 + 1/1、exit 0**。线上 `/admin` 只读看过:默认是邮箱 + 密码 + 「用邮件链接登录」,控制台 0 错误(没有输入任何东西)。
+(本地构建的文件名与线上不同是预期的:Vercel 构建时把生产的 `VITE_*` 编译进去。)
+
 ## Dashboard:需要 Viho 打开或确认的(我没改)
 
 都列在[待 Viho 在 Dashboard 确认](#待-viho-在-dashboard-确认)那张表里(第 7、8、10、18–21 行):
@@ -9394,6 +9400,7 @@ Viho 在课堂用的笔记本上试过现场模式:全屏、+ / − / 0、翻屏
 
 ## 变更日志
 
+- 2026-10-14 — **重填功能的设计方案**([`docs/retake-design.md`](docs/retake-design.md),**只是方案,未实施**)。每次重填新开一份答题记录、旧的永不再写;「算数」的是每人最新完成的一份(一个视图 + 一个函数定义它);第一步对现有数据零变化(上线前后快照逐字比对来证明);频率限制建议「同时只有一份没做完 / 两次完成至少隔 24 小时 / 每人最多 6 份」;前置是 P0 标签工作流盘点与 ⑩ config 版本。附录列出了现在代码里每一处「一人一份」的假设(按 entitlement 取单行 5 处、嵌套成单对象 2 处、会把人算两次的统计 3 类、GHL 标签与重试各 1 处)。同时补记了密码登录的上线结果
 - 2026-10-14 — **[后台密码登录](#后台密码登录2026-10-14)**(只动前端)。登录页默认邮箱 + 密码,邮件链接保留为备用入口;没有单独的重置密码页
   (忘了 = 邮件链接登录 → 后台「设置密码」);管理员判定不变;登录失败只有一句,不区分邮箱不存在与密码错误。
   先红后绿 28 条(真 supabase-js + 假 fetch;登录页那 2 条先对旧页面红在断言上)+ 7 次变异全红;verify Node 503 / Deno 220。
