@@ -16,6 +16,7 @@ import { quizApi, QuizAuthError } from '@/lib/quizApi';
 import { routeForStatus, SessionGuardError, type GuardError } from '@/lib/sessionFlow';
 import { rerouteToCurrentSession } from '@/lib/sessionReroute';
 import { SurveyValidationError, surveyApi } from '@/lib/surveyApi';
+import { surveyInitial, type SurveyQuestionShape } from '@/lib/retakePrefill';
 import { useSingleFlight } from '@/lib/useBusy';
 import { useTransitionNavigate } from '@/lib/usePageMotion';
 
@@ -51,6 +52,8 @@ export default function Survey() {
   const [error, setError] = useState<string | null>(null);
   /** 服务端指名的那一题 —— 用来把客户直接送回那一屏 */
   const [badQuestion, setBadQuestion] = useState<string | null>(null);
+  /** 重填:问卷先填上一次的回答(只是表单的起点,最后提交才算数)—— 页面上据此说一句 */
+  const [prefilled, setPrefilled] = useState(false);
 
   /** 这个页面加载时属于哪个 session —— 问卷与出分都带上,见 api/_lib/sessionGuard.ts */
   const sessionIdRef = useRef<string | null>(null);
@@ -89,6 +92,15 @@ export default function Survey() {
           return;
         }
         sessionIdRef.current = snap.sessionId;
+        /**
+         * 重填(第 2 份及以后):上一次的问卷作为初始值。学员在页面上已经填过的那几题(bootstrap 回来之前就动了手)不被盖掉。
+         * 不写进这一份 —— 问卷本来就是攒完一次提交;不提交就出不了分(Viho 的第 3 个决定)。
+         */
+        const initial = surveyInitial(snap.prefill, SURVEY as unknown as SurveyQuestionShape[]);
+        if (Object.keys(initial).length) {
+          setAnswers((prev) => ({ ...initial, ...prev }));
+          setPrefilled(true);
+        }
       })
       .catch((err) => {
         if (alive && err instanceof QuizAuthError) onAuthLost();
@@ -198,6 +210,9 @@ export default function Survey() {
             {tk('survey.title')}
           </p>
           <p className="mt-1 font-body text-sm opacity-70">{tk('survey.hint')}</p>
+          {prefilled && (
+            <p className="mt-3 border-brutal border-line bg-paper p-3 font-body text-sm">{tk('survey.prefilled')}</p>
+          )}
         </div>
 
         <Card

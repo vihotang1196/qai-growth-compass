@@ -67,6 +67,40 @@ export interface ReportPayload {
    */
   cardUrl: string | null;
   cardTallUrl: string | null;
+  /**
+   * ── 重填(第 2 步起服务端给,第 3 步的页面读)── 只在 cookie 那条上有;PDF 渲染器那条(`?rt=`)没有这三个键。
+   * `attempt`:这次看的是第几份;`attempts`:完成了的每一份(编号从大到小);`retake`:现在能不能重填。
+   */
+  attempt?: ViewingAttempt | null;
+  attempts?: AttemptSummary[];
+  retake?: RetakeInfo;
+}
+
+/** 与 supabase/functions/_shared/retake.ts 的 `RetakeRefusal` 同一组 */
+export type RetakeReason = 'revoked' | 'not_open' | 'no_completed_attempt' | 'open_attempt' | 'limit_reached' | 'too_soon';
+
+export interface RetakeInfo {
+  canStart: boolean;
+  reason: RetakeReason | null;
+  /** `too_soon` 时:最近一次完成 + 24 小时(ISO,UTC) */
+  nextAllowedAt: string | null;
+  /** 有一份没做完的重填时是它的编号 */
+  openAttempt: number | null;
+  maxAttempts: number;
+  minHoursBetween: number;
+}
+
+export interface AttemptSummary {
+  no: number;
+  completedAt: string | null;
+  total: number;
+  tier: string;
+}
+
+export interface ViewingAttempt {
+  no: number;
+  completedAt: string | null;
+  isLatest: boolean;
 }
 
 /** 报告还没算出来(还没走完 finalize)—— 与鉴权失败区分开 */
@@ -76,7 +110,11 @@ export class ReportNotReadyError extends Error {
   }
 }
 
-export async function fetchReport(): Promise<ReportPayload> {
+/**
+ * `attempt`:看历次中的某一份(`/report?attempt=n`)。不给 = 最新那份,请求与重填之前逐字相同。
+ * 那一份是不是这个人的,由服务端只在 cookie 这个人的答题记录里找来保证;不存在 / 没完成 → 404。
+ */
+export async function fetchReport(attempt: number | null = null): Promise<ReportPayload> {
   /**
    * PDF 渲染器打开报告页时带 ?rt=<渲染令牌>(它没有 cookie)。原样透传给 API ——
    * 令牌用另一个密钥、只活几分钟,不能当登录态用,见 lib/renderToken.ts。
@@ -92,6 +130,7 @@ export async function fetchReport(): Promise<ReportPayload> {
   const params = new URLSearchParams();
   if (rt) params.set('rt', rt);
   params.set('lang', currentLang());
+  if (attempt !== null) params.set('attempt', String(attempt));
   const url = `/api/assessment-report?${params.toString()}`;
   const res = await fetch(url, {
     method: 'GET',
@@ -118,8 +157,8 @@ export async function fetchReport(): Promise<ReportPayload> {
  * 只取 PDF 状态与新签的 URL —— 轮询用,不重复搬整份报告数据。
  * 走同一个端点(它每次都现签),所以「URL 过期」这件事不存在:点击那一刻才取。
  */
-export async function fetchPdfState(): Promise<{ pdfStatus: string; pdfUrl: string | null }> {
-  const d = await fetchReport();
+export async function fetchPdfState(attempt: number | null = null): Promise<{ pdfStatus: string; pdfUrl: string | null }> {
+  const d = await fetchReport(attempt);
   return { pdfStatus: d.pdfStatus, pdfUrl: d.pdfUrl };
 }
 
@@ -130,11 +169,15 @@ export async function fetchPdfState(): Promise<{ pdfStatus: string; pdfUrl: stri
  * 所以前端不需要自己记「我点过了吗」—— 那种本地状态一刷新就丢,
  * 而丢了之后人会再点一次,于是又是一次 Lambda。
  */
-export async function requestReportFile(lang: 'zh' | 'en'): Promise<{ status: string }> {
+export async function requestReportFile(lang: 'zh' | 'en', attempt: number | null = null): Promise<{ status: string }> {
+  /**
+   * 【以前的一份带上 attempt】已经有的照常给;没有的服务端回 409 history_attempt,不渲染(Viho 的第 2 个决定)。
+   * 页面在以前那份上本来就不给「生成」按钮 —— 这里带上是为了让下载那一刻取到的是那一份,不是最新那份。
+   */
   const res = await fetch('/api/assessment-report-file', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lang }),
+    body: JSON.stringify(attempt === null ? { lang } : { lang, attempt }),
   });
   // 403 = 已停用(revoked),401 = 没登录 —— 与答题 / 报告取数同一套跳转
   if (res.status === 401) throw new QuizAuthError('unauthorized');

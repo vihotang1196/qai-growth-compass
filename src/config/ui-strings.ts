@@ -106,6 +106,12 @@ export const UI_STRINGS = {
     zh: '每答一题即自动保存。中途关掉,下次点链接回来会从这一题继续。',
     en: 'Saved after every answer. Close it and your link brings you back to this question.',
   },
+  /** 重填(第 2 份及以后):背景题预填上一次的回答 —— 只是初始值,提交时才算答了 */
+  'quiz.retakeIntro': {
+    zh: '这是你的第 {n} 次测评。背景题已经按上一次的回答填好,可以直接沿用或改选;15 道测评题从空白开始。',
+    en: 'This is attempt {n}. Your background answers are filled in from last time — keep them or change them; the 15 assessment questions start blank.',
+  },
+  'quiz.prefilled': { zh: '上次的选择', en: 'From last time' },
 
   // ── Survey ──────────────────────────────────────────────
   'survey.title': { zh: '最后 7 个问题', en: 'Last 7 questions' },
@@ -129,6 +135,11 @@ export const UI_STRINGS = {
     en: 'Some assessment questions are still unanswered — finish those first.',
   },
   'survey.charCount': { zh: '{n} / {max}', en: '{n} / {max}' },
+  /** 重填:问卷预填上一次的回答 —— 只是初始值,最后提交才算数 */
+  'survey.prefilled': {
+    zh: '已按上一次的回答填好,可以直接沿用或修改 —— 最后提交才算数。',
+    en: 'Filled in from last time — keep or change any answer; it only counts once you submit.',
+  },
 
   // ── Report ──────────────────────────────────────────────
   'report.loading': { zh: '正在生成你的报告…', en: 'Building your report…' },
@@ -205,6 +216,94 @@ export const UI_STRINGS = {
   },
   'report.difficulty': { zh: '难度', en: 'Difficulty' },
   'report.impact': { zh: '影响', en: 'Impact' },
+
+  // ── 重填(第 3 步,docs/retake-design.md 第 2 节)───────────
+  // 报告最下方那一节
+  'report.retake.title': { zh: '重新做一次', en: 'Take it again' },
+  'report.retake.body': {
+    zh: '生意有了变化,可以再做一次测评,看看分数怎么变。这份报告会保留。',
+    en: 'If your business has changed, take the assessment again and see how your scores move. This report is kept.',
+  },
+  'report.retake.button': { zh: '重填测评', en: 'Retake the assessment' },
+  'report.retake.starting': { zh: '正在准备…', en: 'Getting it ready…' },
+  'report.retake.used': { zh: '已完成 {used} 份 · 每人最多 {max} 份', en: '{used} of {max} attempts used' },
+  // 不能重填的三种原因 —— 写在按钮的位置
+  'report.retake.tooSoon': {
+    zh: '两次完成之间要隔 {hours} 小时。还要等 {wait} —— {time}(马来西亚时间)之后可以重填。',
+    en: 'There must be {hours} hours between two finished attempts. {wait} to go — you can retake after {time} (Malaysia time).',
+  },
+  /** 页面开着的时候时间已经过了(服务端那一刻说的还是「太快」)—— 不写一个负数的等待 */
+  'report.retake.tooSoonAt': {
+    zh: '两次完成之间要隔 {hours} 小时。{time}(马来西亚时间)之后可以重填 —— 刷新页面再试。',
+    en: 'There must be {hours} hours between two finished attempts. You can retake after {time} (Malaysia time) — refresh the page and try again.',
+  },
+  'report.retake.waitHm': { zh: '{h} 小时 {m} 分钟', en: '{h} h {m} min' },
+  'report.retake.waitM': { zh: '{m} 分钟', en: '{m} min' },
+  'report.retake.limitReached': {
+    zh: '已经用满 {max} 份(第一次 + {retakes} 次重填),不能再重填了。',
+    en: "You've used all {max} attempts (the first one plus {retakes} retakes), so there are no retakes left.",
+  },
+  'report.retake.revoked': {
+    zh: '这条链接已经作废,不能再重填。需要的话请联系你的顾问。',
+    en: 'This link has been deactivated, so it can no longer be used to retake. Please contact your consultant if you need it.',
+  },
+  'report.retake.failed': {
+    zh: '没能开始重填,请稍后再试。',
+    en: "Couldn't start the retake. Please try again in a moment.",
+  },
+  // 确认框:说清四件事 —— 旧报告保留、新的一份成为默认、顾问看到的会更新、下一次能重填的时间
+  'report.retake.confirmTitle': { zh: '重新做一次测评?', en: 'Retake the assessment?' },
+  'report.retake.confirmBody': {
+    zh: '这份报告会保留,随时可以在「历次结果」里打开。新的一份完成后会成为默认显示的报告,顾问看到的信息也会更新成新的一份。完成之后要隔 {hours} 小时才能再重填;每人最多 {max} 份,这会是第 {next} 份。背景题与问卷会先填好上一次的回答,15 道测评题从空白开始。',
+    en: 'This report is kept — you can open it any time under "Your results over time". Once the new one is finished it becomes the report shown by default, and the information your consultant sees switches to it. After finishing you will need to wait {hours} hours before retaking again; there are up to {max} attempts per person and this will be attempt {next}. Your background answers and survey start filled in from last time; the 15 assessment questions start blank.',
+  },
+  'report.retake.confirmAction': { zh: '开始重填', en: 'Start the retake' },
+  // 有一份没做完的重填:顶部那条提示,以及最下方那一节
+  'report.retake.openTitle': { zh: '你有一次重填还没做完(第 {n} 次)', en: 'You have an unfinished retake (attempt {n})' },
+  'report.retake.openBody': {
+    zh: '下面仍是你最新完成的那一份报告。继续答完,新的一份就会成为默认显示的报告。',
+    en: 'Below is still your latest finished report. Finish the retake and the new one becomes the report shown by default.',
+  },
+  'report.retake.openBottom': { zh: '你有一次重填(第 {n} 次)还没做完。', en: 'You have an unfinished retake (attempt {n}).' },
+  'report.retake.continue': { zh: '继续', en: 'Continue' },
+  'report.retake.continueLong': { zh: '继续重填', en: 'Continue the retake' },
+  'report.retake.opening': { zh: '正在打开…', en: 'Opening…' },
+  'report.retake.abandon': { zh: '放弃', en: 'Discard' },
+  'report.retake.abandoning': { zh: '正在放弃…', en: 'Discarding…' },
+  'report.retake.abandonTitle': { zh: '放弃这次重填?', en: 'Discard this retake?' },
+  'report.retake.abandonBody': {
+    zh: '这次重填里已经答的题会被删掉,不能恢复。你已有的报告都不受影响。',
+    en: 'The answers in this retake will be deleted and cannot be recovered. Your existing reports are not affected.',
+  },
+  'report.retake.abandonAction': { zh: '放弃这次重填', en: 'Discard the retake' },
+  'report.retake.actionFailed': {
+    zh: '没能完成,请稍后再试。',
+    en: "That didn't go through. Please try again in a moment.",
+  },
+  // 历次结果
+  'report.history.title': { zh: '历次结果', en: 'Your results over time' },
+  'report.history.hint': {
+    zh: '完成时间为马来西亚时间。点一份,看那一次的报告。',
+    en: 'Times are Malaysia time. Tap one to open that report.',
+  },
+  'report.history.attempt': { zh: '第 {n} 次', en: 'Attempt {n}' },
+  'report.history.viewing': { zh: '正在看', en: 'Viewing' },
+  'report.history.latest': { zh: '最新', en: 'Latest' },
+  // 看的是以前的一份
+  'report.history.viewingOld': {
+    zh: '这是你第 {n} 次的结果,完成于 {time}(马来西亚时间)。',
+    en: 'This is your attempt {n}, finished {time} (Malaysia time).',
+  },
+  'report.history.baselineNote': {
+    zh: '「与全体平均比」按现在的全体学员计算;当时看到的样子以那一次的 PDF 为准。',
+    en: 'The comparison with everyone else uses all participants as of today; the PDF from that attempt shows it as it was then.',
+  },
+  'report.history.backToLatest': { zh: '看最新的一份', en: 'See the latest' },
+  'report.history.missing': { zh: '找不到这一次的结果。', en: "We couldn't find that attempt." },
+  'report.history.onlyExisting': {
+    zh: '以前的结果只提供当时已经生成好的 PDF。',
+    en: 'Past results only offer the PDFs that were already generated at the time.',
+  },
 
   // ── Admin ───────────────────────────────────────────────
   'admin.title': { zh: '学员名单', en: 'Roster' },

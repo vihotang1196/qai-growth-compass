@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import config from '@/config/assessment-config.json';
-import { Card, CardBody } from '@/components/brutalist';
+import { Button, Card, CardBody } from '@/components/brutalist';
 import { SubmoduleMark, type MarkState } from '@/components/brutalist/SubmoduleMark';
 import RadarPentagon, { buildRadarAxes } from '@/components/RadarPentagon';
 import PentagonLoader from '@/components/PentagonLoader';
@@ -8,7 +9,7 @@ import { useT } from '@/lib/i18n';
 import Section from './ReportSection';
 import ReportTakeaway from './ReportTakeaway';
 import { cardsFor } from '../../api/_lib/reportFiles';
-import { QuizAuthError } from '@/lib/quizApi';
+import { QuizAuthError, quizApi } from '@/lib/quizApi';
 import { fetchPdfState, fetchReport, ReportNotReadyError, type ReportPayload, requestReportFile} from '@/lib/reportApi';
 import { openFreshPdf } from '@/lib/openPdf';
 import { badgeForScore } from '@/lib/scoring';
@@ -17,6 +18,17 @@ import { computeCosts, rootCauseLevel, roundToSignificant, selectActions, type A
 import { actionEvidence, evidencePair, type QuestionLike } from '@/lib/reportEvidence';
 import { useDelayedFlag, useSingleFlight } from '@/lib/useBusy';
 import { useTransitionNavigate } from '@/lib/usePageMotion';
+import { createSingleFlight } from '@/lib/singleFlight';
+import { useConfirm } from '@/components/ConfirmProvider';
+import { historyItems, historyNote, openRetakeBanner, parseAttemptParam, retakeAction } from '@/lib/retakeView';
+import {
+  abandonConfirmOptions,
+  abandonRetakeFlow,
+  continueRetakeFlow,
+  retakeConfirmOptions,
+  startRetakeFlow,
+} from '@/lib/retakeFlow';
+import { ReportHistory, ReportHistoryNote, ReportRetakeBanner, ReportRetakeSection } from './ReportRetake';
 
 declare global {
   interface Window {
@@ -59,8 +71,21 @@ function isRenderMode(): boolean {
  * markStateFromScore 已标废弃,这里兑现。
  */
 export default function Report() {
+  /**
+   * 【`?attempt=n` 换了就整个重挂】从历次结果点进另一份(或回到最新那份)是同一个路由、只换查询参数 ——
+   * React Router 不会重挂组件,而这一页的状态(数据、PDF 轮询、正在打开哪一份)全都属于「那一份」。
+   * 用 key 让它重来一遍,比逐个状态去清更不会漏(漏一个的话,会在第 1 份的页面上轮询第 2 份的 PDF)。
+   * PDF 渲染器(`?rt=`)从不带 attempt —— 它按渲染令牌里的 session 取。
+   */
+  const [params] = useSearchParams();
+  const attempt = isRenderMode() ? null : parseAttemptParam(params.get('attempt'));
+  return <ReportView key={attempt ?? 'latest'} attempt={attempt} />;
+}
+
+function ReportView({ attempt }: { attempt: number | null }) {
   const { tk, locale } = useT();
   const navigate = useTransitionNavigate();
+  const ask = useConfirm();
   const [data, setData] = useState<ReportPayload | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'notReady' | 'error'>('loading');
   /** PDF 状态与新签 URL —— 由轮询更新;pollDone 表示已放弃轮询(见下) */
@@ -76,17 +101,33 @@ export default function Report() {
   /** 报告加载等满 150ms 才出现五边形动画 —— 快的时候直接是报告 */
   const showLoader = useDelayedFlag(state === 'loading');
 
+  /**
+   * ── 重填(第 3 步)──
+   * `retakeBusy`:哪一个重填动作的请求在路上(按钮据此压下去 / 转圈)—— 只包住请求,不包确认框开着的那段(见 lib/retakeFlow.ts)。
+   * `retakeGuard`:整个动作(确认框 + 请求)一道同步的闸 —— 连点两下不会弹出两个确认框。
+   * `revokedNow`:页面开着的时候链接被作废了(点下去拿到 403)。payload 不会自己变,所以记在这里,按钮的位置据此说「已作废」。
+   */
+  const [retakeBusy, setRetakeBusy] = useState<'start' | 'continue' | 'abandon' | null>(null);
+  const [retakeFailed, setRetakeFailed] = useState<'start' | 'continue' | 'abandon' | null>(null);
+  const [revokedNow, setRevokedNow] = useState(false);
+  const retakeGuard = useRef(createSingleFlight()).current;
+  /** 「还要等多久」按页面拿到数据的那一刻算 */
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
   const onAuthLost = useCallback(() => navigate(`/expired?lang=${locale}`, { replace: true }), [navigate, locale]);
   /** 按当前语言取 config 字段(zh/en);config 是允许出现中文的源 */
   const L = useCallback(<T,>(zh: T, en: T): T => (locale === 'en' ? en : zh), [locale]);
 
   useEffect(() => {
     let alive = true;
-    fetchReport()
+    fetchReport(attempt)
       .then((d) => {
         if (!alive) return;
         setData(d);
         setPdf({ status: d.pdfStatus, url: d.pdfUrl });
+        setNowMs(Date.now());
+        // 以前的一份不轮询:它的文件只会是当时生成好的那些,没有「正在生成」可等
+        if (d.attempt && !d.attempt.isLatest) setPollDone(true);
         setState('ready');
       })
       .catch((err) => {
@@ -98,7 +139,7 @@ export default function Report() {
     return () => {
       alive = false;
     };
-  }, [onAuthLost]);
+  }, [onAuthLost, attempt]);
 
   // PDF 渲染器的信号:数据到、页面渲染后置 true(SVG 同步,mount 即画完)
   useEffect(() => {
@@ -118,7 +159,7 @@ export default function Report() {
    * 3 秒一次 × 20 次 = 60 秒:比渲染耗时(16s)留了三倍余量,又不至于让人干等太久。
    */
   useEffect(() => {
-    if (state !== 'ready') return;
+    if (state !== 'ready' || pollDone) return;
     if (pdf.status === 'ready' || pdf.status === 'failed_permanent') return;
 
     let attempts = 0;
@@ -131,7 +172,7 @@ export default function Report() {
         clearInterval(timer);
         return;
       }
-      void fetchPdfState()
+      void fetchPdfState(attempt)
         .then((st) => {
           if (!alive) return;
           setPdf({ status: st.pdfStatus, url: st.pdfUrl });
@@ -146,7 +187,7 @@ export default function Report() {
       alive = false;
       clearInterval(timer);
     };
-  }, [state, pdf.status]);
+  }, [state, pdf.status, pollDone, attempt]);
 
   /**
    * 【点击那一刻才取 URL,不用页面加载时那条】signed URL 有效期 1 小时。
@@ -162,7 +203,7 @@ export default function Report() {
   async function openPdfIn(lang: 'zh' | 'en') {
     setOpening(lang);
     try {
-      const fresh = await fetchReport();
+      const fresh = await fetchReport(attempt);
       setData(fresh);
       setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
       // 当前页跳转,不开新窗口 —— 开新窗口在 await 之后会被手机浏览器当成弹窗拦掉(见 lib/openPdf.ts)
@@ -185,9 +226,9 @@ export default function Report() {
   async function generateIn(lang: 'zh' | 'en') {
     setGenerating(lang);
     try {
-      await requestReportFile(lang);
+      await requestReportFile(lang, attempt);
       // 服务端是同步等渲染完的,所以回来之后直接重取一次就能拿到新状态
-      const fresh = await fetchReport();
+      const fresh = await fetchReport(attempt);
       setData(fresh);
       setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
     } finally {
@@ -195,6 +236,73 @@ export default function Report() {
     }
   }
 
+
+  /** 重取一次报告(重填被拒 / 放弃之后):按钮的位置与顶上那条提示跟着服务端的新状态走 */
+  async function refreshReport() {
+    try {
+      const fresh = await fetchReport(attempt);
+      setData(fresh);
+      setPdf({ status: fresh.pdfStatus, url: fresh.pdfUrl });
+      setNowMs(Date.now());
+    } catch (err) {
+      if (err instanceof QuizAuthError) onAuthLost();
+    }
+  }
+
+  /** 每个动作失败的三种去向:登录失效 → /expired;链接作废 → 按钮的位置说「已作废」;别的 → 那个按钮旁边说没办成 */
+  function onRetakeFailure(which: 'start' | 'continue' | 'abandon', kind: 'revoked' | 'authLost' | 'failed') {
+    if (kind === 'authLost') return onAuthLost();
+    if (kind === 'revoked') return setRevokedNow(true);
+    setRetakeFailed(which);
+  }
+
+  /** 「重填测评」:先问(网站自己的确认框)→ start_retake → 新那一份的答题页 */
+  function startRetake(action: Parameters<typeof retakeConfirmOptions>[1]) {
+    void retakeGuard.run(async () => {
+      setRetakeFailed(null);
+      const out = await startRetakeFlow({
+        ask,
+        confirm: retakeConfirmOptions(tk, action),
+        request: quizApi.startRetake,
+        onRequest: (on) => setRetakeBusy(on ? 'start' : null),
+        fallbackLocale: locale,
+      });
+      if (out.kind === 'started') return navigate(out.route);
+      // 被拒:服务端什么都没写;重取一次,按钮的位置就说原因(太快 → 时间、满了、已经有一份没做完的)
+      if (out.kind === 'refused') return refreshReport();
+      if (out.kind !== 'cancelled') onRetakeFailure('start', out.kind);
+    });
+  }
+
+  /** 「继续」:去那一份现在在的那一步(答题 / 问卷)。不改变任何东西,不问 */
+  function continueRetake() {
+    void retakeGuard.run(async () => {
+      setRetakeFailed(null);
+      setRetakeBusy('continue');
+      try {
+        const out = await continueRetakeFlow({ bootstrap: quizApi.bootstrap, fallbackLocale: locale });
+        if (out.kind === 'go') return navigate(out.route);
+        onRetakeFailure('continue', out.kind);
+      } finally {
+        setRetakeBusy(null);
+      }
+    });
+  }
+
+  /** 「放弃」:先问 → abandon_retake(服务端删掉没做完的那份)→ 重取一次,顶上那条消失、最下方回到「重填」 */
+  function abandonRetake() {
+    void retakeGuard.run(async () => {
+      setRetakeFailed(null);
+      const out = await abandonRetakeFlow({
+        ask,
+        confirm: abandonConfirmOptions(tk),
+        request: quizApi.abandonRetake,
+        onRequest: (on) => setRetakeBusy(on ? 'abandon' : null),
+      });
+      if (out.kind === 'abandoned' || out.kind === 'gone') return refreshReport();
+      if (out.kind !== 'cancelled') onRetakeFailure('abandon', out.kind);
+    });
+  }
 
   /**
    * 分享卡按**这个页面自己的语言**从 `files` 里选,不再用端点的兼容投影
@@ -225,7 +333,24 @@ export default function Report() {
         </div>
       </Shell>
     );
-  if (state === 'notReady') return <Shell><Notice>{tk('report.notReady')}</Notice></Shell>;
+  if (state === 'notReady') {
+    // 看的是指定的一份而它不存在 / 没完成(服务端 404):不是「报告还没准备好」,是「没有这一份」
+    if (attempt !== null) {
+      return (
+        <Shell>
+          <Notice>
+            <p>{tk('report.history.missing')}</p>
+            <div className="mt-3">
+              <Button variant="outline" onClick={() => navigate(`/report?lang=${locale}`)}>
+                {tk('report.history.backToLatest')}
+              </Button>
+            </div>
+          </Notice>
+        </Shell>
+      );
+    }
+    return <Shell><Notice>{tk('report.notReady')}</Notice></Shell>;
+  }
   if (state === 'error' || !data) return <Shell><Notice tone="accent">{tk('report.loadFailed')}</Notice></Shell>;
 
   const { result, submodules, evidence, answersByQuestion, baseline, cohort, survey } = data;
@@ -257,8 +382,29 @@ export default function Report() {
    */
   const mismatch = isPriorityMismatch(priority, result.weakest);
 
+  // 重填那四块:该不该出现、出现成什么样(lib/retakeView.ts)。PDF 渲染模式下全是 hidden / null
+  const retakeCtx = { renderMode: isRenderMode(), revokedNow };
+  const retake = retakeAction(data, retakeCtx);
+  const banner = openRetakeBanner(data, retakeCtx);
+  const history = historyItems(data, retakeCtx);
+  const olderNote = historyNote(data, retakeCtx);
+  const viewingOlder = olderNote !== null;
+  const openAttempt = (n: number) => navigate(`/report?lang=${locale}&attempt=${n}`);
+  const openLatest = () => navigate(`/report?lang=${locale}`);
+
   return (
     <Shell stagger={!isRenderMode()}>
+      {/* 0. 有一份重填没做完:继续 / 放弃(关于人,不关于这一页) */}
+      <ReportRetakeBanner
+        banner={banner}
+        busy={retakeBusy === 'continue' || retakeBusy === 'abandon' ? retakeBusy : null}
+        failed={retakeFailed === 'continue' || retakeFailed === 'abandon'}
+        onContinue={continueRetake}
+        onAbandon={abandonRetake}
+      />
+      {/* 0.5 看的是以前的一份:是哪一次、什么时候;回到最新的一份 */}
+      <ReportHistoryNote note={olderNote} onBack={openLatest} />
+
       {/* 1. 总分 + 雷达 */}
       <Section title={tk('report.section.radar')}>
         <div className="mb-4 text-center">
@@ -527,6 +673,20 @@ export default function Report() {
         onOpen={(l) => void openFlight.run(() => openPdfIn(l))}
         onGenerate={(l) => void generateFlight.run(() => generateIn(l))}
         onPrint={() => window.print()}
+        history={viewingOlder}
+      />
+
+      {/* 9. 历次结果(两份以上):点一份看那一份的报告 */}
+      <ReportHistory items={history} onOpen={openAttempt} />
+
+      {/* 10. 最下方:重填测评 / 不能重填的原因 / 继续重填 */}
+      <ReportRetakeSection
+        action={retake}
+        nowMs={nowMs}
+        busy={retakeBusy === 'start' || (retake.kind === 'continue' && retakeBusy === 'continue')}
+        failed={retakeFailed === 'start' || (retake.kind === 'continue' && retakeFailed === 'continue')}
+        onStart={() => retake.kind === 'start' && startRetake(retake)}
+        onContinue={continueRetake}
       />
     </Shell>
   );

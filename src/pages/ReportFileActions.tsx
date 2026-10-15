@@ -28,6 +28,7 @@ export default function ReportFileActions({
   generating,
   onOpen,
   onGenerate,
+  history = false,
 }: {
   files: ReportPayload['files'];
   /** 这个人当前的语言 —— 当前那份走轮询,另一种不轮询 */
@@ -41,8 +42,12 @@ export default function ReportFileActions({
   generating: 'zh' | 'en' | null;
   onOpen: (lang: 'zh' | 'en') => void;
   onGenerate: (lang: 'zh' | 'en') => void;
+  /** 看的是以前的一份(不是最新那份):只给已经有的文件,不给「生成另一种语言」(Viho 的第 2 个决定) */
+  history?: boolean;
 }) {
   const { tk } = useT();
+  /** 以前的一份上,没有的那种语言不给按钮 —— 只在这里说一句为什么 */
+  const missingOnHistory = history && files.some((f) => f.availability === 'absent' || f.availability === 'failed');
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -90,6 +95,12 @@ export default function ReportFileActions({
         }
 
         /**
+         * 【以前的一份:只给已经有的】没有的那种语言(absent / failed)不给「生成」,也不说「正在生成」——
+         * 「生成另一种语言」只对最新那一份开放(Viho 2026-10-14 的第 2 个决定;服务端也拒绝:409 history_attempt)。
+         */
+        if (history) return null;
+
+        /**
          * 当前语言那份还在渲(finalize 刚触发)—— 显示静态文案而**不给按钮**:
          * 给按钮等于邀请他再触发一次,而那是又一次 Lambda。
          */
@@ -113,6 +124,7 @@ export default function ReportFileActions({
           </Button>
         );
       })}
+      {missingOnHistory && <p className="w-full font-body text-sm opacity-70">{tk('report.history.onlyExisting')}</p>}
     </div>
   );
 }

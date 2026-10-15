@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { LocaleProvider } from '@/lib/i18n';
 import { AppRoutes } from '@/App';
+import { ConfirmProvider } from '@/components/ConfirmProvider';
 
 /**
  * `/share-card` 必须渲成**纯内容**:没有导航、没有语言切换、没有任何交互元素。
@@ -18,12 +19,17 @@ import { AppRoutes } from '@/App';
  * cookie 提示时,它会先红 —— 而改全局布局的人通常不会想到分享卡。
  */
 
+/**
+ * 提供者的套法与 `main.tsx` 一样(LocaleProvider → ConfirmProvider → 路由)。
+ * 2026-10-15 报告页开始用 `useConfirm()`(重填的确认框)之后,少套一层 ConfirmProvider 这里就渲不出 /report ——
+ * 而真实页面上那一层一直在。顺带也验了 ConfirmProvider 自己说的「没有请求时什么都不渲染」:/share-card 照样一个交互元素都没有。
+ */
 function renderAt(path: string): string {
   return renderToStaticMarkup(
     createElement(
       LocaleProvider,
       null,
-      createElement(MemoryRouter, { initialEntries: [path] }, createElement(AppRoutes)),
+      createElement(ConfirmProvider, null, createElement(MemoryRouter, { initialEntries: [path] }, createElement(AppRoutes))),
     ),
   );
 }

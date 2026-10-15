@@ -8,7 +8,8 @@ import { quizApi, QuizAuthError, type QuizSnapshot } from '@/lib/quizApi';
 import { createSaveTracker, failedSummary, retryChoice, saveView, type SaveState } from '@/lib/saveStatus';
 import { routeForStatus, SessionGuardError, type GuardError } from '@/lib/sessionFlow';
 import { rerouteToCurrentSession } from '@/lib/sessionReroute';
-import { useDelayedFlag } from '@/lib/useBusy';
+import { prefillToSave, quizInitial } from '@/lib/retakePrefill';
+import { useDelayedFlag, useSingleFlight } from '@/lib/useBusy';
 import { canReveal, useReveal, useTransitionNavigate } from '@/lib/usePageMotion';
 
 const PROFILE = config.profile_questions;
@@ -53,6 +54,13 @@ export default function Quiz() {
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   /** 提交时的整体提示 */
   const [submitNote, setSubmitNote] = useState<string | null>(null);
+  /**
+   * 重填(第 2 份及以后):只来自上一次、这一份还没存的那几道背景题 —— 卡片上标「上次的选择」。
+   * 学员重新点了哪一题,那一题走平常的逐题保存、从这里拿掉;没动过的,在「提交」那一下替他存进这一份(lib/retakePrefill.ts)。
+   */
+  const [prefilled, setPrefilled] = useState<ReadonlySet<string>>(() => new Set());
+  /** 「提交」:要先存沿用的背景题时有一次往返 —— 等待期间再按无效 */
+  const { run: runSubmit, busy: submitting } = useSingleFlight();
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   /** 题目区的容器 —— 分段「进入视口才淡入」在它里面找 data-reveal */
@@ -96,10 +104,12 @@ export default function Quiz() {
         }
         sessionIdRef.current = s.sessionId;
         setSnapshot(s);
-        // 回填服务端已有的答案,并标记为已保存
-        const merged = { ...s.profile, ...s.answers };
-        setAnswers(merged);
-        setSaveState(Object.fromEntries(Object.keys(merged).map((k) => [k, 'saved'])));
+        // 回填服务端已有的答案,并标记为已保存;重填时没存过的背景题先填上一次的(只是初始值,不标「已保存」)
+        const init = quizInitial(s, PROFILE_IDS);
+        setAnswers(init.answers);
+        setPrefilled(new Set(init.prefilled));
+        const saved = { ...s.profile, ...s.answers };
+        setSaveState(Object.fromEntries(Object.keys(saved).map((k) => [k, 'saved'])));
       })
       .catch((err) => {
         if (!alive) return;
@@ -162,6 +172,13 @@ export default function Quiz() {
   function choose(kind: 'profile' | 'question', id: string, optionIndex: number) {
     const target = segmentAdvance(SEGMENTS, answeredSet, id);
     setAnswers((prev) => ({ ...prev, [id]: optionIndex }));
+    // 重新点过的背景题不再是「上次的选择」—— 它这就存进这一份了
+    setPrefilled((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     const tappedAt = performance.now();
     const scrollAt = window.scrollY;
     save(kind, id, optionIndex, target ? () => glideTo(target, tappedAt, scrollAt) : undefined);
@@ -199,7 +216,7 @@ export default function Quiz() {
   const canSubmit =
     !saving && [...PROFILE_IDS, ...QUESTION_IDS].every((id) => id in answers && saveState[id] !== 'error');
 
-  function submit() {
+  async function submit() {
     const all = [...PROFILE_IDS, ...QUESTION_IDS];
     // 1. 有没有没答的
     const unanswered = all.filter((id) => !(id in answers));
@@ -219,6 +236,27 @@ export default function Quiz() {
       setSubmitNote(tk('quiz.someFailed').replace('{n}', String(failed.length)));
       jumpTo(failed[0]);
       return;
+    }
+    /**
+     * 4. 重填:学员沿用的上一次的背景题,在这一下存进这一份(一次请求,服务端合并)。
+     * 预填只是初始值 —— 提交才算答了(Viho 的第 3 个决定);没存上就停在这里,与别的保存失败一样可以重试。
+     */
+    const keep = prefillToSave(prefilled, answers, saveState);
+    const keepIds = Object.keys(keep);
+    if (keepIds.length) {
+      setSaveState((prev) => ({ ...prev, ...Object.fromEntries(keepIds.map((id) => [id, 'saving' as const])) }));
+      try {
+        await quizApi.saveProfiles(keep, sessionIdRef.current ?? '');
+        setSaveState((prev) => ({ ...prev, ...Object.fromEntries(keepIds.map((id) => [id, 'saved' as const])) }));
+        setPrefilled(new Set());
+      } catch (err) {
+        if (err instanceof QuizAuthError) return onAuthLost();
+        if (err instanceof SessionGuardError) return onGuard(err.kind);
+        setSaveState((prev) => ({ ...prev, ...Object.fromEntries(keepIds.map((id) => [id, 'error' as const])) }));
+        setSubmitNote(tk('quiz.someFailed').replace('{n}', String(keepIds.length)));
+        jumpTo(keepIds[0]);
+        return;
+      }
     }
     navigate(`/survey?lang=${locale}`, { replace: true });
   }
@@ -276,6 +314,11 @@ export default function Quiz() {
       </div>
 
       <p className="font-body text-sm opacity-70">{tk('quiz.intro')}</p>
+      {snapshot.prefill && (
+        <p className="border-brutal border-line bg-paper p-3 font-body text-sm">
+          {tk('quiz.retakeIntro').replace('{n}', String(snapshot.attemptNo ?? ''))}
+        </p>
+      )}
 
       <Section title={tk('quiz.profileSectionTitle')}>
         {PROFILE.map((p) => (
@@ -286,6 +329,7 @@ export default function Quiz() {
             options={locale === 'en' ? p.en.options : p.zh.options}
             selected={answers[p.id]}
             state={saveState[p.id]}
+            prefilledLabel={prefilled.has(p.id) ? tk('quiz.prefilled') : undefined}
             onChoose={(i) => choose('profile', p.id, i)}
             onRetry={() => retry('profile', p.id)}
             savedLabel={tk('quiz.saved')}
@@ -327,7 +371,14 @@ export default function Quiz() {
           * 是在用文字纠正一个视觉承诺,而人先看颜色再读字。所以:没答完或还在保存时
           * 直接置灰禁用,全部落库才变黄可点。
           */}
-        <Button variant="primary" block onClick={submit} disabled={!canSubmit}>
+        <Button
+          variant="primary"
+          block
+          onClick={() => void runSubmit(submit)}
+          disabled={!canSubmit && !submitting}
+          busy={submitting}
+          busyLabel={tk('quiz.saving')}
+        >
           {saving ? tk('quiz.savingOne') : tk('quiz.submit')}
         </Button>
       </div>
@@ -357,6 +408,7 @@ function QuestionCard({
   options,
   selected,
   state,
+  prefilledLabel,
   onChoose,
   onRetry,
   savedLabel,
@@ -369,6 +421,8 @@ function QuestionCard({
   options: string[];
   selected: number | undefined;
   state: SaveState | undefined;
+  /** 重填:这一题的选择来自上一次、这一份还没存 —— 徽章写「上次的选择」 */
+  prefilledLabel?: string;
   onChoose: (i: number) => void;
   onRetry: () => void;
   savedLabel: string;
@@ -386,6 +440,7 @@ function QuestionCard({
             <h3 className="font-head text-base font-bold leading-snug md:text-lg">{question}</h3>
             {view.badge === 'saved' && <Badge tone="muted">{savedLabel}</Badge>}
             {view.badge === 'saving' && <Badge tone="muted">{savingLabel}</Badge>}
+            {view.badge === null && !view.failed && prefilledLabel && <Badge tone="muted">{prefilledLabel}</Badge>}
           </div>
           <RadioGroup
             value={selected === undefined ? '' : String(selected)}
