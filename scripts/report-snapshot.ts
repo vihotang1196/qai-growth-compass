@@ -22,7 +22,7 @@
  * 与「报告看的那份」的规则);迁移 20261014100000 上线之前用它会直接报错。
  *
  * 【每个人用什么标识】entitlement id 的 md5 前 12 位。不取姓名、电话、邮箱、token、GHL contact id、
- * 任何原始 id;查询走 calibration/lib 的 `query`(只读由语法保证 + 个人字段拦截)。
+ * 任何原始 id;查询走 calibration/lib 的 `queryOwnAttemptChoice`(只读由语法保证 + 个人字段拦截;取哪一份由下面两种读法自己写明)。
  *
  * 【范围】每一个 entitlement,都带 test 标记。比对时真实学员与测试数据分开报 ——
  * 「真实学员的报告一个字都没变」是要证明的那句话,测试数据的变化只列出来。
@@ -31,7 +31,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
-import { config, query } from './calibration/lib.ts';
+import { config, queryOwnAttemptChoice as query } from './calibration/lib.ts';
 import { buildBaselinePools, type RawBaselineRow } from '../supabase/functions/_shared/baselinePools.ts';
 import { cohortStanding, dimensionDiffs, selectBaseline } from '../src/lib/reportStats.ts';
 import { perQuestionScore } from '../src/lib/scoring.ts';

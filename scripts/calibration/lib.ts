@@ -114,9 +114,29 @@ const WRITE_WORDS = /\b(insert|update|delete|merge|alter|drop|create|truncate|gr
 
 /** 只读查询,返回行。见文件头:包进 FROM 子查询 + 关键词检查 + 个人字段检查 */
 export function query<T = Record<string, unknown>>(sql: string): T[] {
+  assertReadOnly(sql);
+  assertAttemptChosen(sql);
+  return send<T>(sql);
+}
+
+/**
+ * 同一条只读路径(写操作 + 个人字段两道检查照旧),**只是不要求 `--attempt` 的标记** ——
+ * 给自己在 SQL 里决定取哪一份的工具用:`scripts/report-snapshot.ts` 的两种读法(legacy / latest)各自写明了取哪一份。
+ * (重填第 4 步加那道检查时漏看了这个调用方,`npm run snapshot:reports` 因此报错,2026-10-16 第 5 步之前发现。)
+ * 校准脚本一律用上面的 `query`。
+ */
+export function queryOwnAttemptChoice<T = Record<string, unknown>>(sql: string): T[] {
+  assertReadOnly(sql);
+  return send<T>(sql);
+}
+
+/** 写操作与个人字段:两条入口都先过这两道(顺序在前 —— 一条写语句先因为「写」被拒,不因为别的) */
+function assertReadOnly(sql: string): void {
   if (WRITE_WORDS.test(sql)) throw new Error('查询里出现了写操作关键词,拒绝执行');
   assertNoPersonalColumns(sql);
-  assertAttemptChosen(sql);
+}
+
+function send<T>(sql: string): T[] {
   const wrapped = `select * from (${sql}) as q`;
   const r = spawnSync('supabase', ['db', 'query', '--linked', wrapped], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new Error(`没能运行 supabase CLI:${r.error.message}(要先装好 CLI、登录、在仓库里 supabase link)`);
