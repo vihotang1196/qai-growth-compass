@@ -4,6 +4,7 @@
  *   npm run calib:priority                 # 真实学员(默认)
  *   npm run calib:priority -- --scope=test # 只跑测试批次
  *   npm run calib:priority -- --cohort=<uuid> [--json]
+ *   npm run calib:priority -- --attempt=first   # 每人第一份(--attempt=all 每一份;默认 latest = 每人最新完成的一份)
  *
  * 「想修的」= 问卷 S1 选的维度(priority_dimension);「该修的」= 计分算出的最弱维度。
  * 现有判据(线上的 `isPriorityMismatch`,api/_lib/surveySignals.ts):priority ≠ weakest[0]。
@@ -22,7 +23,7 @@
  * 只取 S1 与 S7 两个选择题字段,问卷的开放题原文不取。
  */
 import { isHighIntent, isPriorityMismatch, priorityAlignment } from '../../api/_lib/surveySignals.ts';
-import { config, header, parseArgs, pct, query, scopeWhere, table } from './lib.ts';
+import { config, header, parseArgs, pct, query, scopeWhere, table, attemptWhere } from './lib.ts';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -35,7 +36,7 @@ const raw = query<{ weakest: string[]; strongest: string[]; dim_scores: Record<s
   join assessment_entitlements e on e.id = s.entitlement_id
   left join assessment_cohorts c on c.id = e.cohort_id
   left join assessment_survey v on v.session_id = r.session_id
-  where ${scopeWhere(args.scope)}
+  where ${scopeWhere(args.scope)} and ${attemptWhere(args.attempt)}
 `);
 
 const withPriority = raw.filter((r) => typeof r.priority === 'string' && r.priority.length > 0);

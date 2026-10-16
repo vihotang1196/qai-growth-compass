@@ -21,10 +21,11 @@ import { aggregateCohort } from '../_shared/cohortAggregate.ts';
 import { buildFunnel, type FunnelRowInput } from '../_shared/funnel.ts';
 import { isHighIntent, priorityAlignment } from '../_shared/surveySignals.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
-import { asRows, latestPerEntitlement, pickReportAttempt } from '../_shared/attempts.ts';
+import { asRows, attemptsNewestFirst, latestPerEntitlement, pickReportAttempt, retakenPeople } from '../_shared/attempts.ts';
+import { rosterCsv, type RosterAttempt, type RosterRow } from '../_shared/rosterCsv.ts';
 import { classifyError } from '../_shared/errorKind.ts';
 import { dbFail } from '../_shared/dbError.ts';
-import { LANGS, parseLang } from '../_shared/lang.ts';
+import { parseLang } from '../_shared/lang.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
@@ -43,48 +44,6 @@ function json(body: unknown, status = 200): Response {
 // 一个英文客户收到中文消息,而没有任何东西会说
 const SEND_COLS =
   'id, ghl_contact_id, access_token, name, phone_e164, email_lower, status, access_revoked_at, lang';
-
-interface RosterRow {
-  id: string;
-  name: string | null;
-  /** 这个人的语言(zh / en)—— 语言跟着人走,见 _shared/lang.ts */
-  lang?: string | null;
-  /** webhook 最近一次写入时的告警,jsonb 数组。名单页负责让它可见 */
-  warnings?: unknown;
-  phone_e164: string | null;
-  phone_raw: string | null;
-  email_lower: string | null;
-  status: string;
-  first_login_at: string | null;
-  completed_at: string | null;
-  link_sent_at: string | null;
-  access_revoked_at: string | null;
-  cohort: { id: string; name: string; is_test: boolean } | null;
-  session: {
-    id: string;
-    status: string;
-    attempt_no?: number | null;
-    result: {
-      total: number;
-      tier: string;
-      weakest: string[];
-    } | null;
-    /**
-     * 每种语言一行报告文件。**PDF 的状态从这里来,不再从 result 上来** ——
-     * 一个 session 有两份,而 result 只有一行,放不下两个状态。
-     * 一行都没有是正常的(finalize 之后那次异步渲染还没落库,或者根本还没答完)。
-     */
-    files: {
-      lang: string;
-      pdf_status: string;
-      pdf_path: string | null;
-      pdf_attempts: number | null;
-      pdf_last_error: string | null;
-      /** 分享卡失败原因。【非空不代表 PDF 失败】—— 两者分开,CSV 里也是两列 */
-      share_card_error: string | null;
-    }[];
-  } | null;
-}
 
 /**
  * 下面三个是 PostgREST 嵌套查询的**最小**返回形状 —— 只写下游真正读到的字段。
@@ -143,6 +102,8 @@ interface DashboardResultRow {
   weakest: string[];
   cohort_id: string | null;
   cohort_is_test: boolean | null;
+  /** 重填第 4 步:「其中重填过的 N 人」用它(最新完成的一份不是第 1 份) */
+  attempt_no: number | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -748,7 +709,7 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
    */
   const { data: resultRows, error: rErr } = await supa
     .from('assessment_latest_results')
-    .select('session_id, dim_scores, total, tier, weakest, cohort_id, cohort_is_test');
+    .select('session_id, dim_scores, total, tier, weakest, cohort_id, cohort_is_test, attempt_no');
   if (rErr) dbFail({ fn: FN, op: 'assessment_latest_results.select (cohort_dashboard)' }, rErr);
 
   const rows = (resultRows ?? []) as unknown as DashboardResultRow[];
@@ -790,6 +751,11 @@ async function cohortDashboard(supa: ReturnType<typeof serviceClient>, scope: st
     selectedName: scope === 'all' ? null : (selected?.name ?? null),
     cohorts: cohortRows ?? [],
     aggregate,
+    /**
+     * 「其中重填过的 N 人」(重填第 4 步,方案第 3 节「批次统计」)。与 `aggregate.n` 同一批行(同一范围、每人最新完成的一份),
+     * 所以 N ≤ n,而且 n 不会因为重填变大。放在 aggregate 外面:现场模式复用 aggregate,投影那一屏不加这一句。
+     */
+    retakenPeople: retakenPeople(inScope),
   };
 }
 
@@ -814,6 +780,8 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
          id,
          status,
          attempt_no,
+         completed_at,
+         created_at,
          result:assessment_results(total, tier, weakest),
          files:assessment_report_files(lang, pdf_status, pdf_path, pdf_attempts, pdf_last_error, share_card_error)
        )`,
@@ -824,11 +792,14 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
   /**
    * 【嵌套回来的 session 先统一成「报告看的那一份」】(重填第 1 步)一人一行,显示最新完成的那份;
    * 一人多份之后 PostgREST 会回数组,「复制报告链接」「重新生成 PDF」会悄悄拿到 undefined 的 id。
-   * 今天每人最多一份,挑出来的就是那一份(行里多了 `attempt_no`,值都是 1;页面与 CSV 不读它)。
+   * 【`attempts` = 这个人的每一份,编号从大到小】(重填第 4 步)给名单的「第几次」与「历次」、CSV 的重填两列。
+   * `session` 是 `attempts` 里的一个元素(同一个对象),不是另取的一份。
    */
-  const rows = ((data ?? []) as unknown as (Omit<RosterRow, 'session'> & { session: unknown })[]).map(
-    (r) => ({ ...r, session: pickReportAttempt(asRows(r.session as RosterRow['session'])) }),
-  ) as RosterRow[];
+  const rows = ((data ?? []) as unknown as (Omit<RosterRow, 'session' | 'attempts'> & { session: unknown })[]).map((r) => {
+    const { session, ...rest } = r;
+    const all = attemptsNewestFirst(asRows(session as RosterAttempt | RosterAttempt[] | null));
+    return { ...rest, session: pickReportAttempt(all), attempts: all };
+  }) as RosterRow[];
   /**
    * 【统计只看真实行】号码解析失败率是一条运营阈值(>2% 就说明 GHL 里号码质量比预期差),
    * 而测试数据的号码是我们自己造的、必然干净 —— 混进去只会把比例稀释,
@@ -853,57 +824,4 @@ async function roster(supa: ReturnType<typeof serviceClient>) {
       thresholdExceeded: total > 0 && unparseablePhones / total > 0.02,
     },
   };
-}
-
-/**
- * 报告文件那几列 —— **按语言展开,列名由 `LANGS` 推导**。
- *
- * 【为什么不合成一列】一个 session 现在有两份 PDF,而这份 CSV 是拿去做分群和人工排查的。
- * 合成 `zh=ready; en=absent` 这种字符串之后,「筛出英文版没好的人」就得靠人眼解析 ——
- * 而那正是导出要替人做的事。
- *
- * 【为什么列名从 LANGS 推导】以后加一种语言,列会自动出现;
- * 手写列名的话新语言的数据会**静默不出现在导出里**(判断标准 12)。
- */
-function fileColumns(): string[] {
-  return [...LANGS.flatMap((l) => [`PDF 状态(${l})`, `PDF 错误(${l})`]), '分享卡错误'];
-}
-
-function fileCells(r: RosterRow): (string | null)[] {
-  const byLang = new Map((r.session?.files ?? []).map((f) => [f.lang, f]));
-  const cells: (string | null)[] = [];
-  for (const l of LANGS) {
-    const f = byLang.get(l);
-    // 【没有那一行就写 absent,不写空】空单元格分不清「没有」与「导出漏了」
-    cells.push(f?.pdf_status ?? 'absent', f?.pdf_last_error ?? null);
-  }
-  // 分享卡的错误哪种语言的都算 —— 它是附属品,分两列反而让人以为要分别处理
-  const cardErrors = (r.session?.files ?? [])
-    .filter((f) => f.share_card_error)
-    .map((f) => `${f.lang}: ${f.share_card_error}`);
-  cells.push(cardErrors.length ? cardErrors.join(' | ') : null);
-  return cells;
-}
-
-function rosterCsv(rows: RosterRow[]): string {
-  return toCsv(
-    ['姓名', '手机', '手机原值', '邮箱', '批次', '状态', '登录时间', '完成时间', '总分', '档位', '最弱维度', '已停用', ...fileColumns()],
-    rows.map((r) => [
-      r.name,
-      r.phone_e164,
-      // 解析失败时原值才是唯一线索,导出必须带上
-      r.phone_e164 ? null : r.phone_raw,
-      r.email_lower,
-      r.cohort?.name ?? null,
-      r.status,
-      r.first_login_at,
-      r.completed_at,
-      r.session?.result?.total ?? null,
-      r.session?.result?.tier ?? null,
-      r.session?.result?.weakest?.join(' / ') ?? null,
-      r.access_revoked_at ? 'yes' : null,
-      // 分享卡失败不影响 PDF,所以它仍然单独一列 —— 混进 PDF 那列会让人以为 PDF 也坏了
-      ...fileCells(r),
-    ]),
-  );
 }

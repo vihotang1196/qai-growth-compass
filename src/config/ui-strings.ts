@@ -485,6 +485,22 @@ export const UI_STRINGS = {
   'admin.col.tier': { zh: '档位', en: 'Tier' },
   'admin.col.weakest': { zh: '最弱维度', en: 'Weakest' },
   'admin.col.actions': { zh: '操作', en: 'Actions' },
+  // ── 重填第 4 步:名单的「第几次」与历次(docs/retake-design.md 第 3 节「后台名单」)──
+  'admin.col.attempt': { zh: '第几次', en: 'Attempt' },
+  'admin.attempt.n': { zh: '第 {n} 次', en: 'Attempt {n}' },
+  /** 点开历次的开关 —— 数字是这个人一共几份(含没做完的那份) */
+  'admin.attempt.history': { zh: '历次 {n}', en: 'All {n}' },
+  /** 短:这一格的宽度不该由少数人(重填做到一半的)决定;第几次写在悬停提示与历次里 */
+  'admin.attempt.open': { zh: '重填中', en: 'Retaking' },
+  'admin.attempt.openTitle': { zh: '第 {n} 次还没做完', en: 'Attempt {n} not finished yet' },
+  'admin.attempt.title': { zh: '历次答题记录(新的在前)', en: 'All attempts (newest first)' },
+  'admin.attempt.note': {
+    zh: '每一行的按钮只作用在那一份上。以前的那几份只能重新生成已有的文件 —— 与学员那边一样,另一种语言只给最新的一份。',
+    en: 'Each line\'s buttons act on that attempt only. Earlier attempts can only re-generate files they already have — as on the learner\'s side, the other language is only offered for the latest one.',
+  },
+  'admin.attempt.shown': { zh: '名单显示这一份', en: 'Shown in the list' },
+  'admin.attempt.inProgress': { zh: '进行中 · 开始于 {time}', en: 'In progress · started {time}' },
+  'admin.attempt.completedAt': { zh: '完成于 {time}', en: 'Finished {time}' },
   'admin.col.pdf': { zh: 'PDF', en: 'PDF' },
   'admin.action.renderPdf': { zh: '重新生成 PDF', en: 'Re-generate PDF' },
   'admin.pdf.rendering': { zh: '生成中', en: 'Rendering' },
@@ -553,6 +569,8 @@ export const UI_STRINGS = {
   'dash.scope.all': { zh: '全部批次(不含测试)', en: 'All cohorts (excluding test)' },
   'dash.testWarning': { zh: '你正在看测试 / 演示批次 —— 下面所有数字都是造的', en: 'You are viewing a TEST cohort — every number below is fabricated' },
   'dash.n': { zh: '本批 {n} 人已完成', en: '{n} completed in this cohort' },
+  /** 重填第 4 步:看板上「其中重填过的 N 人」—— 每人只算最新完成的一份,所以 n 不会因为重填变大 */
+  'dash.retaken': { zh: '其中 {n} 人重填过(每人只算最新完成的一份)', en: '{n} of them retook it (each person counts once, by their latest)' },
   'dash.avgTotal': { zh: '平均总分', en: 'Average total' },
   'dash.section.radar': { zh: '五维平均', en: 'Dimension averages' },
   'dash.section.tier': { zh: '档位分布', en: 'Tier distribution' },

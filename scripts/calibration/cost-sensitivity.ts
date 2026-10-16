@@ -4,6 +4,7 @@
  *   npm run calib:cost                 # 真实学员(默认)
  *   npm run calib:cost -- --scope=test # 只跑测试批次
  *   npm run calib:cost -- --cohort=<uuid> [--json]
+ *   npm run calib:cost -- --attempt=first   # 每人第一份(--attempt=all 每一份;默认 latest = 每人最新完成的一份)
  *
  * 金额用线上同一套函数算:`computeCosts`(只对得分 < 3.0 的维度出一条)+ `roundToSignificant`
  * (报告里显示的是取整到 2 位有效数字的数)。L(月询盘)与 V(客单价)按 P2 / P3 的 value_map 解析,
@@ -19,7 +20,7 @@
  * 以及门槛变动时有多少条出现 / 消失。
  */
 import { computeCosts, roundToSignificant, type CostRule } from '../../src/lib/reportContent.ts';
-import { config, fmt, header, parseArgs, pct, quantile, query, scopeWhere, table } from './lib.ts';
+import { config, fmt, header, parseArgs, pct, quantile, query, scopeWhere, table, attemptWhere } from './lib.ts';
 
 const args = parseArgs(process.argv.slice(2));
 const P2 = config.profile_questions.find((p) => p.id === 'P2')!.value_map as number[];
@@ -32,7 +33,7 @@ const raw = query<{ dim_scores: Record<string, number>; p2: string | null; p3: s
   join assessment_sessions s on s.id = r.session_id
   join assessment_entitlements e on e.id = s.entitlement_id
   left join assessment_cohorts c on c.id = e.cohort_id
-  where ${scopeWhere(args.scope)}
+  where ${scopeWhere(args.scope)} and ${attemptWhere(args.attempt)}
 `);
 
 /** 与报告端点的 fromValueMap 相同:下标越界 / 缺失 → null */

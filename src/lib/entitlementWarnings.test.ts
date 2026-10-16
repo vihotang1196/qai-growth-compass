@@ -85,6 +85,8 @@ function render(row: RosterRowData, errorOpen = false): string {
           busy: false,
           errorOpen,
           onToggleError: () => {},
+          historyOpen: false,
+          onToggleHistory: () => {},
           onResend: () => {},
           onRotate: () => {},
           onRevoke: () => {},

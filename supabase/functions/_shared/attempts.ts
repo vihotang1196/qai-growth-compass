@@ -86,3 +86,19 @@ export function latestPerEntitlement<T>(
   }
   return out;
 }
+
+/**
+ * 名单的「历次」(重填第 4 步):这个人的每一份,attempt_no 从大到小(没做完的那份也在,它的编号最大)。不改原数组。
+ */
+export function attemptsNewestFirst<T extends { attempt_no?: number | null }>(rows: readonly T[]): T[] {
+  return newestFirst(rows);
+}
+
+/**
+ * 看板的「其中重填过的 N 人」(重填第 4 步):传入每人最新完成的那一份(视图 `assessment_latest_results` 的行),
+ * 数 attempt_no > 1 的 —— 最新完成的一份不是第 1 份 ⇔ 至少完成过一次重填(放弃的那份被删、编号重用,所以编号连续)。
+ * 只开始了重填、还没完成的人不算(他最新完成的仍是第 1 份)。没有 attempt_no 的行按第 1 份算。
+ */
+export function retakenPeople(latestRows: readonly { attempt_no?: number | null }[]): number {
+  return latestRows.filter((r) => attemptNo(r) > 1).length;
+}

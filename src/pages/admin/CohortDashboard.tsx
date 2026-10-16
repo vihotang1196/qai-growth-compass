@@ -27,6 +27,8 @@ export interface DashboardPayload {
   selectedName: string | null;
   cohorts: { id: string; name: string; is_test: boolean; event_date: string | null }[];
   aggregate: CohortAggregatePayload;
+  /** 其中重填过的人数(重填第 4 步;与 aggregate.n 同一批行)。旧版服务端没有这个键 */
+  retakenPeople?: number;
 }
 
 /**
@@ -39,6 +41,20 @@ export interface DashboardPayload {
  * 【比例不在响应里就渲不出来】样本不足时服务端把 topShare 置 null,
  * 所以这里没有「记得别显示百分比」这回事 —— 那个数字压根不存在。
  */
+/**
+ * 看板顶上那一行的人数(重填第 4 步加「其中重填过的 N 人」)。抽成组件是为了能直接渲来断言(CohortDashboard 自己在 SSR 下只有 loading 态)。
+ * `retaken` 缺 = 服务端还是旧版(函数先部署、页面后部署的那几分钟)—— 那时只写人数。
+ */
+export function DashboardSample({ n, retaken }: { n: number; retaken?: number | null }) {
+  const { tk } = useT();
+  return (
+    <span className="font-body text-sm opacity-70">
+      {tk('dash.n').replace('{n}', String(n))}
+      {typeof retaken === 'number' && ` · ${tk('dash.retaken').replace('{n}', String(retaken))}`}
+    </span>
+  );
+}
+
 export default function CohortDashboard({ onAuthLost }: { onAuthLost: (forbidden: boolean) => void }) {
   const { tk, locale } = useT();
   const [scope, setScope] = useState('all');
@@ -129,9 +145,7 @@ export default function CohortDashboard({ onAuthLost }: { onAuthLost: (forbidden
               </option>
             ))}
           </select>
-          <span className="font-body text-sm opacity-70">
-            {tk('dash.n').replace('{n}', String(a.n))}
-          </span>
+          <DashboardSample n={a.n} retaken={data.retakenPeople} />
           {a.averageTotal !== null && (
             <span className="font-head font-bold">
               {tk('dash.avgTotal')} {a.averageTotal.toFixed(1)}

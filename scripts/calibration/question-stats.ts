@@ -4,6 +4,7 @@
  *   npm run calib:questions                 # 真实学员(默认)
  *   npm run calib:questions -- --scope=test # 只跑测试批次
  *   npm run calib:questions -- --cohort=<uuid> [--json]
+ *   npm run calib:questions -- --attempt=first   # 每人第一份(--attempt=all 每一份;默认 latest = 每人最新完成的一份)
  *
  * 只看**已出分**的人(有 assessment_results 的 session),每题的分数用线上同一个 `perQuestionScore`。
  *
@@ -15,7 +16,7 @@
  * 末尾的「提示」只是按固定阈值标出来值得看的题,不是结论(样本小时相关系数很不稳)。
  */
 import { perQuestionScore } from '../../src/lib/scoring.ts';
-import { config, fmt, header, mean, parseArgs, pct, pearson, query, scopeWhere, table } from './lib.ts';
+import { config, fmt, header, mean, parseArgs, pct, pearson, query, scopeWhere, table, attemptWhere } from './lib.ts';
 
 const args = parseArgs(process.argv.slice(2));
 const SCALE = config.meta.per_question_scale;
@@ -27,7 +28,7 @@ const rows = query<{ k: string; question_id: string; option_index: number }>(`
     join assessment_sessions s on s.id = r.session_id
     join assessment_entitlements e on e.id = s.entitlement_id
     left join assessment_cohorts c on c.id = e.cohort_id
-    where ${scopeWhere(args.scope)}
+    where ${scopeWhere(args.scope)} and ${attemptWhere(args.attempt)}
   )
   select b.k::text as k, a.question_id, a.option_index
   from base b join assessment_answers a on a.session_id = b.session_id

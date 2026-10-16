@@ -4,6 +4,7 @@
  *   npm run calib:baseline                 # 真实学员(默认):每个真实批次 + 全部真实学员
  *   npm run calib:baseline -- --scope=test # 只跑测试批次
  *   npm run calib:baseline -- --cohort=<uuid> [--json]
+ *   npm run calib:baseline -- --attempt=first   # 每人第一份(--attempt=all 每一份;默认 latest = 每人最新完成的一份)
  *
  * 「现在用的」= 报告端点用的同一个函数 `selectBaseline`(src/lib/reportStats.ts):
  * 本批已出分 ≥ min_n_for_baseline(10)就用本批的**均值**,否则用全部真实学员的均值。
@@ -16,7 +17,7 @@
  * 报告用的是全部真实学员的均值,而这里不去取它(只跑测试批次的模式不该读到真实学员)。
  */
 import { selectBaseline, type ResultRow } from '../../src/lib/reportStats.ts';
-import { config, fmt, header, parseArgs, quantile, query, scopeWhere, table, trimmedMean, mean } from './lib.ts';
+import { config, fmt, header, parseArgs, quantile, query, scopeWhere, table, trimmedMean, mean, attemptWhere } from './lib.ts';
 
 const args = parseArgs(process.argv.slice(2));
 const DIMS = config.dimensions.map((d) => d.key);
@@ -37,7 +38,7 @@ const raw = query<Row>(`
   join assessment_sessions s on s.id = r.session_id
   join assessment_entitlements e on e.id = s.entitlement_id
   left join assessment_cohorts c on c.id = e.cohort_id
-  where ${scopeWhere(args.scope)}
+  where ${scopeWhere(args.scope)} and ${attemptWhere(args.attempt)}
 `);
 const toRow = (r: Row): ResultRow => ({ dimensions: r.dim_scores, total: Number(r.total), tier: r.tier });
 

@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LocaleProvider } from '@/lib/i18n';
 import { UI_STRINGS } from '@/config/ui-strings';
-import RosterRow, { type RosterRowData } from '@/pages/admin/RosterRow';
+import RosterRow, { ROSTER_COLUMNS, type RosterRowData } from '@/pages/admin/RosterRow';
 
 /**
  * 断言落在**真实的行标记**上,不是测试里另写一份差不多的副本 —— 判断标准 4 与 8。
@@ -79,7 +79,7 @@ function makeRow(over: Partial<RosterRowData> = {}): RosterRowData {
   };
 }
 
-function render(row: RosterRowData, errorOpen = false): string {
+function render(row: RosterRowData, errorOpen = false, historyOpen = false): string {
   const noop = () => {};
   return renderToStaticMarkup(
     createElement(
@@ -95,7 +95,9 @@ function render(row: RosterRowData, errorOpen = false): string {
             row,
             busy: false,
             errorOpen,
+            historyOpen,
             onToggleError: noop,
+            onToggleHistory: noop,
             onResend: noop,
             onRotate: noop,
             onRevoke: noop,
@@ -343,5 +345,112 @@ describe('the re-generate button keeps its place instead of appearing and disapp
     // 反向锁:上面两条不是恒真 —— 没答完的人本来就没有 PDF 可言
     const html = render(makeRow({ session: { id: 's', status: 'in_progress', result: null } }));
     expect(html).not.toContain(zh('admin.pdf.rendering'));
+  });
+});
+
+// ── 重填第 4 步:「第几次」那一格与「历次」──────────────────────────────
+
+type Attempt = NonNullable<RosterRowData['attempts']>[number];
+const attemptRow = (no: number, status: string, total: number | null, files = makeFiles()): Attempt => ({
+  id: `ses-${no}`,
+  status,
+  attempt_no: no,
+  completed_at: status === 'completed' ? `2026-10-1${3 + no}T06:0${no}:00+00:00` : null,
+  created_at: `2026-10-1${3 + no}T05:5${no}:00+00:00`,
+  result: total === null ? null : { total, tier: 'spot', weakest: ['traffic'] },
+  files: total === null ? [] : files,
+});
+
+/** 主行的每一格(按 <td 切)—— 「第几次」那一格的位置从 ROSTER_COLUMNS 算,不写死 */
+function cellAt(html: string, key: (typeof ROSTER_COLUMNS)[number]): string {
+  const tds = mainRow(html).split('<td').slice(1);
+  return tds[ROSTER_COLUMNS.indexOf(key)];
+}
+
+const zhN = (k: keyof typeof UI_STRINGS, n: number | string) => zh(k).replace('{n}', String(n));
+
+describe('the attempt column', () => {
+  it('sits right after the completed-at column, and the header list is the single source of the column count', () => {
+    expect(ROSTER_COLUMNS.indexOf('admin.col.attempt')).toBe(ROSTER_COLUMNS.indexOf('admin.col.completed') + 1);
+    const html = render(ready());
+    expect(mainRow(html).split('<td').length - 1).toBe(ROSTER_COLUMNS.length);
+  });
+
+  it("today's row (one finished attempt): attempt 1, nothing to expand", () => {
+    const one = attemptRow(1, 'completed', 3.4);
+    const cell = cellAt(render(makeRow({ session: one, attempts: [one] })), 'admin.col.attempt');
+    expect(cell).toContain(zhN('admin.attempt.n', 1));
+    expect(cell).not.toContain(zhN('admin.attempt.history', 1).split(' ')[0]);
+    expect(cell).not.toContain('aria-expanded');
+  });
+
+  it('a retaker with an unfinished retake: the shown attempt, a toggle with the total count, and the open one named', () => {
+    const second = attemptRow(2, 'completed', 5);
+    const html = render(makeRow({ session: second, attempts: [attemptRow(3, 'in_progress', null), second, attemptRow(1, 'completed', 2.5)] }));
+    const cell = cellAt(html, 'admin.col.attempt');
+    expect(cell).toContain(zhN('admin.attempt.n', 2));
+    expect(cell).toContain(zhN('admin.attempt.history', 3));
+    expect(cell).toContain('aria-expanded="false"');
+    expect(cell).toContain('aria-controls="history-ent-1"');
+    expect(cell).toContain(zh('admin.attempt.open'));
+    expect(cell).toContain(`title="${zhN('admin.attempt.openTitle', 3)}"`);
+    // 总分那一格是第 2 份的
+    expect(cellAt(html, 'admin.col.total')).toContain('>5<');
+  });
+
+  it('nobody finished yet: a dash', () => {
+    const first = attemptRow(1, 'in_progress', null);
+    const cell = cellAt(render(makeRow({ status: 'started', session: first, attempts: [first] })), 'admin.col.attempt');
+    expect(cell).toContain('—');
+    expect(cell).not.toContain(zhN('admin.attempt.n', 1));
+  });
+});
+
+describe('the expanded history', () => {
+  const second = attemptRow(2, 'completed', 5);
+  const olderFailed = attemptRow(1, 'completed', 2.5, makeFiles({ pdf_status: 'failed', pdf_path: null, pdf_last_error: 'boom' }));
+  const retaker = () => makeRow({ session: second, attempts: [attemptRow(3, 'in_progress', null), second, olderFailed] });
+  const detail = (html: string) => html.slice(html.indexOf('id="history-ent-1"'));
+
+  it('is not there until opened', () => {
+    expect(render(retaker())).not.toContain('id="history-ent-1"');
+    expect(render(retaker(), false, true)).toContain('aria-expanded="true"');
+  });
+
+  it('opened: a full-width row listing every attempt newest first, the shown one and the open one marked', () => {
+    const html = render(retaker(), false, true);
+    // 跨的格数 = 主行真实渲出来的 <td> 个数(与上面详情行那条同一个理由:不拿 ROSTER_COLUMNS 和自己比)
+    const cells = (mainRow(html).match(/<td/g) ?? []).length;
+    const d = detail(html);
+    const historyTd = html.slice(html.lastIndexOf('<td', html.indexOf('id="history-ent-1"')), html.indexOf('id="history-ent-1"'));
+    expect(historyTd.toLowerCase()).toContain(`colspan="${cells}"`);
+    const at = (n: number) => d.indexOf(zhN('admin.attempt.n', n));
+    expect(at(3)).toBeGreaterThan(-1);
+    expect(at(3)).toBeLessThan(at(2));
+    expect(at(2)).toBeLessThan(at(1));
+    expect(d).toContain(zh('admin.attempt.inProgress').replace('{time}', '2026-10-16 05:53'));
+    expect(d).toContain(zh('admin.attempt.completedAt').replace('{time}', '2026-10-15 06:02'));
+    expect(d).toContain(zh('admin.attempt.completedAt').replace('{time}', '2026-10-14 06:01'));
+    expect(d.split(zh('admin.attempt.shown')).length - 1).toBe(1);
+    expect(d.indexOf(zh('admin.attempt.shown'))).toBeGreaterThan(at(2));
+    expect(d.indexOf(zh('admin.attempt.shown'))).toBeLessThan(at(1));
+    expect(d).toContain(zh('admin.attempt.note'));
+  });
+
+  it('each finished attempt can open its own report; the open one cannot', () => {
+    const d = detail(render(retaker(), false, true));
+    expect(d.split(zh('admin.action.report')).length - 1).toBe(2);
+  });
+
+  it('the earlier attempt offers to re-generate the file it has (zh, failed) but not the language it never had', () => {
+    const d = detail(render(retaker(), false, true));
+    const line1 = d.slice(d.indexOf(zhN('admin.attempt.n', 1)));
+    expect(line1).toContain(zh('admin.file.regen').replace('{lang}', 'zh'));
+    expect(line1).not.toContain(zh('admin.file.regen').replace('{lang}', 'en'));
+  });
+
+  it('one attempt only: no history row even if asked to open', () => {
+    const one = attemptRow(1, 'completed', 3.4);
+    expect(render(makeRow({ session: one, attempts: [one] }), false, true)).not.toContain('id="history-ent-1"');
   });
 });

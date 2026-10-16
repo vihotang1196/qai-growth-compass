@@ -17,20 +17,37 @@
  *   --scope=real    默认。「不是测试批次」—— 包括 cohort_id 为 null 的行(批次被删的真实学员)
  *   --scope=test    只跑测试批次(现在就能用测试数据验脚本)
  *   --cohort=<uuid> 只跑某一个批次(会同时打印它是不是测试批次)
+ *
+ * 【取哪一份也是参数】(重填第 4 步)一个人重填之后有几份已出分的答题记录:
+ *   --attempt=latest 默认。每人最新完成的一份(与看板、报告基准线同一个定义)
+ *   --attempt=first  每人的第一份
+ *   --attempt=all    每一份(重填过的人算多次)
+ * 每条碰了结果表的查询都要在 where 里带 `attemptWhere(args.attempt)`,`query()` 会查(见 attempt.ts)。
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import config from '../../src/config/assessment-config.json' with { type: 'json' };
+import {
+  DEFAULT_ATTEMPT,
+  assertAttemptChosen,
+  describeAttempt,
+  parseAttemptArg,
+  sampleUnit,
+  type AttemptChoice,
+} from './attempt.ts';
 
 export { config };
+export { attemptWhere } from './attempt.ts';
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export type Scope = { kind: 'real' } | { kind: 'test' } | { kind: 'cohort'; id: string };
 
 export interface Args {
   scope: Scope;
+  /** 每人取哪一份(重填第 4 步),默认 latest */
+  attempt: AttemptChoice;
   json: boolean;
 }
 
@@ -38,9 +55,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseArgs(argv: readonly string[]): Args {
   let scope: Scope = { kind: 'real' };
+  let attempt: AttemptChoice = DEFAULT_ATTEMPT;
   let json = false;
   for (const a of argv) {
-    if (a === '--json') json = true;
+    const choice = parseAttemptArg(a);
+    if (choice) attempt = choice;
+    else if (a === '--json') json = true;
     else if (a === '--scope=real') scope = { kind: 'real' };
     else if (a === '--scope=test') scope = { kind: 'test' };
     else if (a.startsWith('--cohort=')) {
@@ -48,10 +68,12 @@ export function parseArgs(argv: readonly string[]): Args {
       if (!UUID.test(id)) throw new Error(`--cohort 要一个批次 uuid,收到 ${JSON.stringify(id)}`);
       scope = { kind: 'cohort', id };
     } else {
-      throw new Error(`不认识的参数 ${JSON.stringify(a)}。可用:--scope=real(默认)| --scope=test | --cohort=<uuid> | --json`);
+      throw new Error(
+        `不认识的参数 ${JSON.stringify(a)}。可用:--scope=real(默认)| --scope=test | --cohort=<uuid> | --attempt=latest(默认)| first | all | --json`,
+      );
     }
   }
-  return { scope, json };
+  return { scope, attempt, json };
 }
 
 /**
@@ -94,6 +116,7 @@ const WRITE_WORDS = /\b(insert|update|delete|merge|alter|drop|create|truncate|gr
 export function query<T = Record<string, unknown>>(sql: string): T[] {
   if (WRITE_WORDS.test(sql)) throw new Error('查询里出现了写操作关键词,拒绝执行');
   assertNoPersonalColumns(sql);
+  assertAttemptChosen(sql);
   const wrapped = `select * from (${sql}) as q`;
   const r = spawnSync('supabase', ['db', 'query', '--linked', wrapped], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new Error(`没能运行 supabase CLI:${r.error.message}(要先装好 CLI、登录、在仓库里 supabase link)`);
@@ -164,7 +187,8 @@ export function table(head: readonly string[], rows: readonly (readonly string[]
 export function header(title: string, args: Args, n: number, extra: string[] = []): string {
   return [
     `# ${title}`,
-    `范围:${describeScope(args.scope)}  |  样本:${n} 人(已出分)  |  config ${config.meta.version}  |  ${new Date().toISOString()}`,
+    `范围:${describeScope(args.scope)}  |  样本:${n} ${sampleUnit(args.attempt)}(已出分)  |  config ${config.meta.version}  |  ${new Date().toISOString()}`,
+    `答题记录:${describeAttempt(args.attempt)}`,
     '只含统计,不含任何个人信息(查询里不取姓名 / 联系方式 / id / 开放题原文)。',
     ...extra,
     '',
@@ -211,5 +235,13 @@ function selfTest(): void {
     }
   }
   if (refused !== 2) throw new Error(`calibration lib self-test failed: write guard refused ${refused}/2`);
+  // 碰了结果表却没说取哪一份 → 在发出之前就被拒绝(重填第 4 步;规则在 attempt.ts)
+  let unchosen = 0;
+  try {
+    query('select r.total from assessment_results r join assessment_sessions s on s.id = r.session_id');
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('取哪一份')) unchosen++;
+  }
+  if (unchosen !== 1) throw new Error('calibration lib self-test failed: a results query without --attempt was not refused');
 }
 selfTest();

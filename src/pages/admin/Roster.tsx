@@ -47,6 +47,8 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
    * 会把名单本身挤没了,而排查是一条一条看的。
    */
   const [openError, setOpenError] = useState<string | null>(null);
+  /** 历次展开的那一行(重填第 4 步)—— 与错误详情各自一个,两者可以同时开着 */
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
 
   const [cohort, setCohort] = useState('');
   const [status, setStatus] = useState('');
@@ -134,8 +136,8 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
    * 而那是刻意的:一个 session 有两份文件,「重渲哪一份」只有点按钮的人知道。
    * 名单页那一格显示的是 `zh ✓ / en —`,所以界面上本来就是分开的,参数也该分开。
    */
-  async function renderPdf(row: RosterRow, lang: 'zh' | 'en') {
-    const sessionId = row.session?.id;
+  /** `sessionId` = 哪一份(重填第 4 步):主行是名单显示的那一份,历次里是那一行自己 */
+  async function renderPdf(row: RosterRow, sessionId: string, lang: 'zh' | 'en') {
     if (!sessionId || busyId === row.id) return;
     setBusyId(row.id);
     setNotice(null);
@@ -162,8 +164,7 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
    * **每次点击都现签**,不缓存 URL:那条链接三分钟就死,存下来用只会拿到失效页
    * (与报告页下载 PDF 那处同一个取向:把「会过期」变成不存在的问题)。
    */
-  async function openReport(row: RosterRow) {
-    const sessionId = row.session?.id;
+  async function openReport(row: RosterRow, sessionId: string) {
     if (!sessionId || busyId === row.id) return;
     setBusyId(row.id);
     setNotice(null);
@@ -413,11 +414,13 @@ export default function Roster({ onAuthLost }: { onAuthLost: (forbidden: boolean
                   busy={busyId === r.id}
                   errorOpen={openError === r.id}
                   onToggleError={() => setOpenError((cur) => (cur === r.id ? null : r.id))}
+                  historyOpen={openHistory === r.id}
+                  onToggleHistory={() => setOpenHistory((cur) => (cur === r.id ? null : r.id))}
                   onResend={() => void act('resend', r)}
                   onRotate={() => void act('rotate', r)}
                   onRevoke={() => void act('revoke', r)}
-                  onRenderPdf={(lang) => void renderPdf(r, lang)}
-                  onOpenReport={() => void openReport(r)}
+                  onRenderPdf={(sessionId, lang) => void renderPdf(r, sessionId, lang)}
+                  onOpenReport={(sessionId) => void openReport(r, sessionId)}
                 />
               ))}
             </Tbody>

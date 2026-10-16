@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { asRows, latestPerEntitlement, pickCurrent, pickReportAttempt } from './attempts.ts';
+import { asRows, attemptsNewestFirst, latestPerEntitlement, pickCurrent, pickReportAttempt, retakenPeople } from './attempts.ts';
 
 const a = (attempt_no: number | undefined, status: string, tag = `${attempt_no}-${status}`) => ({ attempt_no, status, tag });
 
@@ -65,4 +65,24 @@ Deno.test('每人只留最新完成的一份(统计去重);一人一份时原样
 Deno.test('取不到 entitlement 的行不去重、原样保留(不悄悄丢数据)', () => {
   const rows = [{ ent: null, attempt_no: 1 }, { ent: null, attempt_no: 1 }];
   assertEquals(latestPerEntitlement(rows, (r) => r.ent, (r) => r.attempt_no).length, 2);
+});
+
+// ── 重填第 4 步:名单的历次、看板的重填人数 ──────────────────────────────
+
+Deno.test('名单的历次:每一份都在,编号从大到小(与行序无关),没做完的那份排最前;不改原数组', () => {
+  const rows = [a(1, 'completed'), a(3, 'in_progress'), a(2, 'completed')];
+  const before = rows.map((r) => r.tag);
+  assertEquals(attemptsNewestFirst(rows).map((r) => r.tag), ['3-in_progress', '2-completed', '1-completed']);
+  assertEquals(rows.map((r) => r.tag), before);
+  assertEquals(attemptsNewestFirst([a(1, 'completed')]).map((r) => r.tag), ['1-completed']);
+  assertEquals(attemptsNewestFirst([a(undefined, 'completed'), a(2, 'survey')]).map((r) => r.tag), ['2-survey', 'undefined-completed']);
+  assertEquals(attemptsNewestFirst([]), []);
+});
+
+Deno.test('看板的重填人数:最新完成的一份不是第 1 份的人;只开始没完成的不算;今天的数据(全是第 1 份)= 0', () => {
+  // 今天的真实数据:每人最新完成的一份都是第 1 份
+  assertEquals(retakenPeople([{ attempt_no: 1 }, { attempt_no: 1 }, { attempt_no: undefined }, { attempt_no: null }]), 0);
+  // 测试 entitlement 2026-10-16:最新完成的是第 3 份
+  assertEquals(retakenPeople([{ attempt_no: 1 }, { attempt_no: 3 }, { attempt_no: 2 }]), 2);
+  assertEquals(retakenPeople([]), 0);
 });

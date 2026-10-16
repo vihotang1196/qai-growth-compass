@@ -2,6 +2,7 @@ import { useT } from '@/lib/i18n';
 import { parseWarnings, warningLabelKey } from '../../../api/_lib/entitlementWarnings';
 import { langStates } from '../../../api/_lib/reportFiles';
 import { Badge, Button, Td, Tr } from '@/components/brutalist';
+import { attemptCell, historyLines, type RosterAttemptData } from '@/lib/rosterAttempts';
 
 export interface RosterRowData {
   id: string;
@@ -18,9 +19,18 @@ export interface RosterRowData {
   completed_at: string | null;
   access_revoked_at: string | null;
   cohort: { id: string; name: string; is_test: boolean } | null;
+  /**
+   * 这个人的每一份,编号从大到小(重填第 4 步)。`session` 是其中一个 —— 报告看的那一份。
+   * 旧版服务端不回这个键:那时只有 `session` 那一份(见 `lib/rosterAttempts.ts`)。
+   */
+  attempts?: RosterAttemptData[];
   session: {
     id: string;
     status: string;
+    attempt_no?: number | null;
+    /** 这一份完成的时间 —— 与上面 entitlement 的 `completed_at`(第一次完成的时间)不是一回事 */
+    completed_at?: string | null;
+    created_at?: string | null;
     /** 每种语言一行报告文件;一行都没有是正常的(还没答完 / 渲染还没落库) */
     files?: {
       lang: string;
@@ -58,6 +68,7 @@ export const ROSTER_COLUMNS = [
   'admin.col.status',
   'admin.col.firstLogin',
   'admin.col.completed',
+  'admin.col.attempt',
   'admin.col.total',
   'admin.col.tier',
   'admin.col.weakest',
@@ -75,12 +86,19 @@ export interface RosterRowProps {
   /** 错误详情行是否展开 —— 状态放在父层,因为它要多渲一个 <tr>,单元格自己做不到 */
   errorOpen: boolean;
   onToggleError: () => void;
+  /** 历次那一行是否展开(重填第 4 步)—— 同上,放在父层 */
+  historyOpen: boolean;
+  onToggleHistory: () => void;
   onResend: () => void;
   onRotate: () => void;
   onRevoke: () => void;
-  /** 重新生成某一种语言 —— **必须带 lang**,后端没有默认值 */
-  onRenderPdf: (lang: 'zh' | 'en') => void;
-  onOpenReport: () => void;
+  /**
+   * 重新生成某一份的某一种语言 —— **必须带 lang**,后端没有默认值;
+   * **也必须带是哪一份**(重填第 4 步):主行是名单显示的那一份,历次里每一行是它自己那一份
+   */
+  onRenderPdf: (sessionId: string, lang: 'zh' | 'en') => void;
+  /** 看某一份的报告(主行 = 名单显示的那一份;历次里每一行 = 它自己) */
+  onOpenReport: (sessionId: string) => void;
 }
 
 /**
@@ -94,6 +112,8 @@ export default function RosterRow({
   busy,
   errorOpen,
   onToggleError,
+  historyOpen,
+  onToggleHistory,
   onResend,
   onRotate,
   onRevoke,
@@ -121,6 +141,9 @@ export default function RosterRow({
    * 而名单页是运营每天都要用的东西。
    */
   const warnings = parseWarnings(r.warnings);
+  /** 「第几次」那一格与「历次」—— 判定在 lib/rosterAttempts.ts */
+  const cell = attemptCell(r.session, r.attempts);
+  const lines = historyLines(r.session, r.attempts);
 
   return (
     <>
@@ -154,6 +177,36 @@ export default function RosterRow({
         </Td>
         <Td>{fmt(r.first_login_at)}</Td>
         <Td>{fmt(r.completed_at)}</Td>
+        {/*
+          第几次(重填第 4 步)。「完成时间」那一格是**第一次**完成的时间(entitlement 上的,重填之后不动),
+          总分 / 档位 / 最弱是这一格这一份的 —— 所以这一格要在它们前面,说清楚它们是哪一份的。
+          历次的开关与告警那一格同一个样子:数字会变,点开看是什么。
+        */}
+        <Td>
+          {cell.shownNo === null ? (
+            '—'
+          ) : (
+            <div className="flex items-center gap-2">
+              <span>{tk('admin.attempt.n').replace('{n}', String(cell.shownNo))}</span>
+              {cell.count >= 2 && (
+                <button
+                  type="button"
+                  onClick={onToggleHistory}
+                  aria-expanded={historyOpen}
+                  aria-controls={`history-${r.id}`}
+                  className="border-brutal border-line px-2 py-0.5 font-head text-xs font-bold underline"
+                >
+                  {tk('admin.attempt.history').replace('{n}', String(cell.count))}
+                </button>
+              )}
+              {cell.openNo !== null && (
+                <Badge tone="muted" title={tk('admin.attempt.openTitle').replace('{n}', String(cell.openNo))}>
+                  {tk('admin.attempt.open')}
+                </Badge>
+              )}
+            </div>
+          )}
+        </Td>
         <Td>{result?.total ?? '—'}</Td>
         <Td>{result?.tier ?? '—'}</Td>
         <Td>{result?.weakest?.join(' / ') ?? '—'}</Td>
@@ -252,7 +305,7 @@ export default function RosterRow({
               variant="ghost"
               disabled={busy || !result}
               title={tk('admin.action.reportHint')}
-              onClick={onOpenReport}
+              onClick={() => r.session && onOpenReport(r.session.id)}
             >
               {busy ? tk('admin.report.opening') : tk('admin.action.report')}
             </Button>
@@ -312,7 +365,7 @@ export default function RosterRow({
                   className={st.availability === 'ready' ? 'invisible' : undefined}
                   aria-hidden={st.availability === 'ready' || undefined}
                   disabled={busy || st.availability === 'ready'}
-                  onClick={() => onRenderPdf(st.lang as 'zh' | 'en')}
+                  onClick={() => r.session && onRenderPdf(r.session.id, st.lang as 'zh' | 'en')}
                 >
                   {busy
                     ? tk('admin.pdf.rendering')
@@ -322,6 +375,68 @@ export default function RosterRow({
           </div>
         </Td>
       </Tr>
+
+      {/*
+        历次(重填第 4 步):整行铺开,与下面错误详情同一个做法 —— 不让少数人(重填过的)决定每一行的列宽。
+        每一行的按钮只作用在那一份上;以前那几份只给已有文件的「重新生成」(规则在 lib/rosterAttempts.ts)。
+      */}
+      {historyOpen && lines && (
+        <Tr>
+          <Td
+            colSpan={ROSTER_COLUMNS.length}
+            id={`history-${r.id}`}
+            className="whitespace-normal bg-[color-mix(in_srgb,var(--qai-line-soft)_20%,transparent)]"
+          >
+            <div className="font-head text-xs font-bold uppercase tracking-wider">{tk('admin.attempt.title')}</div>
+            <p className="max-w-3xl font-body text-xs opacity-70">{tk('admin.attempt.note')}</p>
+            <ul className="mt-2 space-y-2">
+              {lines.map((l) => (
+                <li key={l.attempt.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 font-body text-sm">
+                  <span className="font-head font-bold">{tk('admin.attempt.n').replace('{n}', String(l.no))}</span>
+                  {l.shown && <Badge tone="ink">{tk('admin.attempt.shown')}</Badge>}
+                  <span className="font-mono text-xs">
+                    {l.open
+                      ? tk('admin.attempt.inProgress').replace('{time}', fmt(l.attempt.created_at ?? null))
+                      : tk('admin.attempt.completedAt').replace('{time}', fmt(l.attempt.completed_at ?? null))}
+                  </span>
+                  {l.attempt.result && (
+                    <span>
+                      {l.attempt.result.total} · {l.attempt.result.tier} · {l.attempt.result.weakest.join(' / ')}
+                    </span>
+                  )}
+                  {!l.open && (
+                    <span className="whitespace-nowrap font-mono text-xs">
+                      {l.states.map((st) => `${st.lang} ${tk(`admin.file.${st.availability}` as never)}`).join(' / ')}
+                    </span>
+                  )}
+                  {l.canOpenReport && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      title={tk('admin.action.reportHint')}
+                      onClick={() => onOpenReport(l.attempt.id)}
+                    >
+                      {busy ? tk('admin.report.opening') : tk('admin.action.report')}
+                    </Button>
+                  )}
+                  {l.regen.map((lang) => (
+                    <Button
+                      key={lang}
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => onRenderPdf(l.attempt.id, lang as 'zh' | 'en')}
+                    >
+                      {busy ? tk('admin.pdf.rendering') : tk('admin.file.regen').replace('{lang}', lang)}
+                    </Button>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </Td>
+        </Tr>
+      )}
 
       {/*
         错误详情:**整行铺开,不占任何一列的宽度**。
