@@ -165,6 +165,21 @@ const checks = [
     name: '代理把 POST 转给 assessment-quiz(未鉴权 → 函数自己的 401)',
     run: () => reachesOwn401('/api/assessment-quiz', POST_EMPTY),
   },
+  /**
+   * 重填第 5 步(docs/retake-design.md 第 6 节;2026-10-16 开放之前加):开放之后,「开始重填」也绝不能绕过登录。
+   * 上面那条发的是空 body,证明的是「请求到了函数」;这一条带上 `start_retake`,证明的是「这个动作在验 cookie 之后」——
+   * 要是有人把它挪到验 cookie 前面,这里拿到的会是 409 / 200 / 500,而不是 401。
+   * 零写入:verifySession 在任何读写库之前(assessment-quiz/index.ts),没有 cookie 就回 401。
+   */
+  {
+    name: 'start_retake 不带 cookie → 函数自己的 401(开放之后也不能绕过登录开始重填)',
+    run: () =>
+      reachesOwn401('/api/assessment-quiz', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'start_retake' }),
+      }),
+  },
   {
     name: '代理把 POST 转给 assessment-score(未鉴权 → 函数自己的 401)',
     run: () => reachesOwn401('/api/assessment-score', POST_EMPTY),
