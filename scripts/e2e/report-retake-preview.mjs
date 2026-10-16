@@ -10,6 +10,7 @@
  * 只有字体会从公网 CDN 下载。假后台记下每一次调用,断言「取消 = 一个请求都不发」靠它。
  *
  * 【查什么】六种状态(没历史 / 有历史 / 太快 / 满 6 份 / 链接作废 / 有没做完的重填)× 手机 390 / 电脑 1366,外加:
+ *   - 后台的重填开关关着(真实学员今天的样子,2026-10-16 加):重填那几块一样都不出现;做到一半的照样能继续、能放弃
  *   - 重填:点 → 网站自己的确认框(不是浏览器的);Esc → 0 次 start_retake;再点 → 确认 → 1 次 → 到答题页,背景题标「上次的选择」
  *   - 放弃:点 → 确认框;取消 → 0 次;确认 → 1 次 abandon_retake → 顶上那条消失、最下方回到「重填测评」
  *   - 继续:→ 答题页
@@ -90,6 +91,10 @@ const SCENARIOS = {
   limit: { attempts: [[6, -30, 3.9, 'systemic'], [5, -60, 3.5, 'semi_auto'], [4, -90, 3.2, 'semi_auto'], [3, -120, 3.0, 'semi_auto'], [2, -150, 2.7, 'spot'], [1, -180, 2.5, 'spot']], retake: { canStart: false, reason: 'limit_reached' } },
   revoked: { attempts: [[1, -72, 2.5, 'spot']], retake: { canStart: true, reason: null }, startReply: 403 },
   open: { attempts: [[2, -50, 3.1, 'semi_auto'], [1, -120, 2.5, 'spot']], retake: { canStart: true, reason: null }, open: 3 },
+  // 真实批次、后台的重填开关关着(第 5 步准备之后、开放之前,所有真实学员都是这样):服务端回 not_open
+  closed: { attempts: [[1, -72, 2.5, 'spot']], retake: { canStart: false, reason: 'not_open' } },
+  // 开关关着时有一份做到一半(开着时开始的):服务端仍回 not_open,但带着那一份的编号
+  closedMidway: { attempts: [[2, -50, 3.1, 'semi_auto'], [1, -120, 2.5, 'spot']], retake: { canStart: false, reason: 'not_open' }, open: 3, switchClosed: true },
 };
 
 /** 在页面脚本之前装好假后台。全部假数据;记下每一次调用 */
@@ -104,7 +109,9 @@ function installFakes(base, scenario, prefill) {
   window.__fake = st;
   const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const retakeInfo = () => {
-    if (st.open !== null) return { canStart: false, reason: 'open_attempt', nextAllowedAt: null, openAttempt: st.open, maxAttempts: 6, minHoursBetween: 24 };
+    if (st.open !== null) {
+      return { canStart: false, reason: scenario.switchClosed ? 'not_open' : 'open_attempt', nextAllowedAt: null, openAttempt: st.open, maxAttempts: 6, minHoursBetween: 24 };
+    }
     const r = scenario.retake;
     return {
       canStart: r.canStart,
@@ -376,6 +383,60 @@ try {
       const c = await calls(page);
       check(tag, 'confirm → one abandon_retake → banner gone, "retake" back at the bottom', gone && c.filter((x) => x === 'abandon_retake').length === 1 && (await text(page)).includes(T('report.retake.button')), c);
       await page.close();
+    }
+
+    // ── 开关关着(今天的真实学员):重填的东西一样都不出现,也不发任何重填请求 ──
+    {
+      const tag = `${device}/switch-closed`;
+      const page = await open('closed', device);
+      const loaded = await waitText(page, ui('report.section.share'));
+      await new Promise((r) => setTimeout(r, 300));
+      const t = await text(page);
+      check(
+        tag,
+        'no retake section, no banner, no history',
+        loaded && !has(t, T('report.retake.title')) && !has(t, T('report.retake.button')) && !has(t, T('report.retake.openTitle').split('{n}')[0]) && !has(t, T('report.history.title')),
+      );
+      check(tag, 'no quiz request at all', !(await calls(page)).some((c) => !c.startsWith('report') && !c.startsWith('/api/')), await calls(page));
+      const w = await width(page);
+      check(tag, 'page not wider than the screen', w.scroll <= w.inner, w);
+      await shotBottom(page, `${device}-9-switch-closed.png`);
+      await page.close();
+    }
+
+    // ── 开关关着、有一份做到一半:照样能继续、能放弃(不卡在半路);放弃之后什么都不出现(不能开始新的)──
+    {
+      const tag = `${device}/switch-closed-midway`;
+      const page = await open('closedMidway', device);
+      await waitText(page, T('report.retake.openTitle').replace('{n}', '3'));
+      const t = await text(page);
+      check(tag, 'banner on top: continue / discard attempt 3', has(t, T('report.retake.openTitle').replace('{n}', '3')) && has(t, T('report.retake.abandon')));
+      check(tag, 'bottom says "continue the retake"', has(t, T('report.retake.continueLong')) && !has(t, T('report.retake.button')));
+      await shotTop(page, `${device}-10-switch-closed-midway-top.png`);
+      await clickText(page, T('report.retake.abandon'));
+      await page.waitForSelector('[data-testid=confirm-dialog-confirm]', { timeout: 5_000 });
+      await page.click('[data-testid=confirm-dialog-confirm]');
+      const gone = await page
+        .waitForFunction((x) => !document.body.innerText.includes(x), { timeout: 8_000 }, T('report.retake.openTitle').replace('{n}', '3'))
+        .then(() => true)
+        .catch(() => false);
+      await new Promise((r) => setTimeout(r, 300));
+      const after = await text(page);
+      const c = await calls(page);
+      check(
+        tag,
+        'discard → one abandon_retake → banner gone, and no "retake" button comes back (switch closed)',
+        gone && c.filter((x) => x === 'abandon_retake').length === 1 && !has(after, T('report.retake.button')) && !has(after, T('report.retake.title')),
+        c,
+      );
+      await page.close();
+
+      const page2 = await open('closedMidway', device);
+      await waitText(page2, T('report.retake.continue'));
+      await clickText(page2, T('report.retake.continue'));
+      const onQuiz = await page2.waitForFunction(() => location.pathname === '/quiz', { timeout: 8_000 }).then(() => true).catch(() => false);
+      check(tag, 'continue → quiz page', onQuiz && (await calls(page2)).includes('bootstrap'));
+      await page2.close();
     }
 
     // 继续 → 答题页(另开一页,状态从头来)

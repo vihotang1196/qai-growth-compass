@@ -25,6 +25,7 @@ import { asRows, attemptsNewestFirst, latestPerEntitlement, pickReportAttempt, r
 import { rosterCsv, type RosterAttempt, type RosterRow } from '../_shared/rosterCsv.ts';
 import { classifyError } from '../_shared/errorKind.ts';
 import { dbFail } from '../_shared/dbError.ts';
+import { retakeSwitchAction } from '../_shared/retakeSwitch.ts';
 import { parseLang } from '../_shared/lang.ts';
 import { RENDER_TOKEN_TTL_SEC, signRenderToken } from '../_shared/renderToken.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
@@ -472,6 +473,17 @@ Deno.serve(async (req: Request) => {
         // 不发新链接。这是「彻底停用」,不是「换一条」
         console.log(`admin ${verdict.email} revoked entitlement ${id}`);
         return json({ ok: true });
+      }
+
+      /**
+       * 【重填开关】(重填第 5 步的准备,Viho 2026-10-16)对真实学员开不开放重填 —— 存在 `assessment_retake_switch`,
+       * 只追加,最新一行就是开关。读 / 设的判定都在 _shared/retakeSwitch.ts 的 `retakeSwitchAction`;
+       * 这里只把**名单判定给的**管理员邮箱交进去(记录里的「谁」)。
+       */
+      case 'retake_switch':
+      case 'retake_switch_set': {
+        const out = await retakeSwitchAction(supa, action, body, verdict.email, FN);
+        return json(out.body, out.status);
       }
 
       default:

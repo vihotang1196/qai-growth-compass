@@ -25,7 +25,7 @@ import {
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 import { attemptsOf } from '../_shared/currentSession.ts';
 import { pickReportAttempt } from '../_shared/attempts.ts';
-import { RETAKE_MAX_ATTEMPTS, RETAKE_MIN_HOURS, retakeEligibility, type AttemptRow } from '../_shared/retake.ts';
+import { checkRetake, RETAKE_MAX_ATTEMPTS, RETAKE_MIN_HOURS, type AttemptRow } from '../_shared/retake.ts';
 import { isTestCohort } from '../_shared/testCohort.ts';
 
 const FN = 'assessment-report';
@@ -388,7 +388,8 @@ Deno.serve(async (req: Request) => {
  * 报告页第 3 步要的三样(docs/retake-design.md 第 2 节),都只读、都只关于 cookie 里这个人:
  *   - `attempt`:这次看的是第几份、什么时候完成的、是不是最新的那份
  *   - `attempts`:完成了的每一份(编号从大到小):完成时间、总分、档位 —— 历次结果
- *   - `retake`:现在能不能重填(与 start_retake 同一个 `retakeEligibility`)、不能的原因与下一次的时间、有没有一份没做完
+ *   - `retake`:现在能不能重填(与 start_retake 同一个 `checkRetake`,真实批次读同一个数据库开关)、不能的原因与下一次的时间、
+ *     有没有一份没做完(开关关着也照报 —— 做到一半的人要看到「继续 / 放弃」)
  */
 async function attemptHistory(
   supa: ReturnType<typeof serviceClient>,
@@ -409,11 +410,16 @@ async function attemptHistory(
   }
   const viewing = rows.find((r) => r.id === viewingId);
   const open = rows.find((r) => r.status !== 'completed' && r.attempt_no > 1) ?? null;
-  const elig = retakeEligibility(rows, {
-    revoked: ent.access_revoked_at !== null,
-    isTest: isTestCohort((ent.cohort ?? null) as { is_test?: boolean | null } | null),
-    nowMs: Date.now(),
-  });
+  const elig = await checkRetake(
+    supa,
+    rows,
+    {
+      revoked: ent.access_revoked_at !== null,
+      isTest: isTestCohort((ent.cohort ?? null) as { is_test?: boolean | null } | null),
+      nowMs: Date.now(),
+    },
+    FN,
+  );
   return {
     attempt: viewing
       ? { no: viewing.attempt_no, completedAt: viewing.completed_at, isLatest: viewing.id === latest?.id }

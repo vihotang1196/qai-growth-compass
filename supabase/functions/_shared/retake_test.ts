@@ -2,6 +2,7 @@ import { assert, assertEquals } from '@std/assert';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   abandonRetake,
+  checkRetake,
   fileRequestDecision,
   loginStatus,
   profilePrefill,
@@ -35,7 +36,8 @@ const row = (attempt_no: number, status: string, completedMsAgo: number | null =
   status,
   completed_at: completedMsAgo === null ? null : at(completedMsAgo),
 });
-const TEST = { revoked: false, isTest: true, nowMs: NOW };
+const TEST = { revoked: false, isTest: true, openToReal: false, nowMs: NOW };
+const REAL = { ...TEST, isTest: false };
 
 // ── 频率限制(Viho 2026-10-14:24 小时、最多 6 份;链接作废不能重填)──
 
@@ -72,8 +74,24 @@ Deno.test('链接作废:拒绝(优先于一切)', () => {
   assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], { ...TEST, revoked: true }), { ok: false, reason: 'revoked' });
 });
 
-Deno.test('第 2 步只对测试批次开放:真实学员一律 not_open(第 5 步开放)', () => {
-  assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], { ...TEST, isTest: false }), { ok: false, reason: 'not_open' });
+// ── 对真实学员开不开放:数据库开关(第 5 步的准备,Viho 2026-10-16)──
+
+Deno.test('真实批次:开关关着 → not_open;开着 → 与测试批次同样的规则', () => {
+  assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], REAL), { ok: false, reason: 'not_open' });
+  assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], { ...REAL, openToReal: true }), { ok: true, nextAttemptNo: 2 });
+  // 开着时其余限制一条不少
+  assertEquals(retakeEligibility([row(1, 'completed', 2 * H)], { ...REAL, openToReal: true }), {
+    ok: false,
+    reason: 'too_soon',
+    nextAllowedAt: new Date(NOW - 2 * H + RETAKE_MIN_HOURS * H).toISOString(),
+  });
+  assertEquals(retakeEligibility([row(1, 'completed', 90 * H), row(2, 'survey')], { ...REAL, openToReal: true }), { ok: false, reason: 'open_attempt' });
+  // 作废仍然优先
+  assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], { ...REAL, openToReal: true, revoked: true }), { ok: false, reason: 'revoked' });
+});
+
+Deno.test('测试批次不看开关:关着也照常(第 2、3 步的验收就是这样走的)', () => {
+  assertEquals(retakeEligibility([row(1, 'completed', 90 * H)], { ...TEST, openToReal: false }), { ok: true, nextAttemptNo: 2 });
 });
 
 // ── start_retake / 放弃:用记录调用的假 client ──
@@ -111,9 +129,23 @@ function fakeSupa(handler: (q: Query) => { data?: unknown; error?: unknown }, lo
   } as unknown as SupabaseClient;
 }
 
-function world(opts: { rows: AttemptRow[]; isTest?: boolean; revoked?: boolean; insertError?: { code: string; message: string }; rowsAfterConflict?: AttemptRow[]; deleted?: number }) {
+function world(opts: {
+  rows: AttemptRow[];
+  isTest?: boolean;
+  revoked?: boolean;
+  insertError?: { code: string; message: string };
+  rowsAfterConflict?: AttemptRow[];
+  deleted?: number;
+  /** 开关表回什么:不给 = 一行都没有(关) */
+  switchRows?: readonly unknown[];
+  switchError?: { code: string; message: string };
+}) {
   let conflicted = false;
   return (q: Query) => {
+    if (q.table === 'assessment_retake_switch') {
+      if (op(q, 'insert') || op(q, 'update') || op(q, 'delete') || op(q, 'upsert')) throw new Error('nothing in a student request may write the switch');
+      return opts.switchError ? { error: opts.switchError } : { data: opts.switchRows ?? [] };
+    }
     if (q.table === 'assessment_entitlements') {
       return { data: { access_revoked_at: opts.revoked ? at(H) : null, cohort: { is_test: opts.isTest ?? true } } };
     }
@@ -158,6 +190,93 @@ Deno.test('start_retake 被拒(不到 24 小时 / 满 6 份 / 作废 / 有没做
     if (!out.ok) assertEquals(out.reason, reason);
     assertEquals(writes(log).length, 0, `${reason}: wrote something`);
   }
+});
+
+const OPEN = [{ open: true, changed_by: 'viho@example.com', changed_at: '2026-10-17T02:00:00Z' }];
+const CLOSED_AGAIN = [{ open: false, changed_by: 'viho@example.com', changed_at: '2026-10-17T03:00:00Z' }, ...OPEN];
+const switchReads = (log: Query[]) => log.filter((q) => q.table === 'assessment_retake_switch').length;
+
+/** 读开关出错时 retakeSwitch.ts 会打一行 error —— 那是要的;这里收起来 */
+async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.error = orig;
+  }
+}
+
+Deno.test('start_retake,真实批次:开关开着 → 能开始(只插一行);关着、开过又关了、读不到 → not_open,什么都没写', async () => {
+  const log: Query[] = [];
+  const out = await startRetake(fakeSupa(world({ rows: [row(1, 'completed', 30 * H)], isTest: false, switchRows: OPEN }), log), 'e1', NOW);
+  assertEquals(out, { ok: true, sessionId: 'new', attemptNo: 2 });
+  assertEquals(writes(log).length, 1);
+  assertEquals(switchReads(log), 1);
+
+  for (
+    const [label, w] of [
+      ['no row', {}],
+      ['closed again', { switchRows: CLOSED_AGAIN }],
+      ['read error', { switchError: { code: '42P01', message: 'relation does not exist' } }],
+      ['not a boolean', { switchRows: [{ open: 'true', changed_by: 'x', changed_at: 'y' }] }],
+    ] as const
+  ) {
+    const log2: Query[] = [];
+    const refused = await quietly(() => startRetake(fakeSupa(world({ rows: [row(1, 'completed', 30 * H)], isTest: false, ...w }), log2), 'e1', NOW));
+    assertEquals(refused, { ok: false, reason: 'not_open' }, label);
+    assertEquals(writes(log2).length, 0, `${label}: wrote something`);
+  }
+});
+
+Deno.test('start_retake,测试批次:不读开关 —— 开关表坏了也照常', async () => {
+  const log: Query[] = [];
+  const out = await startRetake(
+    fakeSupa(world({ rows: [row(1, 'completed', 30 * H)], isTest: true, switchError: { code: '42P01', message: 'relation does not exist' } }), log),
+    'e1',
+    NOW,
+  );
+  assertEquals(out, { ok: true, sessionId: 'new', attemptNo: 2 });
+  assertEquals(switchReads(log), 0);
+});
+
+Deno.test('start_retake,链接作废:不用读开关就拒绝', async () => {
+  const log: Query[] = [];
+  const out = await startRetake(fakeSupa(world({ rows: [row(1, 'completed', 30 * H)], isTest: false, revoked: true, switchRows: OPEN }), log), 'e1', NOW);
+  assertEquals(out, { ok: false, reason: 'revoked' });
+  assertEquals(switchReads(log), 0);
+});
+
+Deno.test('checkRetake(报告页的按钮用的那一个)与 start_retake 读的是同一个开关、给同一个答案', async () => {
+  const rows = [row(1, 'completed', 30 * H)];
+  const ctx = { revoked: false, isTest: false, nowMs: NOW };
+  assertEquals(await checkRetake(fakeSupa(world({ rows, switchRows: OPEN }), []), rows, ctx, 'test'), { ok: true, nextAttemptNo: 2 });
+  assertEquals(await checkRetake(fakeSupa(world({ rows }), []), rows, ctx, 'test'), { ok: false, reason: 'not_open' });
+  assertEquals(
+    await quietly(() => checkRetake(fakeSupa(world({ rows, switchError: { code: 'PGRST000', message: 'boom' } }), []), rows, ctx, 'test')),
+    { ok: false, reason: 'not_open' },
+  );
+  const log: Query[] = [];
+  assertEquals(await checkRetake(fakeSupa(world({ rows }), log), rows, { ...ctx, isTest: true }, 'test'), { ok: true, nextAttemptNo: 2 });
+  assertEquals(switchReads(log), 0);
+});
+
+Deno.test('开关关着时,做到一半的重填:报告页仍然知道有一份没做完(给「继续 / 放弃」),只是不给「开始新的」', async () => {
+  const rows = [row(1, 'completed', 30 * H), row(2, 'survey')];
+  assertEquals(await checkRetake(fakeSupa(world({ rows }), []), rows, { revoked: false, isTest: false, nowMs: NOW }, 'test'), {
+    ok: false,
+    reason: 'not_open',
+  });
+});
+
+Deno.test('开关关着时,放弃照样可以 —— 放弃不读开关(学员不会卡在半路)', async () => {
+  const log: Query[] = [];
+  const out = await abandonRetake(
+    fakeSupa(world({ rows: [row(1, 'completed', 30 * H), row(2, 'survey')], isTest: false, switchError: { code: '42P01', message: 'x' } }), log),
+    'e1',
+  );
+  assertEquals(out, { ok: true, attemptNo: 2 });
+  assertEquals(switchReads(log), 0);
 });
 
 Deno.test('两个并发的 start_retake:数据库的唯一约束让第二个插入失败 → 回 open_attempt,不报 500', async () => {

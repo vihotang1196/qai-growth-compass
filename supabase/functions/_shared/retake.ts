@@ -11,9 +11,11 @@
  *   - 每人最多 6 份(第一次 + 5 次重填),先于时间检查 —— 满了等多久都没用
  *   - 链接被作废的人不能重填;测试批次同样受限
  *
- * 【第 2 步只对测试批次开放】`RETAKE_OPEN_TO_REAL_COHORTS = false`。第 3 步(前端)之前学员没有按钮,
- * 而第 5 步「开放」要一个真实联系人走一遍 GHL —— 在那之前,一个手工拼出来的请求也不该让真实学员开始重填。
- * 第 5 步把它改成 true(测试会跟着红,提醒改那一条)。
+ * 【对真实学员开不开放:数据库开关】测试批次一直能重填;真实批次看 `assessment_retake_switch`
+ * (retakeSwitch.ts,Viho 2026-10-16 定:用数据库开关,不改常量;默认关闭,读不到也按关闭)。
+ * 开关只进「能不能**开始**」这一处(`checkRetake`:start_retake 与报告页的按钮共用)——
+ * 继续答题、交卷、放弃都不看它,关上时做到一半的人照样能做完或放弃。
+ * (第 2 步到这里之前,这是常量 `RETAKE_OPEN_TO_REAL_COHORTS = false`。)
  *
  * 【预填(Viho 的第 3 个决定)】背景题与问卷**只是初始值**,来源 = 最新完成的那一份;不写进新的一份 ——
  * 学员要像第一次一样提交,才算答了(不提交问卷就出不了分:finalize 读的是这一份自己的问卷)。
@@ -26,12 +28,11 @@ import { attemptsOf } from './currentSession.ts';
 import type { SessionStatus } from './postAuthTarget.ts';
 import { isTestCohort } from './testCohort.ts';
 import { dbFail } from './dbError.ts';
+import { readRetakeSwitch } from './retakeSwitch.ts';
 import config from '../../../src/config/assessment-config.json' with { type: 'json' };
 
 export const RETAKE_MIN_HOURS = 24;
 export const RETAKE_MAX_ATTEMPTS = 6;
-/** 第 2 步:false(只有测试批次能重填)。第 5 步「开放」时改成 true */
-export const RETAKE_OPEN_TO_REAL_COHORTS = false;
 
 export interface AttemptRow {
   id: string;
@@ -46,13 +47,14 @@ export type RetakeEligibility = { ok: true; nextAttemptNo: number } | { ok: fals
 /**
  * 能不能开始一次重填 —— 纯函数,start_retake 与报告页的「下一次可以重填的时间」用同一个。
  * 检查顺序就是回给学员的原因的优先级:作废 → 没开放 → 不是重填 → 有没做完的 → 满了 → 太快。
+ * `openToReal` = 数据库开关读出来的值;不读库的调用方用 `checkRetake`。
  */
 export function retakeEligibility(
   rows: readonly AttemptRow[],
-  ctx: { revoked: boolean; isTest: boolean; nowMs: number },
+  ctx: { revoked: boolean; isTest: boolean; openToReal: boolean; nowMs: number },
 ): RetakeEligibility {
   if (ctx.revoked) return { ok: false, reason: 'revoked' };
-  if (!ctx.isTest && !RETAKE_OPEN_TO_REAL_COHORTS) return { ok: false, reason: 'not_open' };
+  if (!ctx.isTest && !ctx.openToReal) return { ok: false, reason: 'not_open' };
   const completed = rows.filter((r) => r.status === 'completed');
   if (completed.length === 0) return { ok: false, reason: 'no_completed_attempt' };
   if (rows.some((r) => r.status !== 'completed')) return { ok: false, reason: 'open_attempt' };
@@ -67,6 +69,21 @@ export function retakeEligibility(
     if (ctx.nowMs < allowedMs) return { ok: false, reason: 'too_soon', nextAllowedAt: new Date(allowedMs).toISOString() };
   }
   return { ok: true, nextAttemptNo: Math.max(...rows.map((r) => r.attempt_no)) + 1 };
+}
+
+/**
+ * 「现在能不能开始一次重填」—— start_retake 与报告页的按钮**都走这一个**,所以两边对开关的理解不会分家。
+ * 只有真实批次、链接没作废时才去读开关(测试批次与作废的人用不着它:开关表出事也影响不到测试批次)。
+ * 读开关从不抛,读不到 = 关(retakeSwitch.ts)。
+ */
+export async function checkRetake(
+  supa: SupabaseClient,
+  rows: readonly AttemptRow[],
+  ctx: { revoked: boolean; isTest: boolean; nowMs: number },
+  fn: string,
+): Promise<RetakeEligibility> {
+  const openToReal = !ctx.isTest && !ctx.revoked ? (await readRetakeSwitch(supa, fn)).open : false;
+  return retakeEligibility(rows, { ...ctx, openToReal });
 }
 
 const ROW_COLS = 'completed_at';
@@ -99,7 +116,7 @@ export async function startRetake(supa: SupabaseClient, entitlementId: string, n
   const fn = 'startRetake';
   const { revoked, isTest } = await admission(supa, entitlementId, fn);
   const rows = await rowsOf(supa, entitlementId, fn);
-  const elig = retakeEligibility(rows, { revoked, isTest, nowMs });
+  const elig = await checkRetake(supa, rows, { revoked, isTest, nowMs }, fn);
   if (!elig.ok) return elig;
 
   /**

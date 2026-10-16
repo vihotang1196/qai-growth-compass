@@ -365,6 +365,42 @@ export const UI_STRINGS = {
     en: 'This account is not on the admin allowlist. Use another account or ask to be added.',
   },
   'admin.signOut': { zh: '退出', en: 'Sign out' },
+  /** 「重填开关」面板(重填第 5 步的准备;判定见 src/lib/retakeSwitch.ts) */
+  'admin.retakeSwitch.open': { zh: '重填开关', en: 'Retake switch' },
+  'admin.retakeSwitch.title': { zh: '真实学员的重填', en: 'Retakes for real cohorts' },
+  'admin.retakeSwitch.status.open': {
+    zh: '现在:开放。真实学员完成满 24 小时后,报告页上有「重填」按钮(每人最多 6 份)。',
+    en: 'Now: OPEN. Real students can start a retake from their report 24 hours after finishing (6 attempts at most).',
+  },
+  'admin.retakeSwitch.status.closed': {
+    zh: '现在:关闭。真实学员看不到重填按钮,也不能开始新的重填。',
+    en: 'Now: CLOSED. Real students see no retake button and cannot start a new retake.',
+  },
+  'admin.retakeSwitch.status.unreadable': {
+    zh: '读不到开关现在的状态。学员那边一律按「关闭」处理。',
+    en: 'Cannot read the switch right now. Students are treated as closed.',
+  },
+  'admin.retakeSwitch.scope': {
+    zh: '关闭只拦「开始新的重填」:已经开始的那一份照样能做完或放弃,已完成的结果不变。测试批次不受这个开关影响。',
+    en: 'Closing only stops new retakes from starting: one already started can still be finished or discarded, and finished results stay. Test cohorts are not affected by this switch.',
+  },
+  'admin.retakeSwitch.turnOn': { zh: '开放重填', en: 'Open retakes' },
+  'admin.retakeSwitch.turnOff': { zh: '关闭重填', en: 'Close retakes' },
+  'admin.retakeSwitch.confirmOn.title': { zh: '对真实学员开放重填?', en: 'Open retakes to real students?' },
+  'admin.retakeSwitch.confirmOn.body': {
+    zh: '开放后,真实学员完成满 24 小时就能在报告页开始重填。会记下你的邮箱和现在的时间。',
+    en: 'Real students will be able to start a retake from their report 24 hours after finishing. Your email and the time are recorded.',
+  },
+  'admin.retakeSwitch.confirmOff.title': { zh: '关闭真实学员的重填?', en: 'Close retakes for real students?' },
+  'admin.retakeSwitch.confirmOff.body': {
+    zh: '关闭后,真实学员不能再开始新的重填;已经开始的那一份照样能做完或放弃。会记下你的邮箱和现在的时间。',
+    en: 'Real students will not be able to start a new retake; one already started can still be finished or discarded. Your email and the time are recorded.',
+  },
+  'admin.retakeSwitch.history': { zh: '切换记录(新的在前)', en: 'Changes (newest first)' },
+  'admin.retakeSwitch.history.empty': { zh: '还没有切换过。没有记录 = 关闭。', en: 'Never changed. No record means closed.' },
+  'admin.retakeSwitch.history.on': { zh: '开放', en: 'Opened' },
+  'admin.retakeSwitch.history.off': { zh: '关闭', en: 'Closed' },
+  'admin.retakeSwitch.reload': { zh: '重新读取', en: 'Reload' },
   /** 「设置密码」面板(选哪句见 src/lib/adminPasswordAuth.ts) */
   'admin.password.open': { zh: '设置密码', en: 'Set password' },
   'admin.password.title': { zh: '设置密码', en: 'Set password' },

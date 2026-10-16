@@ -46,6 +46,7 @@ const EVERY_STATE: RetakeInfo[] = [
   info({ canStart: false, reason: 'revoked' }),
   info({ canStart: false, reason: 'open_attempt', openAttempt: 3 }),
   info({ canStart: false, reason: 'not_open' }),
+  info({ canStart: false, reason: 'not_open', openAttempt: 2 }),
 ];
 
 describe('retakeAction —— what sits at the bottom of the report', () => {
@@ -80,8 +81,14 @@ describe('retakeAction —— what sits at the bottom of the report', () => {
     });
   });
 
-  it('not open to this cohort (RETAKE_OPEN_TO_REAL_COHORTS = false) → nothing at all, real students see no change', () => {
+  it('not open to this cohort (the retake switch is closed) → nothing at all, real students see no change', () => {
     expect(retakeAction(oneAttempt(info({ canStart: false, reason: 'not_open' })), page)).toEqual({ kind: 'hidden' });
+  });
+
+  it('switch closed while a retake is half done (the server says not_open AND names the open attempt) → continue it, not stuck', () => {
+    const closedMidway = info({ canStart: false, reason: 'not_open', openAttempt: 2 });
+    expect(retakeAction(oneAttempt(closedMidway), page)).toEqual({ kind: 'continue', attemptNo: 2 });
+    expect(openRetakeBanner(oneAttempt(closedMidway), page)).toEqual({ attemptNo: 2 });
   });
 
   it('no completed attempt → nothing (the report page is not the place to start the first one)', () => {

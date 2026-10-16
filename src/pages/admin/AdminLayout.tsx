@@ -4,6 +4,7 @@ import { useT } from '@/lib/i18n';
 import { supabaseAuth } from '@/lib/supabase';
 import AdminLogin from './AdminLogin';
 import AdminPasswordPanel from './AdminPasswordPanel';
+import RetakeSwitchPanel from './RetakeSwitchPanel';
 import Roster from './Roster';
 import CohortDashboard from './CohortDashboard';
 import FunnelPanel from './FunnelPanel';
@@ -57,6 +58,8 @@ export default function AdminLayout() {
   const [forbidden, setForbidden] = useState(false);
   /** 「设置密码」面板 —— 只在已登录、且不是 403 时可达(403 时整页是登录页) */
   const [passwordOpen, setPasswordOpen] = useState(false);
+  /** 「重填开关」面板(重填第 5 步的准备)—— 与「设置密码」一样在顶栏,出问题时一眼找到 */
+  const [switchOpen, setSwitchOpen] = useState(false);
 
   useEffect(() => {
     const auth = supabaseAuth().auth;
@@ -70,6 +73,7 @@ export default function AdminLayout() {
       if (session === null) {
         setForbidden(false);
         setPasswordOpen(false);
+        setSwitchOpen(false);
       }
     });
     return () => sub.subscription.unsubscribe();
@@ -103,6 +107,14 @@ export default function AdminLayout() {
             <Button
               size="sm"
               className="whitespace-nowrap"
+              variant={switchOpen ? 'primary' : 'outline'}
+              onClick={() => setSwitchOpen((open) => !open)}
+            >
+              {tk('admin.retakeSwitch.open')}
+            </Button>
+            <Button
+              size="sm"
+              className="whitespace-nowrap"
               variant={passwordOpen ? 'primary' : 'outline'}
               onClick={() => setPasswordOpen((open) => !open)}
             >
@@ -118,6 +130,15 @@ export default function AdminLayout() {
             </Button>
           </div>
         </header>
+        {switchOpen && (
+          <RetakeSwitchPanel
+            onClose={() => setSwitchOpen(false)}
+            onAuthLost={(isForbidden) => {
+              if (isForbidden) setForbidden(true);
+              else void supabaseAuth().auth.signOut();
+            }}
+          />
+        )}
         {passwordOpen && <AdminPasswordPanel onClose={() => setPasswordOpen(false)} />}
         <nav className="flex flex-wrap gap-2">
           {(['roster', 'dashboard', 'funnel', 'insights', 'live'] as const).map((t) => (
